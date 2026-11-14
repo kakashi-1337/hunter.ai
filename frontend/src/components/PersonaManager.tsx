@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import * as api from '../api'
 import { useStore } from '../store'
 import type { Collection, Mode, Persona } from '../types'
+import { confirmBox } from '../dialog'
 import { Modal } from './Modal'
 
 const text = (e: unknown) => (e instanceof Error ? e.message : String(e))
@@ -81,7 +82,7 @@ export function PersonaManager({ onClose }: { onClose: () => void }) {
   const [editing, setEditing] = useState<Persona | 'new' | null>(null)
   useEffect(() => { void refresh() }, [refresh])
   const remove = async (p: Persona) => {
-    if (!window.confirm(`Delete the persona "${p.name}"? Chats that use it keep working without a persona.`)) return
+    if (!(await confirmBox(`Delete the persona "${p.name}"? Chats that use it keep working without a persona.`))) return
     try { await api.deletePersona(p.id); await refresh() } catch (e) { setError(text(e)) }
   }
   return (

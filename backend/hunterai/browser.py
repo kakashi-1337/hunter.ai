@@ -32,7 +32,11 @@ PREFS = {"network.proxy.allow_hijacking_localhost": True, "network.proxy.no_prox
          # (Switching service workers off would also switch off the request hook below: a
          # worker's requests go through the proxy like every other, so they stay on.)
          "network.trr.mode": 5, "media.peerconnection.enabled": False,
-         "network.captive-portal-service.enabled": False, "network.connectivity-service.enabled": False}
+         "network.captive-portal-service.enabled": False, "network.connectivity-service.enabled": False,
+         # The address that is asked for is the address that is loaded. Firefox otherwise tries https first for an
+         # http:// address and, on a site with no https, reports a timeout while it quietly falls back.
+         "dom.security.https_first": False, "dom.security.https_first_pbm": False,
+         "dom.security.https_first_schemeless": False, "dom.security.https_only_mode": False}
 
 
 @dataclass

@@ -6,6 +6,7 @@ import { Modal } from './Modal'
 import { ActivityPanel } from './ActivityPanel'
 import { CaidoPanel } from './CaidoPanel'
 import { FindingsPanel } from './FindingsPanel'
+import { confirmBox } from '../dialog'
 import { MachineStatus } from './MachineStatus'
 
 const lines = (s: string) => s.split('\n').map((x) => x.trim()).filter(Boolean)
@@ -87,7 +88,7 @@ function ChatRow({ chat }: { chat: Chat }) {
       <span className="actions">
         <button className="icon" title="Rename" aria-label={`Rename ${chat.title}`} onClick={() => { setTitle(chat.title); setRenaming(true) }}>✎</button>
         <button className="icon" title="Delete chat" aria-label={`Delete ${chat.title}`}
-          onClick={() => window.confirm(`Delete "${chat.title}" and all its messages?`) && removeChat(chat.id)}>✕</button>
+          onClick={() => void confirmBox(`Delete "${chat.title}" and all its messages?`).then((ok) => { if (ok) void removeChat(chat.id) })}>✕</button>
       </span>
     </div>
   )
@@ -122,7 +123,7 @@ export function Sidebar({ onSettings }: { onSettings: () => void }) {
   }, [newChat])
 
   const removeTarget = async (t: Target) => {
-    if (!window.confirm(`Delete target "${t.name}"? Its chats are kept and move to "No target".`)) return
+    if (!(await confirmBox(`Delete target "${t.name}"? Its chats are kept and move to "No target".`))) return
     await api.deleteTarget(t.id)
     await refreshLists()
   }

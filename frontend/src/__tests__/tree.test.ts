@@ -137,6 +137,8 @@ describe('tool rounds', () => {
     expect(cardStatus(card, [req], [])).toBe('waiting')
     expect(cardStatus(card, [], ['c1'])).toBe('running')
     expect(cardStatus(card, [], [])).toBe('queued')
+    expect(cardStatus(card, [], [], true)).toBe('stopped')            // the run ended and this call never got a result
+    expect(cardStatus(card, [req], ['c1'], true)).toBe('stopped')
     expect(cardStatus({ ...card, result: { type: 'tool_result', tool_call_id: 'c1', content: 'x', is_error: true } }, [], [])).toBe('error')
     expect(cardStatus({ ...card, result: { type: 'tool_result', tool_call_id: 'c1', content: 'x', is_error: false } }, [req], [])).toBe('done')
   })

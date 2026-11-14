@@ -30,7 +30,10 @@ SYSTEM = (
     "important first). Leave out general knowledge, explanations, advice, plans, and anything the answer itself labels "
     "as unverified or as a guess. For each statement give a verdict: \"supported\" when a tool result shows it, "
     "\"contradicted\" when a tool result shows the opposite, \"unsupported\" when no tool result shows it. For "
-    "supported and contradicted, quote the few words of the result that decide it. When the answer makes no such "
+    "supported and contradicted, quote the few words of the result that decide it. The result of delegate or swarm holds "
+    "what subagents answered: such an answer shows a statement only when that result says its verified is true; when "
+    "it is not verified, the verdict is \"unsupported\" and the evidence says \"only a subagent's unverified answer\". "
+    "When the answer makes no such "
     "statement, the list is empty. Reply with one JSON object and nothing else, in exactly this shape: "
     '{"claims": [{"claim": "the statement", "verdict": "supported", "evidence": "words of the tool result"}]}')
 SCHEMA = {"type": "object", "properties": {"claims": {"type": "array", "maxItems": MAX_CLAIMS, "items": {

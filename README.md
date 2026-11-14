@@ -7,6 +7,19 @@ on your machine, listens on 127.0.0.1 only, and sends nothing about your use to 
 test, inside the scope you were given; you are responsible for what you run with it. How
 to report a flaw in HunterAI itself is in [SECURITY.md](SECURITY.md).
 
+![A run in progress: the goal above the messages, the calls the agent made, a swarm of two subagents working in parallel, and the trajectory on the right](screenshots/run-with-swarm.png)
+
+*A run against a public demo site built for security training: the goal the agent set, its
+tool calls, two subagents working in parallel, and every step in the trajectory.*
+
+| The answer check | What Caido recorded |
+| --- | --- |
+| ![Statements of the answer that no tool result of the run shows, listed under it](screenshots/answer-check.png) | ![The requests the agent's browser and tools made, with status, size and time](screenshots/caido-panel.png) |
+
+![Activity: calls, failures and average time per tool, and runs and tokens per day, counted on your machine](screenshots/activity.png)
+
+*Activity: what was called, how often, and what failed. Counted locally; nothing is sent anywhere.*
+
 To start: copy `.env.example` to `.env`, put in one model key (or run Ollama), and see
 [Run](#run). On a first start with no model, the interface opens a setup check that says
 what is missing.

@@ -150,10 +150,12 @@ export function runningCalls(ids: string[], e: RunEvent): string[] {
   return ids
 }
 
-export type CardStatus = 'waiting' | 'running' | 'done' | 'error' | 'queued'
+export type CardStatus = 'waiting' | 'running' | 'done' | 'error' | 'queued' | 'stopped'
 
-export function cardStatus(card: ToolCard, asks: PermissionRequest[], running: string[]): CardStatus {
+/** `over`: the message is no longer being written. A call with no result then never finished (the run was stopped or failed). */
+export function cardStatus(card: ToolCard, asks: PermissionRequest[], running: string[], over = false): CardStatus {
   if (card.result) return card.result.is_error ? 'error' : 'done'
+  if (over) return 'stopped'
   if (asks.some((a) => a.tool_call_id === card.call.id)) return 'waiting'
   return running.includes(card.call.id) ? 'running' : 'queued'
 }

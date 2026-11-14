@@ -3,6 +3,7 @@ import * as api from '../api'
 import { useStore } from '../store'
 import { triageFacts, visible } from '../tree'
 import type { Finding, FindingStatus, Goal, Severity } from '../types'
+import { confirmBox } from '../dialog'
 import { Modal } from './Modal'
 
 const SEVERITIES: Severity[] = ['info', 'low', 'medium', 'high', 'critical']
@@ -35,11 +36,11 @@ export function GoalPanel({ onClose }: { onClose: () => void }) {
     } catch (e) { fail(e) }
   }
   const remove = async (f: Finding) => {
-    if (!window.confirm(`Delete the finding "${f.title}"?`)) return
+    if (!(await confirmBox(`Delete the finding "${f.title}"?`))) return
     try { await api.deleteFinding(f.id); setFindings((list) => list.filter((x) => x.id !== f.id)) } catch (e) { fail(e) }
   }
   const clear = async () => {
-    if (!chatId || !window.confirm('Clear this chat\'s goal record?')) return
+    if (!chatId || !(await confirmBox('Clear this chat\'s goal record?'))) return
     try { await api.clearGoal(chatId); setGoal(null) } catch (e) { fail(e) }
   }
 

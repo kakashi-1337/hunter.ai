@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { AdvancedOptions } from './components/AdvancedOptions'
 import { ChatView } from './components/ChatView'
+import { DialogHost } from './components/DialogHost'
 import { GoalPanel } from './components/GoalPanel'
 import { KnowledgeView } from './components/KnowledgeView'
 import { ModelPicker } from './components/ModelPicker'
@@ -111,6 +112,7 @@ export default function App() {
         </>
       } />}
       {trajectoryOpen && view === 'chat' && <TrajectoryPanel onClose={() => setTrajectoryOpen(false)} />}
+      <DialogHost />
       {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} onSetup={() => { setSettingsOpen(false); setSetupOpen(true) }} />}
       {setupOpen && <SetupChecklist onClose={() => setSetupOpen(false)} onSettings={() => { setSetupOpen(false); setSettingsOpen(true) }} />}
     </div>

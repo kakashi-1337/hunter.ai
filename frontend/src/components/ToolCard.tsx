@@ -4,6 +4,7 @@ import type { Step, SwarmMember } from '../types'
 
 const LABEL: Record<CardStatus, string> = {
   waiting: 'waiting for your answer', running: 'running', done: 'done', error: 'failed or denied', queued: 'queued',
+  stopped: 'not finished: the run stopped',
 }
 
 const MEMBER: Record<SwarmMember['state'], string> = { queued: 'waiting for a place', running: 'working', done: 'finished', error: 'failed', cancelled: 'stopped' }
@@ -46,7 +47,7 @@ export function ToolCard({ card, status, durationMs, steps }: { card: Card; stat
     <div className={`tool-card ${status}`}>
       <div className="tool-head">
         <span className="mono tool-name">{card.call.name}</span>
-        <span className={`badge ${status === 'error' ? 'bad' : status === 'waiting' ? 'warn' : ''}`}>{LABEL[status]}</span>
+        <span className={`badge ${status === 'error' ? 'bad' : status === 'waiting' || status === 'stopped' ? 'warn' : ''}`}>{LABEL[status]}</span>
         {durationMs !== undefined && <span className="muted mono">{formatDuration(durationMs)}</span>}
       </div>
       {members.length > 0

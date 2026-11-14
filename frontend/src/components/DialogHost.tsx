@@ -1,0 +1,36 @@
+import { useEffect, useRef, useState } from 'react'
+import { answer, useDialog } from '../dialog'
+
+/** Shows the question that confirmBox() or promptBox() asked. Mounted once, above every other dialog. */
+export function DialogHost() {
+  const current = useDialog((s) => s.current)
+  const [value, setValue] = useState('')
+  const ok = useRef<HTMLButtonElement>(null)
+  const field = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (!current) return
+    setValue(current.initial)
+    // Focus after paint: Enter then answers, and Escape cancels, without reaching the dialog underneath.
+    const t = setTimeout(() => (current.kind === 'prompt' ? field.current : ok.current)?.focus(), 0)
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.stopPropagation(); answer(current.kind === 'prompt' ? null : false) } }
+    window.addEventListener('keydown', onKey, true)
+    return () => { clearTimeout(t); window.removeEventListener('keydown', onKey, true) }
+  }, [current])
+  if (!current) return null
+  const cancel = () => answer(current.kind === 'prompt' ? null : false)
+  const accept = () => answer(current.kind === 'prompt' ? value : true)
+  return (
+    <div className="overlay dialog-host" onMouseDown={(e) => e.target === e.currentTarget && cancel()}>
+      <form className="modal dialog" role="alertdialog" aria-modal="true" aria-label={current.message} onSubmit={(e) => { e.preventDefault(); accept() }}>
+        <div className="body">
+          <div className="dialog-message">{current.message}</div>
+          {current.kind === 'prompt' && <input ref={field} value={value} aria-label={current.message} onChange={(e) => setValue(e.target.value)} />}
+        </div>
+        <div className="foot">
+          <button type="button" className="btn" onClick={cancel}>Cancel</button>
+          <button ref={ok} type="submit" className={`btn ${current.danger ? 'danger-solid' : 'primary'}`}>{current.kind === 'prompt' ? 'OK' : current.danger ? 'Yes, do it' : 'OK'}</button>
+        </div>
+      </form>
+    </div>
+  )
+}

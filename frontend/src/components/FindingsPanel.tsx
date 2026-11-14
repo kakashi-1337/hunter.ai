@@ -4,6 +4,7 @@ import { useStore } from '../store'
 import { copyText } from './Markdown'
 import { filterFindings, findingsMarkdown, triageFacts, visible } from '../tree'
 import type { FindingRow, FindingStatus, Severity } from '../types'
+import { confirmBox } from '../dialog'
 import { Modal } from './Modal'
 
 const SEVERITIES: Severity[] = ['critical', 'high', 'medium', 'low', 'info']
@@ -31,7 +32,7 @@ export function FindingsPanel({ onClose }: { onClose: () => void }) {
     } catch (e) { setError(text(e)) }
   }
   const remove = async (f: FindingRow) => {
-    if (!window.confirm(`Delete the finding "${f.title}"?`)) return
+    if (!(await confirmBox(`Delete the finding "${f.title}"?`))) return
     try { await api.deleteFinding(f.id); setAll((list) => (list ?? []).filter((x) => x.id !== f.id)) } catch (e) { setError(text(e)) }
   }
   const download = () => {

@@ -3,6 +3,7 @@ import * as api from '../api'
 import { useStore } from '../store'
 import { visible } from '../tree'
 import type { Memory, MemorySettings } from '../types'
+import { confirmBox } from '../dialog'
 import { Modal } from './Modal'
 
 const text = (e: unknown) => (e instanceof Error ? e.message : String(e))
@@ -55,7 +56,7 @@ export function MemoryManager({ onClose, onLeave }: { onClose: () => void; onLea
               <button className="btn small primary" disabled={!draft.trim()} onClick={() => void run(async () => { await api.changeMemory(m.id, draft); setEditing(null) })}>Save</button></>
             ) : (<>
               <button className="btn small" onClick={() => { setEditing(m.id); setDraft(m.text) }}>Edit</button>
-              <button className="btn small" onClick={() => { if (window.confirm('Forget this note?')) void run(() => api.deleteMemory(m.id)) }}>Delete</button></>)}
+              <button className="btn small" onClick={() => void confirmBox('Forget this note?').then((ok) => { if (ok) void run(() => api.deleteMemory(m.id)) })}>Delete</button></>)}
           </div>
           {editing === m.id ? <textarea rows={3} value={draft} maxLength={500} onChange={(e) => setDraft(e.target.value)} /> : <div>{visible(m.text)}</div>}
         </div>

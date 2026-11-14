@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import * as api from './api'
 import { alreadyIngested, isActive, jobsKey, MAX_FILE_BYTES, POLL_MS, uploadBatches } from './kb'
+import { confirmBox } from './dialog'
 import type { Collection, Job, JobAction, KbDocument, KbHealth, KbHit, KbStatus } from './types'
 
 interface KbState {
@@ -53,7 +54,7 @@ export const useKb = create<KbState>((set, get) => {
   const unlessHad = async (send: (again: boolean) => Promise<unknown>) => {
     try { await send(false) } catch (e) {
       if (!alreadyIngested(text(e))) throw e
-      if (window.confirm(`${text(e)}\n\nIngest it again now?`)) await send(true)
+      if (await confirmBox(`${text(e)}\n\nIngest it again now?`)) await send(true)
     }
   }
   /** Status and the first page of documents for the collection that is still the active one. */

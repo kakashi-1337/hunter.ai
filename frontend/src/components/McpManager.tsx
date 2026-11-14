@@ -3,6 +3,7 @@ import * as api from '../api'
 import { useStore } from '../store'
 import { commandLine, parseArgs, scanSummary, scanToolLine, visible } from '../tree'
 import type { McpCheck, McpInspection, McpScan, McpScanTool, McpServer, McpStatus, Risk } from '../types'
+import { confirmBox } from '../dialog'
 import { Modal } from './Modal'
 
 const RISKS: [Risk, string][] = [['execute', 'execute: every call asks (use this for code you have not read)'], ['network', 'network'], ['write', 'write'], ['read', 'read: calls run without asking']]
@@ -234,7 +235,7 @@ export function McpManager({ onClose }: { onClose: () => void }) {
               <button className="btn small" disabled={busy === s.name} onClick={() => void check(s.name)}>Check</button>
               <button className="btn small" disabled={busy === s.name} onClick={() => void scan(s.name)}>Scan</button>
               {!s.bundled && <button className="btn small" onClick={() => setDialog(s)}>Edit</button>}
-              {!s.bundled && <button className="btn small" onClick={() => { if (window.confirm(`Remove the server "${s.name}"? Its code on disk is not deleted.`)) void act(s.name, () => api.mcpDelete(s.name)) }}>Remove</button>}
+              {!s.bundled && <button className="btn small" onClick={() => void confirmBox(`Remove the server "${s.name}"? Its code on disk is not deleted.`).then((ok) => { if (ok) void act(s.name, () => api.mcpDelete(s.name)) })}>Remove</button>}
             </div>
             <div className="mono muted kb-wrap">{visible(s.transport === 'http' ? s.url ?? '' : commandLine(s.command, s.args))}</div>
             {s.env_names.length > 0 && <div className="hint">Environment set: {s.env_names.join(', ')}</div>}

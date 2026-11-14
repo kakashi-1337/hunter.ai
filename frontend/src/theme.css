@@ -188,6 +188,7 @@ details.thinking pre { white-space: pre-wrap; word-break: break-word; font: 12.5
 .tool-card.waiting { border-left-color: var(--warn); }
 .tool-card.done { border-left-color: var(--accent); }
 .tool-card.error { border-left-color: var(--bad); }
+.tool-card.stopped { border-left-color: var(--warn); }
 .tool-head { display: flex; align-items: center; gap: 8px; }
 .tool-name { font-weight: 600; }
 .tool-args, .tool-result, .ask-args, .ask-preview { font: 12.5px/1.45 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere;
@@ -359,3 +360,11 @@ button.link:hover:not(:disabled) { background: none; color: var(--text); }
 .owner-note { margin: 8px 0; }
 .owner-note .k { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--info); margin-bottom: 3px; }
 .owner-note .bubble { border-left: 3px solid var(--info); }
+
+/* HunterAI's own confirm and prompt dialogs: above every other dialog */
+.dialog-host { z-index: 80; }
+.modal.dialog { width: min(440px, 100%); }
+.dialog-message { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; }
+.dialog input { width: 100%; }
+.btn.danger-solid { background: var(--bad); border-color: var(--bad); color: #2a0b0e; font-weight: 600; }
+.btn.danger-solid:hover:not(:disabled) { background: #f58a90; }

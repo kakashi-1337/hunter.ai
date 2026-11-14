@@ -4,6 +4,7 @@ import type { KbChunk, KbDocument } from '../types'
 import { duplicateJobs, jobEmpty, formatBytes, formatEta, formatRate, jobActions, jobProgress, jobRemovable, jobSource, relPath, sourceLabel } from '../kb'
 import { useKb } from '../kbStore'
 import { visible } from '../tree'
+import { confirmBox, promptBox } from '../dialog'
 import { Modal } from './Modal'
 
 const DEFAULT_EMBEDDER = 'ollama:bge-m3'
@@ -157,13 +158,13 @@ function DocumentDialog({ doc, onClose }: { doc: KbDocument; onClose: () => void
     setEditing(null)
   })
   const drop = (c: KbChunk) => run(async () => {
-    if (!window.confirm('Delete this chunk from the index?')) return
+    if (!(await confirmBox('Delete this chunk from the index?'))) return
     await api.deleteChunk(c.id)
     setChunks((cur) => cur.filter((x) => x.id !== c.id)); setTotal((n) => n - 1)
     await refresh()
   })
   const dropAll = () => run(async () => {
-    if (!window.confirm('Remove this document and all its chunks from the index? The original file is not touched.')) return
+    if (!(await confirmBox('Remove this document and all its chunks from the index? The original file is not touched.'))) return
     await api.deleteDocument(doc.id)
     await refresh(); onClose()
   })
@@ -280,9 +281,9 @@ export function KnowledgeView({ onClose }: { onClose: () => void }) {
           {collections.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
         </select>
         <button className="btn primary" onClick={() => setCreating(true)}>+ Collection</button>
-        {active && <button className="btn" onClick={() => { const n = window.prompt('New name', active.name); if (n?.trim()) void rename(active.id, n.trim()) }}>Rename</button>}
-        {active && <button className="btn" title="Embed everything again with another model" onClick={() => { const e = window.prompt('Embed this whole collection again with which embedder? Search finds less until the job is done.', active.embedder); if (e?.trim() && e.trim() !== active.embedder) void reembed(e.trim()) }}>Re-embed</button>}
-        {active && <button className="btn danger" onClick={() => { if (window.confirm(`Delete the collection "${active.name}" and everything indexed in it? The original files are not touched.`)) void remove(active.id) }}>Delete</button>}
+        {active && <button className="btn" onClick={() => void promptBox('New name', active.name).then((n) => { if (n?.trim()) void rename(active.id, n.trim()) })}>Rename</button>}
+        {active && <button className="btn" title="Embed everything again with another model" onClick={() => void promptBox('Embed this whole collection again with which embedder? Search finds less until the job is done.', active.embedder).then((e) => { if (e?.trim() && e.trim() !== active.embedder) void reembed(e.trim()) })}>Re-embed</button>}
+        {active && <button className="btn danger" onClick={() => void confirmBox(`Delete the collection "${active.name}" and everything indexed in it? The original files are not touched.`).then((ok) => { if (ok) void remove(active.id) })}>Delete</button>}
         <span className="grow" />
         <button className="btn" title="Back to the chat (Ctrl+Shift+K)" onClick={onClose}>Back to chat</button>
       </header>
