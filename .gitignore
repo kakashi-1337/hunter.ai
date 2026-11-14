@@ -1,0 +1,17 @@
+.env
+.env.*
+!.env.example
+node_modules/
+.venv/
+__pycache__/
+dist/
+*.db
+*.db-wal
+*.db-shm
+.superpowers/
+.pytest_cache/
+MCP/
+.claude/
+
+# The owner's own programs for the shell tool (see "Your tool folder" in the README): never part of the repository.
+/bin/

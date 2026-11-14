@@ -1,0 +1,36 @@
+[project]
+name = "hunterai"
+version = "0.1.0"
+license = "MIT"
+requires-python = ">=3.12"
+dependencies = [
+    "aiosqlite>=0.22.1",
+    "anthropic>=2.8.0",
+    "camoufox>=0.5.9",
+    "fastapi>=0.162.5",
+    "google-genai>=3.3.0",
+    "httpx>=0.28.1",
+    "idna>=3.7",
+    "jsonschema>=4.20",
+    "mcp>=2.3,<3",
+    "pydantic>=2.14.3",
+    "pypdf>=7.1.0",
+    "python-multipart>=0.0.33",
+    "qdrant-client>=1.20.0",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.2.0",
+    "pytest-asyncio>=1.5.0",
+    "respx>=0.23.1",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+addopts = "-rfE"            # name every failure and error at the end, also in a quiet run
+pythonpath = ["."]
+filterwarnings = ["error", "ignore::SyntaxWarning:google.genai.*"]

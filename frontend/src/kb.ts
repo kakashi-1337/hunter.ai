@@ -1,0 +1,109 @@
+import type { Job, JobAction, JobState } from './types'
+
+export const POLL_MS = 2000
+export const BATCH_FILES = 50
+export const BATCH_BYTES = 64 * 1024 * 1024
+export const MAX_FILE_BYTES = 50 * 1024 * 1024   // mirror of the backend cap
+
+/** The path a file keeps inside the collection: its folder-relative path when it has one. */
+export function relPath(f: { name: string; webkitRelativePath?: string }): string {
+  return f.webkitRelativePath || f.name
+}
+
+/** Batches in order; one closes when the next item would pass either limit. */
+export function uploadBatches<T extends { file: { size: number } }>(items: T[], maxFiles = BATCH_FILES, maxBytes = BATCH_BYTES): T[][] {
+  const out: T[][] = []
+  let cur: T[] = []
+  let bytes = 0
+  for (const it of items) {
+    if (cur.length && (cur.length >= maxFiles || bytes + it.file.size > maxBytes)) { out.push(cur); cur = []; bytes = 0 }
+    cur.push(it)
+    bytes += it.file.size
+  }
+  if (cur.length) out.push(cur)
+  return out
+}
+
+export function jobActions(state: JobState): JobAction[] {
+  if (state === 'queued' || state === 'running') return ['pause', 'cancel']
+  if (state === 'paused') return ['resume', 'cancel']
+  if (state === 'failed') return ['retry', 'cancel']
+  return []
+}
+
+export const isActive = (job: Job): boolean => job.state === 'queued' || job.state === 'running'
+
+/** Two answers with the same key show the same queue. */
+export const jobsKey = (jobs: Job[]): string => jobs.map((j) => `${j.id}@${j.updated_at}`).join('|')
+
+export function jobProgress(job: Job): { percent: number | null; label: string } {
+  const kind = job.payload.source?.kind
+  // Nothing has started it yet: one job runs at a time.
+  if (job.state === 'queued' && !job.checkpoint.phase && !job.progress_total) return { percent: null, label: 'Waiting its turn (one job runs at a time)' }
+  if (job.checkpoint.phase === 'discover') {
+    const found = job.stats.discovered ?? 0
+    const fetched = job.stats.fetched_bytes ?? 0
+    if (kind === 'git' && !found) return { percent: null, label: fetched ? `Cloning the repository… ${formatBytes(fetched)} downloaded so far` : 'Cloning the repository… connecting' }
+    if (kind === 'web') return { percent: null, label: `Crawling the site… ${found} pages, ${formatBytes(fetched)} downloaded` }
+    return { percent: null, label: `Discovering… ${found} files` }
+  }
+  return {
+    percent: job.progress_total ? Math.floor((100 * job.progress_done) / job.progress_total) : null,
+    label: `${job.progress_done}/${job.progress_total} ${job.kind === 'reembed' ? 'chunks' : 'files'}`,
+  }
+}
+
+export function formatEta(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined) return '—'
+  if (seconds < 60) return '<1m'
+  const m = Math.floor(seconds / 60)
+  if (m < 60) return `${m}m`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h}h ${String(m % 60).padStart(2, '0')}m`
+  return `${Math.floor(h / 24)}d ${h % 24}h`
+}
+
+export const formatRate = (rate: number | null | undefined): string => (rate ? `${rate} chunks/s` : '—')
+
+export function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`
+  if (n < 1024 ** 2) return `${(n / 1024).toFixed(1)} KB`
+  if (n < 1024 ** 3) return `${(n / 1024 ** 2).toFixed(1)} MB`
+  return `${(n / 1024 ** 3).toFixed(2)} GB`
+}
+
+export function jobSource(job: Job): string {
+  const s = job.payload.source
+  if (job.kind === 'reembed') return `Re-embed with ${(job.payload as { embedder?: string }).embedder ?? 'another embedder'}`
+  if (s?.kind === 'folder') return s.path ?? 'Folder'
+  if (s?.kind === 'git') return `Repository ${s.url ?? ''}`.trim()
+  if (s?.kind === 'web') return `Website ${s.url ?? ''}`.trim()
+  return 'Browser upload'
+}
+
+export const sourceLabel = (uri: string, lineStart: number, lineEnd: number): string => `${uri} : lines ${lineStart}–${lineEnd}`
+
+/** A finished entry may be removed from the list; what it ingested stays. */
+export const jobRemovable = (state: JobState): boolean => state === 'done' || state === 'cancelled'
+
+/** How many entries "remove duplicates" would take away: older finished runs of a source that has a newer finished one. */
+export function duplicateJobs(jobs: Job[]): number {
+  const kept = new Set<string>()
+  let n = 0
+  for (const j of jobs) {                       // the newest first, as the API lists them
+    const s = j.payload.source
+    const where = s?.url ?? s?.path ?? ''
+    if (j.kind !== 'ingest' || !where || !jobRemovable(j.state)) continue
+    const key = `${s?.kind}\n${where}`
+    if (kept.has(key)) n += 1
+    else if (j.state === 'done') kept.add(key)
+  }
+  return n
+}
+
+/** The API's refusal of a source the collection already has starts with these words. */
+export const alreadyIngested = (message: string): boolean => message.startsWith('Already ingested')
+
+/** A finished ingest that brought nothing in (its source could not be fetched): worth trying again, not a record to keep. */
+export const jobEmpty = (job: Job): boolean =>
+  job.kind === 'ingest' && job.state === 'done' && !(job.stats.ok ?? 0) && !(job.stats.unchanged ?? 0) && (job.stats.failed ?? 0) > 0
