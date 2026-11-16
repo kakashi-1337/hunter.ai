@@ -53,7 +53,7 @@ function TargetDialog({ target, onClose }: { target: Target | null; onClose: () 
       <label className="field"><span>Out of scope (one per line)</span>
         <textarea className="mono" rows={3} value={outScope} onChange={(e) => setOutScope(e.target.value)} placeholder="payments.example.com" />
       </label>
-      <div className="hint">Scope is given to the model as context. Enforcement on tool calls arrives with tools.</div>
+      <div className="hint">Scope is given to the model as context and checked on every tool call: a host on the out-of-scope list, or one that is not on the in-scope list, always asks you first.</div>
     </Modal>
   )
 }
