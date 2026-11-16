@@ -123,18 +123,6 @@ def test_scope_escalates_allow_to_ask_and_deny_stays_deny():
     v = d(tool=T("read"), prepared=off, target=t)                      # host rules follow the hosts, not the risk class
     assert v.decision == "ask" and "not in this target's in-scope list" in v.warnings[0]
 
-def test_an_out_of_scope_line_that_cannot_be_read_makes_every_host_ask():
-    t = Target(id="t", name="n", notes="", scope={"in": ["*.acme.test"], "out": ["*.old.*", "admin.acme.test"]}, created_at="x")
-    ok = Prepared(hosts=(HostUse("shop.acme.test", 443),), grant_target="s")
-    v = d(tool=T("network"), prepared=ok, target=t, chat_policy=NET)
-    assert v.decision == "ask" and v.can_allow_chat
-    assert v.warnings == ("this target's out-of-scope line cannot be read, so nothing is checked against it: *.old.*",)
-    assert d(tool=T("network"), prepared=ok, target=t, chat_policy=NET, grants=[Grant("t", "s", True)]).decision == "allow"
-    assert d(tool=T("network"), prepared=ok, target=t, chat_policy=NET, grants=[Grant("t", "s", False)]).decision == "ask"
-    assert d(tool=T("read"), prepared=Prepared(), target=t).warnings == ()                       # a call that names no host
-    fixed = Target(id="t", name="n", notes="", scope={"in": ["*.acme.test", "*.new.*"], "out": ["admin.acme.test"]}, created_at="x")
-    assert d(tool=T("network"), prepared=ok, target=fixed, chat_policy=NET).decision == "allow"   # an in-scope line that cannot be read only fails to include
-
 def test_own_api_and_local_addresses():
     own = Prepared(hosts=(HostUse("127.0.0.1", 8790, ("127.0.0.1",)),), grant_target="x")
     assert d(tool=T("network"), prepared=own, chat_policy=NET).rule == "own-api"
@@ -161,6 +149,18 @@ def test_own_api_and_local_addresses():
     by_name = Prepared(hosts=(HostUse("app.corp.test", 80, ("192.168.5.5",)),), grant_target="n")
     assert d(tool=T("network"), prepared=by_name, target=lab, chat_policy=NET).decision == "ask"        # an in-scope name is not enough
     assert d(tool=T("network"), prepared=Prepared(hosts=(HostUse("pub.test", 443, ("93.184.216.34",)),)), chat_policy=NET).decision == "allow"
+
+def test_an_out_of_scope_line_that_cannot_be_read_makes_every_host_ask():
+    t = Target(id="t", name="n", notes="", scope={"in": ["*.acme.test"], "out": ["*.old.*", "admin.acme.test"]}, created_at="x")
+    ok = Prepared(hosts=(HostUse("shop.acme.test", 443),), grant_target="s")
+    v = d(tool=T("network"), prepared=ok, target=t, chat_policy=NET)
+    assert v.decision == "ask" and v.can_allow_chat
+    assert v.warnings == ("this target's out-of-scope line cannot be read, so nothing is checked against it: *.old.*",)
+    assert d(tool=T("network"), prepared=ok, target=t, chat_policy=NET, grants=[Grant("t", "s", True)]).decision == "allow"
+    assert d(tool=T("network"), prepared=ok, target=t, chat_policy=NET, grants=[Grant("t", "s", False)]).decision == "ask"
+    assert d(tool=T("read"), prepared=Prepared(), target=t).warnings == ()                       # a call that names no host
+    fixed = Target(id="t", name="n", notes="", scope={"in": ["*.acme.test", "*.new.*"], "out": ["admin.acme.test"]}, created_at="x")
+    assert d(tool=T("network"), prepared=ok, target=fixed, chat_policy=NET).decision == "allow"   # an in-scope line that cannot be read only fails to include
 
 def test_may_resolve_only_for_names_the_owner_already_trusts():
     t = Target(id="t", name="n", notes="", scope={"in": ["*.acme.test"], "out": []}, created_at="x")

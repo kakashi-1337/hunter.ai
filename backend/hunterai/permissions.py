@@ -236,12 +236,12 @@ def decide(*, mode: str, tool: Tool, prepared: Prepared, target: Target | None, 
             warnings.append(f"{host} is on this target's out-of-scope list")
             can_chat = False
         if not warned_grant:
+            for line in v.unread:
+                warnings.append(f"this target's out-of-scope line cannot be read, so nothing is checked against it: {line}")
             by_name = {h.host: h for h in prepared.hosts}
             for host in v.not_in:
                 if not _in_domains(by_name[host], domains, prepared.url_path):
                     warnings.append(f"{host} is not in this target's in-scope list")
-            for line in v.unread:
-                warnings.append(f"this target's out-of-scope line cannot be read, so nothing is checked against it: {line}")
     if _is_shell(tool) and any(resolve.is_own_api(h) for h in prepared.hosts):   # 7.
         warnings.append("this command addresses HunterAI's own API")
         can_chat = False
