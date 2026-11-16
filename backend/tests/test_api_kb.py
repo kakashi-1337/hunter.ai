@@ -1,3 +1,5 @@
+import json
+
 import httpx
 import respx
 
@@ -165,3 +167,24 @@ async def test_health_and_running_job_status(client, conn, tmp_path):
 
 async def test_host_header_is_still_enforced(client):
     assert (await client.get("/api/kb/collections", headers={"host": "evil.example"})).status_code == 403
+
+
+@respx.mock
+async def test_text_embedded_by_the_api_leaves_no_model_loaded_behind():
+    from types import SimpleNamespace
+
+    from hunterai.api.kb import _embed
+    from hunterai.kb import embed
+    kept: list = []
+
+    def answer(request):
+        body = json.loads(request.content)
+        kept.append(body["keep_alive"])
+        return httpx.Response(200, json={"embeddings": [[0.1] for _ in body["input"]]})
+    respx.post(EMBED_URL).mock(side_effect=answer)
+    unload = respx.post("http://127.0.0.1:11434/api/generate").mock(return_value=httpx.Response(200, json={"done": True, "done_reason": "unload"}))
+    col = SimpleNamespace(embedder="ollama:bge-m3", dimension=1)
+    await _embed(col, ["one text"])
+    assert kept == [0] and not unload.called                         # one request unloads the model with its own answer
+    await _embed(col, [f"text {i}" for i in range(20)])              # three requests: loaded once, unloaded once
+    assert kept[1:] == [embed.JOB_KEEP_LOADED] * 3 and unload.call_count == 1

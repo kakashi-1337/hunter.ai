@@ -15,14 +15,49 @@ from hunterai.kb import embed
 from hunterai.kb.embed import EmbedError
 
 URL = "http://127.0.0.1:11434/api/embed"
+UNLOAD = "http://127.0.0.1:11434/api/generate"
 
 
 @respx.mock
 async def test_request_shape_and_vectors():
     route = respx.post(URL).mock(return_value=httpx.Response(200, json={"embeddings": [[0.1] * 1024, [0.2] * 1024]}))
     out = await embed.get("ollama:bge-m3").embed(["a", "b"])
-    assert json.loads(route.calls.last.request.content) == {"model": "bge-m3", "input": ["a", "b"], "truncate": False, "options": {"num_ctx": 8192}}
+    assert json.loads(route.calls.last.request.content) == {"model": "bge-m3", "input": ["a", "b"], "truncate": False, "keep_alive": 0,
+                                                           "options": {"num_ctx": 8192}}
     assert len(out) == 2 and len(out[0]) == 1024
+
+
+@respx.mock
+@pytest.mark.parametrize("setting,sent", [(None, 0), ("0", 0), ("90", 90), ("junk", 0), ("-5", 0), ("999999", 3600)])
+async def test_the_model_is_unloaded_after_its_answer_unless_the_owner_says_how_long_it_stays(monkeypatch, setting, sent):
+    """Left loaded (Ollama's own five minutes), it sat in memory beside a local chat model on every message."""
+    monkeypatch.delenv("HUNTERAI_EMBED_KEEP_LOADED", raising=False)
+    if setting is not None:
+        monkeypatch.setenv("HUNTERAI_EMBED_KEEP_LOADED", setting)
+    route = respx.post(URL).mock(return_value=httpx.Response(200, json={"embeddings": [[0.1]]}))
+    await embed.get("ollama:bge-m3").embed(["what the owner asked"])
+    assert json.loads(route.calls.last.request.content)["keep_alive"] == sent
+
+
+@respx.mock
+async def test_a_job_keeps_the_model_between_its_batches_and_unloads_it_at_the_end(monkeypatch):
+    monkeypatch.delenv("HUNTERAI_EMBED_KEEP_LOADED", raising=False)
+    route = respx.post(URL).mock(return_value=httpx.Response(200, json={"embeddings": [[0.1]]}))
+    unload = respx.post(UNLOAD).mock(return_value=httpx.Response(200, json={"done": True, "done_reason": "unload"}))
+    job = embed.get("ollama:bge-m3", stays_loaded=True)
+    await job.embed(["a chunk"])
+    assert json.loads(route.calls.last.request.content)["keep_alive"] == embed.JOB_KEEP_LOADED >= 60 and not unload.called
+    await job.release()
+    assert json.loads(unload.calls.last.request.content) == {"model": "bge-m3", "keep_alive": 0} and unload.call_count == 1
+
+
+@respx.mock
+async def test_unloading_a_model_that_is_gone_or_cannot_be_reached_is_not_an_error():
+    respx.post(UNLOAD).mock(side_effect=httpx.ConnectError("refused"))
+    await embed.get("ollama:bge-m3").release()
+    respx.post(UNLOAD).mock(return_value=httpx.Response(404, json={"error": "model 'bge-m3' not found"}))
+    await embed.get("ollama:bge-m3").release()
+    await embed.get("fake:8").release()                       # the stand-in has nothing to unload
 
 
 @respx.mock

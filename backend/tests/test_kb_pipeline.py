@@ -1,5 +1,9 @@
+import json
 import tarfile
 from pathlib import Path
+
+import httpx
+import respx
 
 from hunterai.kb import embed, limits, pipeline, sources
 from hunterai.kb.embed import EmbedError
@@ -271,3 +275,58 @@ def test_a_newline_in_a_source_name_cannot_start_a_new_header_line():
                line_start=1, line_end=1, score=1.0, text="t")
     lines = retrieve.render([s], "abcd1234").splitlines()
     assert len(lines) == 4 and lines[1].startswith("[1] /x/a [2] /etc/shadow")
+
+
+def ollama_embedder(dim, kept):
+    """Stands in for Ollama: answers every embed request with vectors of `dim` (or of `kept.dim`, once a test sets
+    it), and notes how long each request asked the model to stay."""
+    def answer(request):
+        body = json.loads(request.content)
+        kept.append(body["keep_alive"])
+        return httpx.Response(200, json={"embeddings": [[0.1] * getattr(kept, "dim", dim) for _ in body["input"]]})
+    respx.post("http://127.0.0.1:11434/api/embed").mock(side_effect=answer)
+    return respx.post("http://127.0.0.1:11434/api/generate").mock(return_value=httpx.Response(200, json={"done": True, "done_reason": "unload"}))
+
+
+async def ollama_collection(conn, dim=8):
+    col = await kb.create_collection(conn, "notes", "ollama:bge-m3", dim)
+    await get_store().ensure_collection(kb.vector_name(col.id), dim)
+    return col
+
+
+@respx.mock
+async def test_an_ingest_keeps_its_model_loaded_while_it_works_and_unloads_it_when_it_ends(conn, tmp_path):
+    kept: list = []
+    unload = ollama_embedder(8, kept)
+    col = await ollama_collection(conn)
+    tree(tmp_path / "src", {"a.md": BIG})                                # 30 chunks: several batches
+    state, job = await ingest_folder(conn, col, tmp_path / "src")
+    assert state == "done" and len(kept) >= 3 and set(kept) == {embed.JOB_KEEP_LOADED}       # never unloaded between two batches
+    assert unload.call_count == 1 and json.loads(unload.calls.last.request.content) == {"model": "bge-m3", "keep_alive": 0}
+
+
+@respx.mock
+async def test_an_ingest_that_is_paused_or_fails_unloads_its_model_too(conn, tmp_path):
+    class Kept(list):
+        pass
+    kept = Kept()
+    unload = ollama_embedder(8, kept)
+    col = await ollama_collection(conn)
+    tree(tmp_path / "src", {"a.md": BIG})
+    state, _ = await ingest_folder(conn, col, tmp_path / "src", stop=lambda: len(kept) >= 1)   # paused after the first batch
+    assert state == "queued" and kept and unload.call_count == 1
+    kept.dim = 3                                                        # from here on the model answers with the wrong size
+    job = await jobs.claim(conn, ["ingest"])
+    assert await pipeline.run_job(conn, job) == "failed" and unload.call_count == 2
+
+
+@respx.mock
+async def test_a_reembed_keeps_its_model_loaded_while_it_works_and_unloads_it_when_it_ends(conn, col, tmp_path):
+    tree(tmp_path / "src", {"a.md": BIG})
+    assert (await ingest_folder(conn, col, tmp_path / "src"))[0] == "done"                     # embedded with the stand-in first
+    kept: list = []
+    unload = ollama_embedder(8, kept)
+    await jobs.enqueue(conn, "reembed", {"collection_id": col.id, "embedder": "ollama:bge-m3"})
+    job = await jobs.claim(conn, ["reembed"])
+    assert await pipeline.run_reembed(conn, job) == "done"
+    assert len(kept) >= 3 and set(kept) == {embed.JOB_KEEP_LOADED} and unload.call_count == 1

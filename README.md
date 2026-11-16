@@ -226,6 +226,15 @@ unless set; `off` disables it) it waits until the temperature is five degrees un
 then goes on. The entry in the queue says "cooling down" with the temperature meanwhile.
 The job takes longer; the machine does not switch itself off in the middle of it.
 
+The embedding model does not stay loaded behind its work. Ollama would keep it for five
+minutes after every request, and memory recall makes one on each message you send, attached
+collection or not, so it used to sit in memory beside a local chat model for a whole
+conversation. A single request (a search, a recall, a note) now unloads the model with its
+own answer; a job keeps it loaded between its batches and unloads it when it ends, is paused
+or fails. `HUNTERAI_EMBED_KEEP_LOADED` sets the seconds it stays after a single request
+instead (`0` unless set), for a machine with room for it. To have no embedding at all on a
+message, switch "offer notes" off under Settings, "Manage memory".
+
 While a repository is cloned or a site is crawled, the entry says so and how much has been
 downloaded, and an entry that has not started says it is waiting its turn (one job runs at
 a time). A job survives a crash or a reboot: when the worker starts again it takes up every
