@@ -370,9 +370,13 @@ Settings restarts that server only.
 its state; each can be switched, checked (restart, ping time, what it printed, and a hint
 when the output looks like a missing runtime, dependency, or key), edited, or removed.
 
-"Add from a repo, package, or config" takes a GitHub or GitLab URL, `npm:<package>`,
-`pypi:<package>`, an npmjs.com or pypi.org page, a folder path, or a pasted
-`{"mcpServers": ...}` block. HunterAI then:
+"Add from a repo, package, or config" takes a GitHub or GitLab URL, an npm package
+(`npm:@scope/name`, with a version or a tag after it if you want one: `@1.2.3`, `@latest`),
+a PyPI package (`pypi:name`, or `pypi:name==1.2.3`), an npmjs.com or pypi.org page, a
+folder path, or a pasted `{"mcpServers": ...}` block. A tag is read once, here: the server
+is pinned to the version the tag named that day. A command line, a range of versions, or a
+bare name is refused with what to type instead (`npx -y @scope/name /folder` is answered
+with `npm:@scope/name`; the start options go in the next step). HunterAI then:
 
 1. downloads the code and reads it. Nothing from it runs.
 2. checks it: rules for install scripts, hidden or encoded code, reads of keys and
