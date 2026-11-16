@@ -187,6 +187,11 @@ export interface Settings {
   keys: Record<string, boolean>
   permissions: Policy
   max_turns: number
+  /** Subagents of one swarm that work at the same time: 1 to swarm_width_max. */
+  swarm_width: number
+  swarm_width_max: number
+  /** What this machine has; null for what could not be read. */
+  machine: { cores: number | null; memory_gb: number | null }
   presets: Record<string, Record<Risk, Decision>>
   decision_provider: string | null
   decision_model: string | null

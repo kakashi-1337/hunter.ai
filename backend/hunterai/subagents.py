@@ -5,9 +5,10 @@ steps are recorded under the delegate step of the parent run, its tool calls pas
 permission engine (its asks appear in the same chat), and its answer is judged against its
 own tool outputs before the parent may treat it as verified.
 
-A swarm is up to three such subagents at the same time. It is for cloud models only: this
-machine cannot run two local models at once, so a chat or a decision model that is local
-gets `delegate`, one at a time. A swarm member has no fallback to the local model, no
+A swarm is several such subagents at the same time: three, unless the owner set another
+number, from one to the six tasks a swarm holds (Settings; see swarm_width). It is for cloud
+models only: this machine cannot run two local models at once, so a chat or a decision model
+that is local gets `delegate`, one at a time. A swarm member has no fallback to the local model, no
 browser (a chat has one), and no tool that loads a local model.
 """
 from __future__ import annotations
@@ -31,7 +32,7 @@ from .types import Block, BlockList, TextBlock, ThinkingBlock, ToolCallBlock, To
 SUBAGENT_MAX_TURNS = 12
 MAX_SUBAGENTS_PER_RUN = 8
 SWARM_NAME = "swarm"
-SWARM_WIDTH = 3                   # subagents of one swarm that run at the same time
+SWARM_WIDTH = 3                   # subagents of one swarm that run at the same time, until the owner sets another number
 SWARM_MAX_TASKS = 6
 LOCAL_PROVIDERS = frozenset({de.FALLBACK_PROVIDER})
 NOT_IN_A_SWARM = ("browser_", "look_at_image")      # one browser per chat; a tool that loads a local model
@@ -332,6 +333,17 @@ async def _one(ctx: ToolContext, args: dict, swarm: bool = False) -> dict:
         await conn.close()
 
 
+async def swarm_width(conn) -> int:
+    """How many subagents of one swarm run at the same time: the owner's setting, from one to
+    the tasks a swarm holds. What each of them runs (its tools, its model calls) loads this
+    machine and the model provider, which is why it is the owner's to set."""
+    try:
+        width = int(await settings.get(conn, "swarm_width", SWARM_WIDTH))
+    except (TypeError, ValueError):
+        width = SWARM_WIDTH
+    return max(1, min(SWARM_MAX_TASKS, width))
+
+
 async def _cloud_only(conn, chat) -> None:
     """ToolError unless both models a swarm calls are cloud models."""
     if chat.provider in LOCAL_PROVIDERS:
@@ -369,7 +381,7 @@ async def _swarm(ctx: ToolContext, args: dict) -> ToolResult:
                                        {"brief": task["brief"][:500]}, ctx.step_id)
             await hub.publish(ctx.run_id, {"type": "step_started", "step": step.model_dump()})
             steps.append(step)
-        gate = asyncio.Semaphore(SWARM_WIDTH)
+        gate = asyncio.Semaphore(await swarm_width(conn))
 
         async def member(n: int, task: dict) -> dict:
             status, out = "error", {}
@@ -405,7 +417,7 @@ def swarm_tool() -> Tool:
         "tools": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 20}},
         "required": ["brief", "tools"], "additionalProperties": False}
     return Tool(SWARM_NAME, (
-        f"Hand several INDEPENDENT tasks to subagents that work at the same time (up to {SWARM_WIDTH} at once). Use it "
+        "Hand several INDEPENDENT tasks to subagents that work at the same time (a few at once; the rest wait their turn). Use it "
         "when the work splits into parts that do not need each other's results: one host each, one feature each, one "
         "file each. Every task is a delegate brief: self-contained (a subagent sees nothing else), with success "
         "criteria and the tools it may use. Subagents of a swarm have no browser and no image tool. Each result carries "

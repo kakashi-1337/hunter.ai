@@ -37,6 +37,12 @@ _ENV_IGNORE = {"PATH", "HOME", "USER", "SHELL", "PWD", "NODE_ENV", "DEBUG", "POR
 
 _ENV_NEVER = ("LD_", "DYLD_", "NODE_OPTIONS", "PYTHONSTARTUP", "PYTHONPATH", "BASH_ENV", "npm_config_", "NPM_CONFIG_", "UV_")
 RUNS_CODE = "This step runs code from the package itself, before the server is ever switched on."
+_PAGE = re.compile(r"(?i)(?:https?://)?(?:www\.)?(npmjs\.com/package/|pypi\.org/project/)([^?#\s]+)(?:[?#]\S*)?")
+_PREFIX = re.compile(r"(?i)(npm|pypi)\s*:\s*(?=\S)")
+# The program a command line starts with, the registry its packages come from, and its words that are not the package.
+_RUNNERS = {"npx": "npm", "npm": "npm", "pnpm": "npm", "yarn": "npm", "bunx": "npm", "bun": "npm",
+            "uvx": "pypi", "uv": "pypi", "pip": "pypi", "pip3": "pypi", "pipx": "pypi"}
+_RUNNER_WORDS = {"install", "i", "add", "exec", "run", "dlx", "x", "tool", "global"}
 
 
 class AdderError(Exception):
@@ -49,9 +55,62 @@ def _dir(*parts: str) -> Path:
     return p
 
 
+def _tidy(source: str) -> str:
+    """The source without what changes nothing about it: quotes or backticks around it, a
+    capital or a space in the "npm:" or "pypi:" in front, and on a package page the https://
+    left out and whatever follows a ? or a #."""
+    s = (source or "").strip()
+    if len(s) > 1 and s[0] == s[-1] and s[0] in "\"'`":
+        s = s[1:-1].strip()
+    page = _PAGE.fullmatch(s)
+    if page:
+        return f"https://{page.group(1).lower()}{page.group(2)}"
+    prefix = _PREFIX.match(s)
+    return f"{prefix.group(1).lower()}:{s[prefix.end():]}" if prefix else s
+
+
+def _meant(s: str) -> list[str]:
+    """The sources this was most likely meant to be, written the way they are accepted. For
+    the refusal's message only: nothing is taken on a guess."""
+    words = s.split()
+    if words and words[0].lower() in _RUNNERS:              # a command line: npx -y name /folder, pip install name
+        kind = _RUNNERS[words[0].lower()]
+        words = [w for w in words[1:] if not w.startswith("-") and w.lower() not in _RUNNER_WORDS]
+    elif s.startswith(("npm:", "pypi:")):                   # the prefix, then more than a package: capitals, options, a range
+        kind, _, rest = s.partition(":")
+        words = rest.split()
+    else:                                                   # a name alone, which either registry may hold
+        return ([f"npm:{s.lower()}"] if re.fullmatch(rf"(?i:{_NPM_NAME})", s) else []) + ([f"pypi:{s}"] if re.fullmatch(_PY_NAME, s) else [])
+    if not words:
+        return []
+    if kind == "npm":                                       # npm names are lowercase; a version is kept only when it is one
+        m = re.fullmatch(rf"((?i:{_NPM_NAME}))(?:@(.*))?", words[0])
+        exact = m and m.group(2) and re.fullmatch(_VERSION, m.group(2))
+        return [f"npm:{m.group(1).lower()}" + (f"@{m.group(2)}" if exact else "")] if m else []
+    m = re.fullmatch(rf"({_PY_NAME})(?:(?:==|@)({_VERSION})|[\[<>=!~].*)?", words[0])
+    return [f"pypi:{m.group(1)}" + (f"=={m.group(2)}" if m.group(2) not in (None, "latest") else "")] if m else []
+
+
+def _not_understood(s: str) -> str:
+    """Why a source was refused, with what to type instead when that can be told. Every
+    source this names is one classify() takes."""
+    if re.search(r"<[^<>]*>", s):
+        return ("not understood. Leave out the < and >: they mark where the package's own name goes, as in "
+                "npm:@modelcontextprotocol/server-filesystem or pypi:mcp-server-fetch")
+    meant = _meant(s)
+    if len(meant) == 1:
+        return (f"not understood. Did you mean {meant[0]}? Only the package goes here; its start options are filled in "
+                "at the next step")
+    if meant:
+        return f"not understood. A name alone could be an npm or a PyPI package: write {meant[0]} or {meant[1]}"
+    return ("not understood. Give a GitHub or GitLab repository (https://github.com/owner/repo), an npm package "
+            "(npm:@scope/name, or its npmjs.com page), a PyPI package (pypi:name, or its pypi.org page), an absolute "
+            "folder path, or a JSON configuration")
+
+
 def classify(source: str) -> dict:
     """What kind of source this is: git, npm, pypi, folder, or config. AdderError otherwise."""
-    s = (source or "").strip()
+    s = _tidy(source)
     if not s:
         raise AdderError("give a repository URL, a package, a folder, or a configuration")
     if s.startswith("{"):
@@ -66,9 +125,10 @@ def classify(source: str) -> dict:
             name, _, version = s[1:].partition("@")
             return {"kind": "npm", "name": "@" + name, "version": version or None}
         return {"kind": "npm", "name": m.group(1), "version": m.group(2) or m.group(3)}
-    m = re.fullmatch(rf"(?:pypi:|https://pypi\.org/project/)({_PY_NAME})(?:==({_VERSION})|/({_VERSION}))?/?", s)
+    m = re.fullmatch(rf"(?:pypi:|https://pypi\.org/project/)({_PY_NAME})(?:(?:==|@)({_VERSION})|/({_VERSION}))?/?", s)
     if m:
-        return {"kind": "pypi", "name": m.group(1), "version": m.group(2) or m.group(3)}
+        version = m.group(2) or m.group(3)
+        return {"kind": "pypi", "name": m.group(1), "version": None if version == "latest" else version}    # PyPI has no tags
     if s.startswith("/"):
         p = Path(s)
         try:
@@ -84,8 +144,7 @@ def classify(source: str) -> dict:
         return {"kind": "git", "url": url, "label": label}
     except ValueError:
         pass
-    raise AdderError("not understood. Use a GitHub or GitLab repository URL, npm:<package>, pypi:<package>, "
-                     "an npmjs.com or pypi.org package page, an absolute folder path, or a JSON configuration")
+    raise AdderError(_not_understood(s))
 
 
 def safe_name(raw: str) -> str:
@@ -96,13 +155,13 @@ def safe_name(raw: str) -> str:
     return name[:24].rstrip("_") or "server"
 
 
-async def _json(client: httpx.AsyncClient, url: str) -> dict:
+async def _json(client: httpx.AsyncClient, url: str, asked: str) -> dict:
     try:
         r = await client.get(url)
     except httpx.HTTPError as e:
         raise AdderError(f"the package registry could not be reached ({type(e).__name__})") from None
     if r.status_code == 404:
-        raise AdderError("no such package or version in the registry")
+        raise AdderError(f"no such package or version in the registry: {asked}")
     if r.status_code != 200:
         raise AdderError(f"the package registry answered {r.status_code}")
     try:
@@ -162,15 +221,23 @@ async def fetch(src: dict, work: Path, client: httpx.AsyncClient | None = None) 
     client = client or httpx.AsyncClient(timeout=httpx.Timeout(60, connect=10), trust_env=False, follow_redirects=False)
     try:
         if kind == "npm":
-            meta = await _json(client, f"{NPM_REGISTRY}/{src['name'].replace('/', '%2F')}")
-            version = src.get("version") or (meta.get("dist-tags") or {}).get("latest")
-            entry = (meta.get("versions") or {}).get(version or "")
+            meta = await _json(client, f"{NPM_REGISTRY}/{src['name'].replace('/', '%2F')}", src["name"])
+            tags, versions = meta.get("dist-tags") or {}, meta.get("versions") or {}
+            version = src.get("version") or tags.get("latest")
+            if version not in versions and isinstance(tags.get(version), str):
+                version = tags[version]          # a tag (latest, next, beta) stands for the version it names
+            entry = versions.get(version or "")
+            if not entry and src.get("version"):
+                latest = tags.get("latest")
+                raise AdderError(f'{src["name"]} has no version or tag "{src["version"]}"'
+                                 + (f" (its latest is {latest})" if isinstance(latest, str) and re.fullmatch(_VERSION, latest) else ""))
             if not entry:
                 raise AdderError("no such package or version in the registry")
             await _download(client, (entry.get("dist") or {}).get("tarball") or "", work / "package.tgz")
             root, missed = await _unpack(work / "package.tgz", work / "code")
             return root, {"label": f"{src['name']}@{version}", "version": version, "scan_root": work / "code", "unpack_problems": missed}
-        meta = await _json(client, f"{PYPI}/{src['name']}/{src['version']}/json" if src.get("version") else f"{PYPI}/{src['name']}/json")
+        asked = f"{src['name']}=={src['version']}" if src.get("version") else src["name"]
+        meta = await _json(client, f"{PYPI}/{src['name']}/{src['version']}/json" if src.get("version") else f"{PYPI}/{src['name']}/json", asked)
         version = (meta.get("info") or {}).get("version")
         files = meta.get("urls") or []
         pick = next((f for f in files if f.get("packagetype") == "sdist" and str(f.get("filename", "")).endswith(".tar.gz")), None) \

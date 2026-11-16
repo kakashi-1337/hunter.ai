@@ -1,5 +1,6 @@
 import io
 import json
+import re
 import sys
 import tarfile
 from pathlib import Path
@@ -39,6 +40,71 @@ def test_classify(source, want):
 def test_classify_refuses(source):
     with pytest.raises(AdderError):
         mcp_adder.classify(source)
+
+
+@pytest.mark.parametrize("source,want", [
+    ("NPM:@scope/server-x", {"kind": "npm", "name": "@scope/server-x", "version": None}),
+    ("npm: @scope/server-x@1.2.3", {"kind": "npm", "name": "@scope/server-x", "version": "1.2.3"}),
+    ('"npm:demo-mcp"', {"kind": "npm", "name": "demo-mcp", "version": None}),
+    ("`npm:demo-mcp`", {"kind": "npm", "name": "demo-mcp", "version": None}),
+    ("https://www.npmjs.com/package/@scope/server-x?activeTab=versions", {"kind": "npm", "name": "@scope/server-x", "version": None}),
+    ("www.npmjs.com/package/demo-mcp/v/1.2.3", {"kind": "npm", "name": "demo-mcp", "version": "1.2.3"}),
+    ("PyPI: mcp-server-fetch", {"kind": "pypi", "name": "mcp-server-fetch", "version": None}),
+    ("pypi:mcp-server-fetch@0.6.2", {"kind": "pypi", "name": "mcp-server-fetch", "version": "0.6.2"}),
+    ("https://pypi.org/project/mcp-server-fetch/#files", {"kind": "pypi", "name": "mcp-server-fetch", "version": None}),
+    ("pypi:mcp-server-fetch@latest", {"kind": "pypi", "name": "mcp-server-fetch", "version": None}),     # as uvx writes it; PyPI has no tags
+])
+def test_classify_takes_the_same_source_written_another_way(source, want):
+    """A capital or a space in the prefix, quotes around it, a package page as the browser shows it."""
+    assert mcp_adder.classify(source) == want
+
+
+def offered(message: str) -> list[str]:
+    """Every source a message tells the owner to type."""
+    return [s.rstrip("?.:") for s in re.findall(r"(?:npm:|pypi:|https://)[^\s,;()\"']+", message)]
+
+
+@pytest.mark.parametrize("source,meant", [
+    ("npx -y @scope/server-x /tmp/files", ["npm:@scope/server-x"]),
+    ("npm install -g demo-mcp", ["npm:demo-mcp"]),
+    ("npm:@Scope/Server-X", ["npm:@scope/server-x"]),
+    ("npm:@scope/server-x --port 9000", ["npm:@scope/server-x"]),
+    ("npm:demo-mcp@^1.2.3", ["npm:demo-mcp"]),
+    ("uvx mcp-server-fetch", ["pypi:mcp-server-fetch"]),
+    ("pip install mcp-server-fetch==0.6.2", ["pypi:mcp-server-fetch==0.6.2"]),
+    ("uvx mcp-server-fetch@latest", ["pypi:mcp-server-fetch"]),
+    ("pypi:mcp-server-fetch>=0.6", ["pypi:mcp-server-fetch"]),      # a > that is no <placeholder>
+    ("demo-mcp", ["npm:demo-mcp", "pypi:demo-mcp"]),
+])
+def test_a_refused_source_says_what_to_type_instead(source, meant):
+    """Nothing is guessed or dropped on the owner's behalf: a command line, a name in capitals,
+    start options, a range of versions, or a bare name is refused, with the source to type."""
+    with pytest.raises(AdderError) as refused:
+        mcp_adder.classify(source)
+    assert offered(str(refused.value)) == meant
+
+
+@pytest.mark.parametrize("source,wrong", [("git@github.com:owner/repo.git", "npm:git"), ("someone@example.com", "npm:someone")])
+def test_a_refusal_makes_no_package_of_what_is_not_one(source, wrong):
+    """An SSH address or an e-mail address has an @ in it and is no name@version."""
+    with pytest.raises(AdderError) as refused:
+        mcp_adder.classify(source)
+    assert wrong not in str(refused.value)
+
+
+@pytest.mark.parametrize("source", ["what", "npm:<package>", "pypi:<package>", "npm:<@scope/server-x>", "npx -y @scope/server-x",
+                                    "npm:@Scope/Server-X", "demo-mcp", "https://evil.example/x/y"])
+def test_whatever_a_refusal_offers_is_itself_accepted(source):
+    """The message once said to use npm:<package>, and typing that got the same message back."""
+    def accepted(example: str) -> bool:
+        try:
+            return mcp_adder.classify(example)["kind"] in ("git", "npm", "pypi")
+        except AdderError:
+            return False
+    with pytest.raises(AdderError) as refused:
+        mcp_adder.classify(source)
+    examples = offered(str(refused.value))
+    assert examples and [e for e in examples if not accepted(e)] == []
 
 
 def test_classify_folder_and_config(tmp_path):
@@ -127,6 +193,54 @@ async def test_registry_problems_are_plain_errors_and_leave_nothing():
     with pytest.raises(AdderError, match="no source archive"):
         await mcp_adder.inspect("pypi:pkg")
     assert not [p for p in (config.home() / "mcp" / "src").iterdir()]
+
+
+@respx.mock
+async def test_a_package_the_registry_does_not_have_is_named():
+    """npm:@scope/package, typed as the placeholder shows it, is a name the registry does not know."""
+    respx.get("https://registry.npmjs.org/@scope%2Fpackage").mock(return_value=httpx.Response(404))
+    with pytest.raises(AdderError, match="no such package.*@scope/package"):
+        await mcp_adder.inspect("npm:@scope/package")
+    respx.get("https://pypi.org/pypi/pkg/9.9/json").mock(return_value=httpx.Response(404))
+    with pytest.raises(AdderError, match=r"no such package.*pkg==9\.9"):
+        await mcp_adder.inspect("pypi:pkg==9.9")
+
+
+def tagged_registry():
+    """demo-mcp with two versions and the tags that name them, as the npm registry sends it."""
+    for version in ("1.2.3", "2.0.0-rc.1"):
+        tgz = npm_tarball({"package.json": json.dumps({"name": "demo-mcp", "version": version}).encode(), "index.js": b"console.log(1)"})
+        respx.get(f"https://registry.npmjs.org/demo-mcp/-/demo-mcp-{version}.tgz").mock(return_value=httpx.Response(200, content=tgz))
+    respx.get("https://registry.npmjs.org/demo-mcp").mock(return_value=httpx.Response(200, json={
+        "dist-tags": {"latest": "1.2.3", "next": "2.0.0-rc.1"},
+        "versions": {v: {"dist": {"tarball": f"https://registry.npmjs.org/demo-mcp/-/demo-mcp-{v}.tgz"}} for v in ("1.2.3", "2.0.0-rc.1")}}))
+
+
+@respx.mock
+@pytest.mark.parametrize("tag,version", [("latest", "1.2.3"), ("next", "2.0.0-rc.1")])
+async def test_an_npm_tag_stands_for_the_version_it_names(tag, version):
+    """npx -y name@latest is how most READMEs write it; the server is still pinned to one version."""
+    tagged_registry()
+    rec = await mcp_adder.inspect(f"npm:demo-mcp@{tag}", audit=False)
+    assert (rec["label"], rec["proposal"]["args"]) == (f"demo-mcp@{version}", ["-y", f"demo-mcp@{version}"])
+
+
+@respx.mock
+async def test_a_version_the_package_does_not_have_is_named_with_its_latest():
+    tagged_registry()
+    with pytest.raises(AdderError, match=r'"9\.9\.9".*1\.2\.3'):
+        await mcp_adder.inspect("npm:demo-mcp@9.9.9", audit=False)
+    assert not [p for p in (config.home() / "mcp" / "src").iterdir()]
+
+
+@respx.mock
+async def test_the_inspect_endpoint_answers_what_the_wizard_is_given(client):
+    """What is typed in "Where it comes from" reaches the adder as typed, and a refusal's advice reaches the owner."""
+    tagged_registry()
+    taken = await client.post("/api/mcp/inspect", json={"source": " NPM: demo-mcp@latest\n"})
+    assert (taken.status_code, taken.json().get("label")) == (200, "demo-mcp@1.2.3")
+    refused = await client.post("/api/mcp/inspect", json={"source": "npx -y demo-mcp"})
+    assert (refused.status_code, offered(refused.json()["detail"])) == (400, ["npm:demo-mcp"])
 
 
 @respx.mock

@@ -87,7 +87,7 @@ export const uploadUrl = (id: string) => `/api/uploads/${id}`
 export const search = (text: string) => request<SearchHit[]>('GET', `/api/search${q({ q: text })}`)
 export const listProviders = () => request<ProviderInfo[]>('GET', '/api/providers')
 export const getSettings = () => request<Settings>('GET', '/api/settings')
-export const putSettings = (patch: Partial<Pick<Settings, 'default_provider' | 'default_model' | 'fallback_model' | 'permissions' | 'max_turns' | 'decision_provider' | 'decision_model' | 'decision_gate' | 'kb_redact' | 'vision_model' | 'browser_via_caido' | 'answer_check' | 'mcp_on_demand' | 'notify_findings' | 'notify_min_severity' | 'decision_engine'>>) =>
+export const putSettings = (patch: Partial<Pick<Settings, 'default_provider' | 'default_model' | 'fallback_model' | 'permissions' | 'max_turns' | 'swarm_width' | 'decision_provider' | 'decision_model' | 'decision_gate' | 'kb_redact' | 'vision_model' | 'browser_via_caido' | 'answer_check' | 'mcp_on_demand' | 'notify_findings' | 'notify_min_severity' | 'decision_engine'>>) =>
   request<Settings>('PUT', '/api/settings', patch)
 export const putKey = (name: string, value: string) => request<void>('PUT', `/api/settings/keys/${name}`, { value })
 

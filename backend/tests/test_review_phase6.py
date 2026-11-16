@@ -83,6 +83,16 @@ def test_scanning_hostile_text_is_fast():
     assert time.monotonic() - began < 2.0
 
 
+@pytest.mark.parametrize("text", ["p\u0430ypal", "see the p\u0430ypal page", "\u043b\u0430\u0442\u0438\u043dlatin", "one w\u043erd",
+                                  "x" * 70 + " \u043b\u0430\u0442\u0438\u043dlatin tail"])
+def test_a_word_of_two_scripts_is_found_wherever_it_stands(text):
+    """The check is tried once per word, at its first letter: that must not lose a word."""
+    found = [f for f in scan_tool("t", text, {"type": "object"}, others=set()) if f["rule"] == "mixed-script"]
+    assert len(found) == 1
+    if text.startswith("x"):                # the excerpt begins sixty characters before the word, wherever the word is
+        assert found[0]["excerpt"].startswith("x" * 59 + " \u043b\u0430\u0442\u0438\u043dlatin")
+
+
 # ---- I4: ordinary wording is not a high finding
 
 @pytest.mark.parametrize("text", [

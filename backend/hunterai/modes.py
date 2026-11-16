@@ -69,7 +69,7 @@ ORCHESTRATOR_RULES = (
                  "true; otherwise check it yourself or label it unverified."),
     ("swarm", "When the work splits into parts that do not need each other's results (several hosts, "
               "several features, several files), hand them to swarm in one call instead of doing them "
-              "one after another; three run at a time. Give each task its own complete brief. The same "
+              "one after another; a few run at a time. Give each task its own complete brief. The same "
               "rule holds for every answer: a claim until its result says verified is true."),
     ("caido", "When the owner has switched recording on, every request of the browser tools and of "
               "web_fetch is kept in Caido (a web_fetch result says so). After you browse or fetch pages "
