@@ -131,7 +131,7 @@ def _redirect_target(ctx: ToolContext, current: str, location: str, ips: tuple[s
     if nxt.host != cur.host or not same_port:
         return new, cur.host
     verdict = resolve.scope_verdict(ctx.target, (HostUse(nxt.host, nxt.port, ips),), path)
-    if verdict.out or verdict.not_in:
+    if verdict.out or verdict.not_in or verdict.unread:     # an exclusion that cannot be read may cover where this leads
         return new, "this target's scope"
     return new, None
 

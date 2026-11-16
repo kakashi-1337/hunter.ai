@@ -21,6 +21,7 @@ export function NewChatDialog({ onClose }: { onClose: () => void }) {
   const [form, setForm] = useState<ScopeForm>(emptyScopeForm)
   const [unread, setUnread] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [problem, setProblem] = useState('')
   const blocked = busy || (choice === NEW && (!form.name.trim() || unread))
 
   const start = async () => {
@@ -35,7 +36,8 @@ export function NewChatDialog({ onClose }: { onClose: () => void }) {
       await newChat(targetId)
       onClose()
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      if (e instanceof api.ApiError && e.status === 422) setProblem(e.message)     // a scope line that cannot be read: said in the form, beside the lists
+      else setError(e instanceof Error ? e.message : String(e))
       setBusy(false)
     }
   }
@@ -60,7 +62,7 @@ export function NewChatDialog({ onClose }: { onClose: () => void }) {
       </label>
       {choice === '' && <div className="hint">No scope is checked in a chat without a target. You can still give the chat a target later, in its header.</div>}
       {choice !== '' && choice !== NEW && <div className="hint">The chat works inside this target's scope and sees its notes and findings.</div>}
-      {choice === NEW && <TargetForm form={form} onChange={setForm} onUnread={setUnread} onEnter={() => void start()} focusName />}
+      {choice === NEW && <TargetForm form={form} problem={problem} onChange={setForm} onUnread={setUnread} onEnter={() => void start()} focusName />}
     </Modal>
   )
 }

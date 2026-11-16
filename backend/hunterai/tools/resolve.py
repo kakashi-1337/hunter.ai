@@ -325,9 +325,13 @@ def _network(text: str):
 
 
 def parse_entry(s: str) -> ScopeEntry | None:
-    """`[scheme://]host|*.domain|ip|cidr[:port][/path-prefix]`; None when it fits no form."""
+    """`[scheme://]host|*.domain|ip|cidr[:port][/path-prefix]`; None when it fits no form.
+
+    A `*` is read in three places and nowhere else: as the first label (`*.example.com`), for any
+    port (`:*`), and alone at the end of a path (`/api/*`: everything under it). A line that cannot
+    be read matches nothing, so `unreadable` exists to tell the owner about it."""
     t = re.sub(r"^[a-z][a-z0-9+.-]*://", "", (s or "").strip(), flags=re.I)
-    if not t:
+    if not t or re.search(r"\s", t):
         return None
     head, slash, tail = t.partition("/")
     head = head.lower()          # hosts are case-insensitive; a path keeps its case
@@ -338,8 +342,15 @@ def parse_entry(s: str) -> ScopeEntry | None:
         if first.isdigit() and _canonical_ip(head.strip("[]")) and _network(f"{head.strip('[]')}/{first}"):
             network = _network(f"{head.strip('[]')}/{first}")
             path = ("/" + more) if more else None
+    if path is not None:
+        if path.endswith("/*"):
+            path = path[:-2]
+        if "*" in path:
+            return None
     port = None
     if network is None:
+        if head.endswith(":*"):
+            head = head[:-2]
         m = re.match(r"^(\[[0-9a-f:.]+\]|[^:]+):(\d{1,5})$", head)
         if m:
             head, port = m.group(1), int(m.group(2))
@@ -359,8 +370,40 @@ def parse_entry(s: str) -> ScopeEntry | None:
         return None
     if is_ip(name) or "*" in name:
         return None
+    if name.rpartition(".")[2].isdigit():     # "10.0.0.1-10.0.0.50", "999.1.1.1": numbers that are no address, not a name
+        return None
     return ScopeEntry(suffix=name, port=port, path=path) if suffix else \
         ScopeEntry(host=name, port=port, path=path)
+
+
+_ADDRESS_RANGE = re.compile(r"^\d{1,3}(\.\d{1,3}){3}-\d{1,3}(\.\d{1,3}){0,3}$|^\d{1,3}(\.(\d{1,3}|\*)){3}$")
+
+
+def why_unreadable(line: str) -> str | None:
+    """What is wrong with a scope line that fits no form, in words for the owner. None when it is read."""
+    t = (line or "").strip()
+    if parse_entry(t) is not None:
+        return None
+    body = re.sub(r"^[a-z][a-z0-9+.-]*://", "", t, flags=re.I)
+    if _ADDRESS_RANGE.match(re.sub(r"\s*-\s*", "-", body)):
+        return "write a range of addresses as networks, like 10.0.0.0/26"
+    if re.search(r"[\s,;()]", body):
+        return "one host, address or network on a line, with nothing after it"
+    if "*" in body:
+        return "a * is read as the first label (*.example.com), as any port (:*), or alone at the end of a path (/api/*)"
+    return "not a host, an address or a network"
+
+
+def unreadable(lines: Sequence[object]) -> list[tuple[str, str]]:
+    """(line, what is wrong with it) for each line of a scope list that `parse_entry` cannot read, once each."""
+    found: dict[str, str] = {}
+    for raw in lines:
+        line = raw.strip() if isinstance(raw, str) else ""
+        if line and line not in found:
+            why = why_unreadable(line)
+            if why:
+                found[line] = why
+    return list(found.items())
 
 
 def _loose(path: str) -> str:
@@ -401,6 +444,7 @@ def matches(entry: str, h: HostUse, url_path: str | None = None, *,
 class ScopeVerdict:
     out: tuple[str, ...]       # on the target's out-of-scope list
     not_in: tuple[str, ...]    # not on its in-scope list
+    unread: tuple[str, ...] = ()   # out-of-scope lines that cannot be read: no host was checked against them
 
 
 def _names_one(entry: str) -> bool:
@@ -437,4 +481,7 @@ def scope_verdict(target: Target | None, hosts: Sequence[HostUse],
             h.host for h in hosts
             if not (_is_localhost_name(h.host) or is_loopback(h.host))   # never a scope matter
             and not any(matches(e, h, url_path) for e in ins)))
-    return ScopeVerdict(out, not_in)
+    # An in-scope line that cannot be read only fails to include, and its hosts ask as "not in scope".
+    # An out-of-scope line that cannot be read fails to exclude, and nothing else would say so.
+    unread = tuple(line for line, _ in unreadable(outs)) if hosts else ()
+    return ScopeVerdict(out, not_in, unread)

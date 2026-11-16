@@ -97,6 +97,18 @@ starts a chat there at once, and the pencil edits the target.
 A target has a name, notes for the model, and two lists with one entry a line: a host,
 `*.domain`, an IP or a CIDR, each with an optional `:port` and `/path-prefix`.
 
+A `*` is read in three places: as the first label (`*.example.com`), for any port
+(`example.com:*`), and alone at the end of a path (`example.com/api/*`, everything under
+`/api`; `https://*.example.com/*` is `*.example.com`). A line that fits no form, such as
+`example.*`, `10.0.0.1-10.0.0.50` or `old.example.com (legacy)`, would be checked against
+nothing, so saving it is refused and the form says what is wrong with each such line.
+The brief box below turns an address range into networks for you.
+
+A target saved by an older version may still hold such a line. It gets a warning mark in
+the sidebar, its edit dialog names the lines, and while one of them is on the
+out-of-scope list every call that names a host asks first and no redirect is followed:
+an exclusion that cannot be read may cover any of them.
+
 ### Pasting a program brief
 
 Paste the program page from HackerOne, Bugcrowd, YesWeHack or Intigriti, a scope table,

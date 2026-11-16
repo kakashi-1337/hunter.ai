@@ -160,6 +160,17 @@ async def test_redirect_out_of_a_path_scope_is_not_followed(conn, dns):
 
 
 @respx.mock
+async def test_a_call_and_its_redirect_are_not_waved_through_an_exclusion_that_cannot_be_read(conn, dns):
+    dns[0]["a.test"] = [IP]
+    scope = {"in": ["a.test"], "out": ["*.old.*"]}                      # stored before such a line was refused
+    respx.get(f"http://{IP}/x").mock(return_value=httpx.Response(302, headers={"location": "/next"}))
+    nxt = respx.get(f"http://{IP}/next").mock(return_value=text("next"))
+    req, out = await asked(conn, {"url": "http://a.test/x"}, "allow_once", policy=NET, scope=scope)
+    assert req.warnings == ["this target's out-of-scope line cannot be read, so nothing is checked against it: *.old.*"]
+    assert "was not followed: it leaves this target's scope" in out.block.content and not nxt.called
+
+
+@respx.mock
 async def test_https_sends_sni_and_host(conn, dns):
     dns[0]["example.test"] = [IP]
     route = respx.get(f"https://{IP}/").mock(return_value=text("ok"))

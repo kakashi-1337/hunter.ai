@@ -1,4 +1,4 @@
-import type { BriefResult } from './types'
+import type { BriefResult, ScopeProblem } from './types'
 
 /** The target form as it is typed: the two scope lists one entry a line, and what a pasted brief left open. */
 export interface ScopeForm {
@@ -65,4 +65,20 @@ export function briefSummary(brief: BriefResult): string {
   if (!parts.length) return 'Found no host this text puts in or out of scope.'
   const listed = parts.length > 1 ? parts.slice(0, -1).join(', ') + ' and ' + parts[parts.length - 1] : parts[0]
   return `Found ${listed}. Check the lists before you save.`
+}
+
+/** What the target form says about lines of a stored scope that cannot be read. The save refuses such a line with
+ * the same words, so a target only has them when it was saved before that check existed. */
+export function scopeProblemText(problems: ScopeProblem[] | undefined): string {
+  if (!problems?.length) return ''
+  return 'These scope lines cannot be read, so nothing is checked against them. Rewrite or remove them:\n'
+    + problems.map((p) => `${p.side === 'in' ? 'In scope' : 'Out of scope'}: ${p.line} (${p.why})`).join('\n')
+}
+
+/** The words behind the warning mark of a target in the sidebar; empty when there is nothing to warn about. */
+export function scopeProblemMark(target: { name: string; scope_problems?: ScopeProblem[] }): string {
+  const n = target.scope_problems?.length ?? 0
+  if (!n) return ''
+  return n === 1 ? `1 scope line of ${target.name} cannot be read and is not checked. Edit the target to fix it.`
+    : `${n} scope lines of ${target.name} cannot be read and are not checked. Edit the target to fix them.`
 }

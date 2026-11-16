@@ -10,7 +10,7 @@ import { confirmBox } from '../dialog'
 import { MachineStatus } from './MachineStatus'
 import { NewChatDialog } from './NewChatDialog'
 import { TargetForm } from './TargetForm'
-import { emptyScopeForm, scopeOf, type ScopeForm } from '../scope'
+import { emptyScopeForm, scopeOf, scopeProblemMark, scopeProblemText, type ScopeForm } from '../scope'
 
 function TargetDialog({ target, onClose }: { target: Target; onClose: () => void }) {
   const refreshLists = useStore((s) => s.refreshLists)
@@ -19,6 +19,7 @@ function TargetDialog({ target, onClose }: { target: Target; onClose: () => void
     ...emptyScopeForm(), name: target.name, notes: target.notes, inScope: target.scope.in.join('\n'), outScope: target.scope.out.join('\n'),
   }))
   const [unread, setUnread] = useState(false)
+  const [problem, setProblem] = useState(() => scopeProblemText(target.scope_problems))
   const blocked = !form.name.trim() || unread
   const save = async () => {
     if (blocked) return
@@ -27,7 +28,8 @@ function TargetDialog({ target, onClose }: { target: Target; onClose: () => void
       await refreshLists()
       onClose()
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      if (e instanceof api.ApiError && e.status === 422) setProblem(e.message)     // a scope line that cannot be read: said in the form, beside the lists
+      else setError(e instanceof Error ? e.message : String(e))
     }
   }
   return (
@@ -40,7 +42,7 @@ function TargetDialog({ target, onClose }: { target: Target; onClose: () => void
         <button className="btn primary" disabled={blocked} onClick={() => void save()}>Save</button>
       </>}
     >
-      <TargetForm form={form} onChange={setForm} onUnread={setUnread} onEnter={() => void save()} focusName />
+      <TargetForm form={form} problem={problem} onChange={setForm} onUnread={setUnread} onEnter={() => void save()} focusName />
     </Modal>
   )
 }
@@ -142,6 +144,7 @@ export function Sidebar({ onSettings }: { onSettings: () => void }) {
           <section key={target?.id ?? 'none'}>
             <div className="group-head">
               <span className="name" title={target?.name}>{target ? target.name : 'No target'}</span>
+              {target && scopeProblemMark(target) && <span className="warn-line" role="img" aria-label={scopeProblemMark(target)} title={scopeProblemMark(target)}>⚠</span>}
               <span className="actions">
                 <button className="icon" title="New chat here" aria-label={`New chat in ${target?.name ?? 'No target'}`} onClick={() => newChat(target?.id ?? null)}>＋</button>
                 {target && <button className="icon" title="Edit target and scope" aria-label={`Edit ${target.name}`} onClick={() => setEditing(target)}>✎</button>}
