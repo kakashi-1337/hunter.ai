@@ -199,6 +199,28 @@ the run ends before the agent takes another step, what is still waiting is sent 
 next message; after a stop or an error it stays in view for you to send or remove. Queued
 messages are text only.
 
+### Slash commands
+
+A line in the composer that starts with `/` and a command word changes the chat instead
+of being sent. Type `/` to see the list; keep typing to narrow it, Up and Down to move,
+Tab to complete, Enter to take the highlighted row, Escape to close the list.
+
+| Command | What it does |
+|---|---|
+| `/new` | A new chat on the same target. |
+| `/mode plan`, `pentesting`, `coding` | Sets the mode. |
+| `/model <name>` | Sets the model. Part of the name is enough when it fits one model (`/model haiku`). |
+| `/persona <name>`, `/persona none` | Sets who the assistant is for this chat. |
+| `/target <name>`, `/target none` | Sets the target of the chat. |
+| `/effort low`, `medium`, `high`, `xhigh`, `max`, `default` | How hard the model thinks, for a model that has the setting. |
+| `/stop` | Stops the run. |
+
+A value that fits nothing, or more than one thing, is not sent: the line under the
+composer says what there is. While the agent works, only `/new` and `/stop` run. A line
+that starts with a slash but not with a command word (`/etc/passwd is readable`) is an
+ordinary message, a command that takes no value is a message as soon as more follows it
+(`/new endpoint is broken`), and a space in front of the slash always makes it a message.
+
 ### Answer check
 
 After a run in a chat that has tools, the decision model reads the final answer next to the
