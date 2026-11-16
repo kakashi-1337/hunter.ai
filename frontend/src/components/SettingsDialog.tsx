@@ -160,6 +160,12 @@ export function SettingsDialog({ onClose, onSetup }: { onClose: () => void; onSe
             <input type="number" min={1} max={200} defaultValue={settings.max_turns}
               onBlur={(e) => { const n = Number(e.target.value); if (n !== settings.max_turns) void update({ max_turns: n }) }} />
           </label>
+          <label className="field"><span>Subagents of a swarm working at the same time (1 to {settings.swarm_width_max})</span>
+            <input type="number" min={1} max={settings.swarm_width_max} defaultValue={settings.swarm_width}
+              onBlur={(e) => { const n = Number(e.target.value); if (n !== settings.swarm_width) void update({ swarm_width: n }) }} />
+            <span className="hint">Each one runs its own tools and model calls, so more of them load this machine and your model provider's rate limit. Raise it on a machine with cores and memory to spare; lower it when a swarm makes the machine slow.
+              {settings.machine.cores ? ` This machine has ${settings.machine.cores} processor cores${settings.machine.memory_gb ? ` and ${settings.machine.memory_gb} GB of memory` : ''}.` : ''}</span>
+          </label>
           <div className="field"><span>MCP servers</span>
             {mcp?.error && <span className="hint">{mcp.error}</span>}
             <div className="row">

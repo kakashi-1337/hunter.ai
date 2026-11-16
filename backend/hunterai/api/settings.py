@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import os
+
 from fastapi import APIRouter, Depends, HTTPException, Response
 from typing import Literal
 
 from pydantic import BaseModel, ValidationError
 
-from .. import answer_check, caido, config, engine, envfile, notify, permissions
+from .. import answer_check, caido, config, engine, envfile, notify, permissions, subagents
 from ..tools import on_demand
 from ..providers import registry
 from . import providers as providers_api
@@ -30,6 +32,7 @@ class SettingsIn(BaseModel):
     fallback_model: str | None = None
     permissions: dict | None = None
     max_turns: int | None = None
+    swarm_width: int | None = None          # subagents of one swarm that work at the same time
     decision_provider: str | None = None    # "" or null: use the model new chats use
     decision_model: str | None = None
     decision_gate: bool | None = None
@@ -43,6 +46,16 @@ class SettingsIn(BaseModel):
     decision_engine: bool | None = None     # the built-in decide_* tools and the risk gate (off: another engine is used)
 
 
+def _machine() -> dict:
+    """What this machine has, next to the settings that depend on it: processor cores and
+    memory in GB. None for what cannot be read here."""
+    try:
+        memory = round(os.sysconf("SC_PHYS_PAGES") * os.sysconf("SC_PAGE_SIZE") / 2**30, 1)
+    except (AttributeError, OSError, ValueError):
+        memory = None
+    return {"cores": os.cpu_count(), "memory_gb": memory}
+
+
 async def _view(conn) -> dict:
     provider, model = await default_provider_model(conn)
     return {
@@ -53,6 +66,9 @@ async def _view(conn) -> dict:
         "keys": {name: bool(config.env(name)) for name in KEY_NAMES},
         "permissions": await settings.get(conn, "permissions", {}) or {},
         "max_turns": await settings.get(conn, "max_turns", engine.DEFAULT_MAX_TURNS),
+        "swarm_width": await subagents.swarm_width(conn),
+        "swarm_width_max": subagents.SWARM_MAX_TASKS,
+        "machine": _machine(),
         "presets": permissions.PRESETS,
         "decision_provider": await settings.get(conn, "decision_provider") or None,
         "decision_model": await settings.get(conn, "decision_model") or None,
@@ -89,6 +105,11 @@ async def put_settings(body: SettingsIn, conn=Depends(get_conn)):
         if not isinstance(turns, int) or not 1 <= turns <= engine.MAX_TURNS_LIMIT:
             raise HTTPException(400, f"max_turns must be 1 to {engine.MAX_TURNS_LIMIT}")
         await settings.put(conn, "max_turns", turns)
+    if "swarm_width" in fields:
+        width = fields.pop("swarm_width")
+        if not isinstance(width, int) or not 1 <= width <= subagents.SWARM_MAX_TASKS:
+            raise HTTPException(400, f"swarm_width must be 1 to {subagents.SWARM_MAX_TASKS}")
+        await settings.put(conn, "swarm_width", width)
     for key in ("notify_findings", "notify_min_severity"):
         if fields.get(key) is not None:
             await settings.put(conn, key, fields[key])

@@ -248,7 +248,7 @@ line.
 | `critique` | A second look at a claim or plan: assumptions, alternatives, what would disprove it. Labelled as the model's analysis. |
 | `finding_add`, `finding_update`, `finding_list` | Findings for the chat's target. Adding one runs a triage first (severity, false positive, in scope, duplicate), stored with it. |
 | `delegate` | Runs a subagent on a brief with a subset of the chat's tools: at most 12 model turns, 8 subagents per run, one at a time, never nested. Its calls pass the same permission engine and its questions appear in the same chat. |
-| `swarm` | Runs 2 to 6 such subagents on independent briefs, three at a time; each answer is judged on its own. Cloud models only: with a local chat model or a local decision model it is refused and `delegate` is the tool, because this kind of machine cannot run two local models at once. A swarm member has no fallback to the local model, no browser (a chat has one), and no `look_at_image`. |
+| `swarm` | Runs 2 to 6 such subagents on independent briefs, three at a time unless you set another number (Settings, 1 to 6: more load this machine and your provider's rate limit); each answer is judged on its own. Cloud models only: with a local chat model or a local decision model it is refused and `delegate` is the tool, because this kind of machine cannot run two local models at once. A swarm member has no fallback to the local model, no browser (a chat has one), and no `look_at_image`. |
 
 - **Verification.** When a subagent finishes, the decision model judges its answer against
   the tool output in its own transcript. Only a confident "accept" is reported as

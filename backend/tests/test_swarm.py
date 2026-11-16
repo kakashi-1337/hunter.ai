@@ -23,9 +23,10 @@ class Hive:
     It counts how many subagent calls are in flight at the same moment."""
     supports_tools = True
 
-    def __init__(self, name, tasks, fail=()):
+    def __init__(self, name, tasks, fail=(), crowd=0):
         self.name, self.tasks, self.fail = name, tasks, set(fail)
         self.active = self.peak = 0
+        self.crowd, self.full = crowd, asyncio.Event()      # crowd: hold the subagents until that many are in flight
         self.parent_calls = 0
 
     def configured(self):
@@ -47,6 +48,10 @@ class Hive:
                 raise ProviderError("unavailable", f"no answer for {key}")
             self.active += 1
             self.peak = max(self.peak, self.active)
+            if self.crowd:                  # so that the count does not hang on how fast this machine starts them
+                if self.active >= self.crowd:
+                    self.full.set()
+                await asyncio.wait_for(self.full.wait(), 5)
             await asyncio.sleep(0.03)
             self.active -= 1
             if len(messages) == 1:
@@ -142,3 +147,12 @@ async def test_a_swarm_counts_against_the_runs_subagents(conn, hive, monkeypatch
     p, run, msg = await hive.run([task(k) for k in "abc"])
     block = next(b for b in msg.blocks if b.type == "tool_result")
     assert block.is_error and "at most 2 subagents" in block.content and "2 are left" in block.content and hive.ran == []
+
+
+@pytest.mark.parametrize("setting,peak", [(5, 5), (1, 1), (99, 6), ("junk", 3)])
+async def test_the_owners_setting_decides_how_many_work_at_the_same_time(conn, hive, setting, peak):
+    """One to six, six being the tasks one swarm holds; a setting that is no number leaves the three."""
+    await settings.put(conn, "swarm_width", setting)
+    p, run, msg = await hive.run([task(k) for k in "abcdef"], crowd=peak)
+    assert run.status == "done", run.error
+    assert (p.peak, [r["status"] for r in result_of(msg)["results"]]) == (peak, ["done"] * 6)
