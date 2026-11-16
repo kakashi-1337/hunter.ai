@@ -6,7 +6,7 @@ import type {
   KbChunk,
   ChatKb, Collection, Job, JobAction, KbDocument, KbHealth, KbHit, KbStatus, UploadResult,
   Chat, Finding, Goal, Grant, McpStatus, Message, Mode, Options, PermissionDecision, PermissionRequest, ProcessInfo, ProviderInfo,
-  RunDetail, RunSummary, SearchHit, Settings, StartedRun, Target, ToolInfo, Upload,
+  BriefResult, RunDetail, RunSummary, SearchHit, Settings, StartedRun, Target, ToolInfo, Upload,
 } from './types'
 
 export class ApiError extends Error {
@@ -50,7 +50,10 @@ const q = (params: Record<string, string | null | undefined>) => {
 }
 
 export const listTargets = () => request<Target[]>('GET', '/api/targets')
-export const createTarget = (name: string) => request<Target>('POST', '/api/targets', { name })
+export const createTarget = (name: string, notes = '', scope?: Target['scope']) =>
+  request<Target>('POST', '/api/targets', scope ? { name, notes, scope } : { name, notes })
+/** What a pasted program brief says about scope. Reads only: nothing is saved. */
+export const readBrief = (text: string) => request<BriefResult>('POST', '/api/targets/brief', { text })
 export const updateTarget = (id: string, patch: Partial<Pick<Target, 'name' | 'notes' | 'scope'>>) =>
   request<Target>('PATCH', `/api/targets/${id}`, patch)
 export const deleteTarget = (id: string) => request<void>('DELETE', `/api/targets/${id}`)

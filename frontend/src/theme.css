@@ -368,3 +368,6 @@ button.link:hover:not(:disabled) { background: none; color: var(--text); }
 .dialog input { width: 100%; }
 .btn.danger-solid { background: var(--bad); border-color: var(--bad); color: #2a0b0e; font-weight: 600; }
 .btn.danger-solid:hover:not(:disabled) { background: #f58a90; }
+
+.unplaced { display: flex; flex-direction: column; gap: 4px; border: 1px dashed var(--line); border-radius: 6px; padding: 8px; }
+.unplaced .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
