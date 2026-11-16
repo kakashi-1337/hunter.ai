@@ -382,6 +382,14 @@ async def _swarm(ctx: ToolContext, args: dict) -> ToolResult:
             await hub.publish(ctx.run_id, {"type": "step_started", "step": step.model_dump()})
             steps.append(step)
         gate = asyncio.Semaphore(await swarm_width(conn))
+        # The members close their steps on this one connection, one at a time. Two that overlap leave one's read
+        # open while the other's update begins, and SQLite refuses a write that starts from an open read at once
+        # ("database is locked", no waiting) whenever anything else is writing: the whole swarm's answer was lost.
+        one_at_a_time = asyncio.Lock()
+
+        async def close(n: int, status: str, detail: dict):
+            async with one_at_a_time:
+                return await runs.patch_step(conn, steps[n].id, status=status, close=True, detail=detail)
 
         async def member(n: int, task: dict) -> dict:
             status, out = "error", {}
@@ -395,7 +403,7 @@ async def _swarm(ctx: ToolContext, args: dict) -> ToolResult:
                 status = "cancelled"
                 raise
             finally:
-                done = await asyncio.shield(runs.patch_step(conn, steps[n].id, status=status, close=True, detail={
+                done = await asyncio.shield(close(n, status, {
                     "brief": task["brief"][:500], **{k: out[k] for k in ("status", "verified", "verdict") if k in out}}))
                 await asyncio.shield(hub.publish(ctx.run_id, {"type": "step_finished", "step": done.model_dump()}))
             return {"task": n + 1, **out}
