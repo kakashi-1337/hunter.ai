@@ -1,8 +1,8 @@
 import type { Mode, Options, ProviderInfo } from './types'
 
 /** Slash commands of the composer: a line that starts with "/" and a known word changes the chat instead of
- * being sent. Anything else that starts with a slash ("/etc/passwd is readable") is an ordinary message, and so
- * is a line with a space in front of the slash. */
+ * being sent, or starts a skill. Anything else that starts with a slash ("/etc/passwd is readable") is an
+ * ordinary message, and so is a line with a space in front of the slash. */
 export interface SlashContext {
   busy: boolean
   provider: string
@@ -10,7 +10,11 @@ export interface SlashContext {
   targets: { id: string; name: string }[]
   personas: { id: string; name: string; description: string }[]
   providers: ProviderInfo[]
+  skills: { name: string; description: string; mode: Mode | null }[]     // the ones switched on
 }
+
+/** What /go sends once the chat is back in the mode the work is done in. */
+export const GO_TEXT = 'The plan is approved. Carry it out step by step, and stop to tell me when something does not go as planned.'
 
 /** One row of the menu. `text` is what the composer holds once the row is picked; `run` says the command is whole then. */
 export interface SlashItem { label: string; hint: string; text: string; run: boolean }
@@ -18,6 +22,9 @@ export interface SlashItem { label: string; hint: string; text: string; run: boo
 export type SlashResult =
   | { kind: 'new' } | { kind: 'stop' } | { kind: 'mode'; mode: Mode } | { kind: 'model'; provider: string; model: string }
   | { kind: 'persona'; id: string | null } | { kind: 'target'; id: string | null } | { kind: 'effort'; effort: Options['effort'] | undefined }
+  | { kind: 'skill'; name: string; mode: Mode | null; text: string }     // the line goes to the model, which gets the skill with it
+  | { kind: 'go'; mode: Mode | null }                                     // null: the mode the chat had before the plan
+  | { kind: 'skills' }
   | { kind: 'refused'; message: string }
 
 interface Choice { value: string; label: string; hint: string; names: string[]; result: SlashResult }
@@ -25,6 +32,8 @@ interface Spec {
   name: string
   hint: string
   noun?: string                               // what its argument is called; a command without one takes no argument
+  waits?: string                              // what has to wait for the run to end, for the message that says so
+  optional?: boolean                          // the argument may be left out
   whileBusy?: boolean                         // may run while the agent works
   choices?(ctx: SlashContext): Choice[]
   run?(ctx: SlashContext): SlashResult         // for a command without an argument
@@ -61,6 +70,12 @@ const SPECS: Spec[] = [
       ? null : `${ctx.provider}/${ctx.model} has no effort setting.`,
   },
   { name: 'stop', hint: 'stop the run', whileBusy: true, run: () => ({ kind: 'stop' }), refuse: (ctx) => (ctx.busy ? null : 'Nothing is running.') },
+  {
+    name: 'go', hint: 'approve the plan and carry it out', noun: 'mode', waits: 'approve the plan', optional: true,
+    run: () => ({ kind: 'go', mode: null }),
+    choices: () => MODES.filter((m) => m !== 'plan').map((m) => plain(m, { kind: 'go', mode: m })),
+  },
+  { name: 'skills', hint: 'the skills that are installed', whileBusy: true, run: () => ({ kind: 'skills' }) },
 ]
 
 const listed = (labels: string[], most = 8): string => labels.slice(0, most).join(', ') + (labels.length > most ? ', …' : '')
@@ -83,16 +98,27 @@ function parse(text: string): { spec: Spec; arg: string } | null {
   return spec ? { spec, arg: (m[2] ?? '').trim() } : null
 }
 
+/** The skill a line starts, as the server reads it too: a slash, the name in lower case, then a space or the end. */
+function skillOf(text: string, ctx: SlashContext): SlashContext['skills'][number] | null {
+  const m = /^\/([a-z][a-z0-9-]{0,63})(?=\s|$)/.exec(text)
+  return (m && ctx.skills.find((s) => s.name === m[1])) || null
+}
+
 /** What the text does as a command, or null when it is a message to send. */
 export function slashCommand(text: string, ctx: SlashContext): SlashResult | null {
   const parsed = parse(text)
-  if (!parsed) return null
+  if (!parsed) {
+    const skill = skillOf(text, ctx)
+    if (!skill) return null
+    if (ctx.busy) return { kind: 'refused', message: 'The agent is working: /stop it or wait, then start the skill.' }
+    return { kind: 'skill', name: skill.name, mode: skill.mode, text }
+  }
   const { spec, arg } = parsed
   if (!spec.choices && arg) return null               // "/new endpoint is broken" is a sentence
-  if (ctx.busy && !spec.whileBusy) return { kind: 'refused', message: `The agent is working: /stop it or wait, then change the ${spec.noun}.` }
+  if (ctx.busy && !spec.whileBusy) return { kind: 'refused', message: `The agent is working: /stop it or wait, then ${spec.waits ?? `change the ${spec.noun}`}.` }
   const refused = spec.refuse?.(ctx)
   if (refused) return { kind: 'refused', message: refused }
-  if (!spec.choices) return spec.run!(ctx)
+  if (!spec.choices || (spec.optional && !arg)) return spec.run!(ctx)
   const choices = spec.choices(ctx)
   if (!arg) return { kind: 'refused', message: `/${spec.name} needs one of: ${listed(choices.map((c) => c.label))}.` }
   const found = meant(choices, arg)
@@ -106,9 +132,14 @@ export function slashMenu(text: string, ctx: SlashContext): SlashItem[] | null {
   if (!text.startsWith('/') || text.includes('\n')) return null
   if (!/\s/.test(text)) {
     const typed = text.slice(1).toLowerCase()
-    if (!/^[a-z]*$/.test(typed)) return null
-    const fit = SPECS.filter((s) => s.name.startsWith(typed))
-    return fit.length ? fit.map((s) => ({ label: `/${s.name}`, hint: s.hint, text: s.choices ? `/${s.name} ` : `/${s.name}`, run: !s.choices })) : null
+    if (!/^[a-z][a-z0-9-]*$|^$/.test(typed)) return null
+    const fit: SlashItem[] = SPECS.filter((s) => s.name.startsWith(typed))
+      .map((s) => ({ label: `/${s.name}`, hint: s.hint, text: s.choices && !s.optional ? `/${s.name} ` : `/${s.name}`, run: !s.choices || !!s.optional }))
+    // A skill is a command too: picking it leaves room for the task, and Enter then sends the line.
+    for (const skill of ctx.skills) {
+      if (skill.name.startsWith(typed) && !SPECS.some((s) => s.name === skill.name)) fit.push({ label: `/${skill.name}`, hint: skill.description, text: `/${skill.name} `, run: false })
+    }
+    return fit.length ? fit : null
   }
   const m = /^\/([a-z]+)\s+(.*)$/i.exec(text)
   const spec = m && SPECS.find((s) => s.name === m[1].toLowerCase())

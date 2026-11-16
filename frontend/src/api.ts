@@ -6,7 +6,7 @@ import type {
   KbChunk,
   ChatKb, Collection, Job, JobAction, KbDocument, KbHealth, KbHit, KbStatus, UploadResult,
   Chat, Finding, Goal, Grant, McpStatus, Message, Mode, Options, PermissionDecision, PermissionRequest, ProcessInfo, ProviderInfo,
-  RunDetail, RunSummary, SearchHit, Settings, StartedRun, Target, ToolInfo, Upload,
+  RunDetail, RunSummary, SearchHit, Settings, Skill, SkillInspection, StartedRun, Target, ToolInfo, Upload,
 } from './types'
 
 export class ApiError extends Error {
@@ -179,6 +179,15 @@ export const listPersonas = () => request<Persona[]>('GET', '/api/personas')
 export const createPersona = (body: PersonaBody) => request<Persona>('POST', '/api/personas', body)
 export const changePersona = (id: string, body: PersonaBody) => request<Persona>('PATCH', `/api/personas/${id}`, body)
 export const deletePersona = (id: string) => request<void>('DELETE', `/api/personas/${id}`)
+
+export type SkillBody = Partial<Pick<Skill, 'name' | 'description' | 'body' | 'mode' | 'enabled' | 'auto'>>
+export const listSkills = () => request<Skill[]>('GET', '/api/skills')
+export const writeSkill = (body: SkillBody) => request<Skill>('POST', '/api/skills', body)
+export const changeSkill = (id: string, body: SkillBody) => request<Skill>('PATCH', `/api/skills/${id}`, body)
+export const deleteSkill = (id: string) => request<void>('DELETE', `/api/skills/${id}`)
+/** Brings a source here and lists the skills in it. Nothing is kept and nothing is run. */
+export const inspectSkills = (source: string) => request<SkillInspection>('POST', '/api/skills/inspect', { source })
+export const addSkills = (id: string, picks: { key: string; name?: string }[]) => request<Skill[]>('POST', '/api/skills/add', { id, picks })
 export const personaTools = () => request<string[]>('GET', '/api/personas/tools')
 
 // ---- memory

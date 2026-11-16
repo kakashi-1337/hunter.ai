@@ -108,6 +108,8 @@ export function SettingsDialog({ onClose, onSetup }: { onClose: () => void; onSe
           <div className="row"><span className="hint grow">Personas: prompt profiles for kinds of work (web, mobile, reverse engineering, internal, coding, personal).</span>
             <button className="btn" onClick={() => setPersonasOpen(true)}>Manage personas</button></div>
           {personasOpen && <PersonaManager onClose={() => setPersonasOpen(false)} />}
+          <div className="row"><span className="hint grow">Skills: instructions for a kind of work, started with a slash command (/plan, /audit, /debug, and the ones you add).</span>
+            <button className="btn" onClick={() => useStore.getState().setSkillsOpen(true)}>Manage skills</button></div>
           <div className="row"><span className="hint grow">Memory: notes kept across chats, with their source. You can read, correct, and delete every one.</span>
             <button className="btn" onClick={() => setMemoryOpen(true)}>Manage memory</button></div>
           {memoryOpen && <MemoryManager onClose={() => setMemoryOpen(false)} onLeave={onClose} />}

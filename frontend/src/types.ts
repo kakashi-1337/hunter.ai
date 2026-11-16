@@ -420,6 +420,41 @@ export interface McpScan { name: string; state: string; report: McpScanReport | 
 
 export interface McpCheck { name: string; state: string; tools: string[]; error: string | null; ping_ms: number | null; log_tail: string; hints: string[] }
 
+/** Instructions for a kind of work. Its name is its slash command; the model follows it as the owner's own words. */
+export interface Skill {
+  id: string
+  name: string
+  description: string
+  body: string
+  mode: Mode | null         // the mode its slash command switches the chat to first
+  source: string
+  folder: string | null
+  files: string[]           // its other files, which the model can read
+  enabled: boolean
+  auto: boolean             // the model may load it by itself
+  builtin: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface SkillFinding { rule: string; severity: 'high' | 'medium' | 'info'; title: string; where: string; excerpt: string }
+
+/** One skill found in a source that was looked at. Nothing is kept until it is added. */
+export interface SkillCandidate {
+  key: string
+  name: string
+  description: string
+  mode: Mode | null
+  body: string
+  files: string[]
+  left_out: string[]        // files that do not come along: links, and whatever is over the limits
+  findings: SkillFinding[]
+  taken: boolean
+  problem: string | null
+}
+
+export interface SkillInspection { id: string; label: string; skills: SkillCandidate[] }
+
 export interface Persona {
   id: string
   name: string

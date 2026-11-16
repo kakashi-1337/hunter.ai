@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import * as api from '../api'
-import { slashCommand, slashMenu, type SlashContext, type SlashItem, type SlashResult } from '../slash'
+import { GO_TEXT, slashCommand, slashMenu, type SlashContext, type SlashItem, type SlashResult } from '../slash'
 import { useChatView, useStore } from '../store'
 import { pruneOptions } from '../tree'
 import type { Upload } from '../types'
@@ -21,10 +21,11 @@ export function Composer() {
   const targets = useStore((s) => s.targets)
   const personas = useStore((s) => s.personas)
   const providers = useStore((s) => s.providers)
+  const skills = useStore((s) => s.skills)
   const [row, setRow] = useState(0)                                   // the highlighted row of the menu
   const [closedFor, setClosedFor] = useState<string | null>(null)     // Escape closes the menu for the text as it stands
   const [said, setSaid] = useState('')                                // what the last command did, or why it did not
-  const slash: SlashContext = { busy, provider: chat?.provider ?? '', model: chat?.model ?? '', targets, personas, providers }
+  const slash: SlashContext = { busy, provider: chat?.provider ?? '', model: chat?.model ?? '', targets, personas, providers, skills: skills.filter((s) => s.enabled) }
   const menu = text === closedFor ? null : slashMenu(text, slash)
   const at = menu?.length ? Math.min(row, menu.length - 1) : 0
 
@@ -53,11 +54,24 @@ export function Composer() {
   const canSend = !busy && uploading === 0 && (text.trim() !== '' || files.length > 0)
   // While the agent works, a message is kept for its next step instead of stopping it. Text only: files wait for Send.
   const canQueue = busy && text.trim() !== ''
-  /** Carries out a command. False when it was refused: the text stays for the owner to correct. */
-  const perform = async (r: SlashResult): Promise<boolean> => {
+  /** Carries out a command. Null when that was all (or it was refused and the text stays to be corrected);
+   * a string when a message goes to the model now: the line of a skill, or the approval that /go sends. */
+  const perform = async (r: SlashResult): Promise<string | null> => {
     const store = useStore.getState()
-    if (r.kind === 'refused') { setSaid(r.message); return false }
-    if (r.kind === 'new') await store.newChat(chat?.target_id ?? null)
+    if (r.kind === 'refused') { setSaid(r.message); return null }
+    if (r.kind === 'skill' || r.kind === 'go') {
+      const now = chat?.mode ?? 'pentesting'
+      // A skill with a mode moves the chat there first (/plan: nothing can be changed), and /go moves it back.
+      const next = r.kind === 'skill' ? r.mode ?? now : r.mode ?? store.modeBefore[chatId ?? ''] ?? (now === 'plan' ? 'pentesting' : now)
+      if (next !== now) {
+        if (r.kind === 'skill') store.rememberMode(chatId ?? '', now)
+        await store.patchChat({ mode: next })
+      }
+      return r.kind === 'skill' ? r.text : GO_TEXT
+    }
+    setText('')
+    if (r.kind === 'skills') store.setSkillsOpen(true)
+    else if (r.kind === 'new') await store.newChat(chat?.target_id ?? null)
     else if (r.kind === 'stop') { await store.cancel(); setSaid('Stopping the run.') }
     else if (r.kind === 'mode') { await store.patchChat({ mode: r.mode }); setSaid(`Mode: ${r.mode}.`) }
     else if (r.kind === 'persona') { await store.choosePersona(r.id); setSaid(`Persona: ${personas.find((p) => p.id === r.id)?.name ?? 'none'}.`) }
@@ -74,25 +88,34 @@ export function Composer() {
       await store.patchChat({ options })
       setSaid(`Effort: ${r.effort ?? "the model's own"}.`)
     }
-    return true
+    return null
   }
   const submit = async (typed = text) => {
     const command = slashCommand(typed, slash)
+    let outgoing = typed
     if (command) {
-      if (await perform(command)) setText('')
-      return
+      if ((command.kind === 'skill' || command.kind === 'go') && uploading > 0) { setSaid('Wait for the upload to finish.'); return }
+      const message = await perform(command)
+      if (message === null) return
+      outgoing = message
     }
-    if (canQueue) {
+    if (canQueue && !command) {
       const t = text
       setText('')
       if (!(await queueMessage(t))) setText((now) => now || t)
       return
     }
-    if (!canSend) return
-    const t = text, sent = files
+    if (!command && !canSend) return
+    const t = typed, sent = files, before = chatId
     setText('')
     setFiles([])
-    if (await send(t, sent.map((f) => f.id))) return
+    if (await send(outgoing, sent.map((f) => f.id))) {
+      // The first message made the chat: what /go needs to know moves to the chat's own id.
+      const made = useStore.getState().activeChatId
+      const kept = useStore.getState().modeBefore['']
+      if (!before && made && kept) useStore.getState().rememberMode(made, kept)
+      return
+    }
     // Not sent (the banner says why): give the prompt back unless something new was typed meanwhile.
     setText((now) => now || t)
     setFiles((now) => (now.length ? now : sent))

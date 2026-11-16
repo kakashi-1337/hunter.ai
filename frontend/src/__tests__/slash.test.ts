@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { slashCommand, slashMenu, type SlashContext } from '../slash'
 
 const ctx = (over: Partial<SlashContext> = {}): SlashContext => ({
-  busy: false, provider: 'anthropic', model: 'claude-fable-5-2',
+  busy: false, provider: 'anthropic', model: 'claude-fable-5-2', skills: [],
   targets: [{ id: 't1', name: 'Acme' }, { id: 't2', name: 'Acme Labs' }, { id: 't3', name: 'Globex' }],
   personas: [{ id: 'p1', name: 'Web, API, and cloud', description: 'Web applications' }, { id: 'p2', name: 'Coding', description: 'Writing code' }],
   providers: [
@@ -67,7 +67,7 @@ describe('commands with a choice', () => {
 describe('the menu while typing', () => {
   const labels = (text: string, c = ctx()) => slashMenu(text, c)?.map((i) => i.label) ?? null
   it('lists every command for a lone slash and narrows as letters come', () => {
-    expect(labels('/')).toEqual(['/new', '/mode', '/model', '/persona', '/target', '/effort', '/stop'])
+    expect(labels('/')).toEqual(['/new', '/mode', '/model', '/persona', '/target', '/effort', '/stop', '/go', '/skills'])
     expect(labels('/mo')).toEqual(['/mode', '/model'])
     expect(labels('/MOD')).toEqual(['/mode', '/model'])
     expect(labels('/x')).toBeNull()
@@ -99,5 +99,37 @@ describe('the menu while typing', () => {
     expect(slashMenu('/model hai', ctx())).toEqual([{ label: 'anthropic/claude-haiku-5-5', hint: 'Claude Haiku 5.5', text: '/model anthropic/claude-haiku-5-5', run: true }])
     expect(labels('/effort ')).toEqual(['default', 'low', 'medium', 'high', 'xhigh', 'max'])
     expect(labels('/mode zzz')).toEqual([])
+  })
+})
+
+describe('skills', () => {
+  const skills = [{ name: 'plan', description: 'Plan before acting.', mode: 'plan' as const }, { name: 'audit', description: 'Audit a codebase.', mode: null }]
+  const c = ctx({ skills })
+  it('a skill is a command whose line is sent to the model', () => {
+    expect(slashCommand('/plan map the login', c)).toEqual({ kind: 'skill', name: 'plan', mode: 'plan', text: '/plan map the login' })
+    expect(slashCommand('/audit', c)).toEqual({ kind: 'skill', name: 'audit', mode: null, text: '/audit' })
+    expect(slashCommand('/nosuch thing', c)).toBeNull()
+    expect(slashCommand('/plan x', ctx({ skills, busy: true }))).toEqual({ kind: 'refused', message: 'The agent is working: /stop it or wait, then start the skill.' })
+  })
+  it('are listed after the commands, with what each is for', () => {
+    expect(slashMenu('/', c)!.map((i) => i.label)).toEqual(['/new', '/mode', '/model', '/persona', '/target', '/effort', '/stop', '/go', '/skills', '/plan', '/audit'])
+    expect(slashMenu('/pl', c)).toEqual([{ label: '/plan', hint: 'Plan before acting.', text: '/plan ', run: false }])
+    expect(slashMenu('/plan ', c)).toBeNull()            // the task is being typed: the list stays out of the way
+    expect(slashMenu('/plan map it', c)).toBeNull()
+  })
+  it('a command of the composer wins over a skill of the same name', () => {
+    expect(slashCommand('/stop', ctx({ busy: true, skills: [{ name: 'stop', description: 'x', mode: null }] }))).toEqual({ kind: 'stop' })
+  })
+  it('/go approves a plan, back in the mode the work is done in', () => {
+    expect(slashCommand('/go', c)).toEqual({ kind: 'go', mode: null })
+    expect(slashCommand('/go coding', c)).toEqual({ kind: 'go', mode: 'coding' })
+    expect(slashCommand('/go plan', c)).toEqual({ kind: 'refused', message: 'No mode matches "plan". There is: pentesting, coding.' })
+    expect(slashCommand('/go', ctx({ busy: true }))).toEqual({ kind: 'refused', message: 'The agent is working: /stop it or wait, then approve the plan.' })
+    expect(slashMenu('/go ', c)!.map((i) => i.label)).toEqual(['pentesting', 'coding'])
+    expect(slashMenu('/g', c)).toEqual([{ label: '/go', hint: 'approve the plan and carry it out', text: '/go', run: true }])
+  })
+  it('/skills opens the list of skills', () => {
+    expect(slashCommand('/skills', c)).toEqual({ kind: 'skills' })
+    expect(slashCommand('/skills', ctx({ busy: true }))).toEqual({ kind: 'skills' })
   })
 })

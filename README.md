@@ -201,12 +201,61 @@ Tab to complete, Enter to take the highlighted row, Escape to close the list.
 | `/target <name>`, `/target none` | Sets the target of the chat. |
 | `/effort low`, `medium`, `high`, `xhigh`, `max`, `default` | How hard the model thinks, for a model that has the setting. |
 | `/stop` | Stops the run. |
+| `/go`, `/go coding` | Approves a plan: puts the chat back in the mode the work is done in and tells the model to carry it out. |
+| `/skills` | Opens the list of skills. |
+| `/plan <task>`, `/audit <what>`, `/debug <what>`, and every skill you add | Starts the skill: the line goes to the model together with the skill's instructions. See [Skills](#skills). |
 
 A value that fits nothing, or more than one thing, is not sent: the line under the
 composer says what there is. While the agent works, only `/new` and `/stop` run. A line
 that starts with a slash but not with a command word (`/etc/passwd is readable`) is an
 ordinary message, a command that takes no value is a message as soon as more follows it
 (`/new endpoint is broken`), and a space in front of the slash always makes it a message.
+
+### Skills
+
+A skill is a set of instructions for a kind of work, in the Agent Skills shape: a
+`SKILL.md` with a name, a description and the instructions, and optionally other files
+beside it. Its name is its slash command.
+
+Three come built in. You can edit, switch off or delete each of them.
+
+| Skill | What the model does |
+|---|---|
+| `/plan` | Plans before it acts: says back what is asked, reads first, writes numbered steps with a check for each, lists assumptions and risks, then stops and asks for approval. The command puts the chat in plan mode, where nothing can be written or run, and `/go` approves the plan and returns the chat to the mode it was in. |
+| `/audit` | Audits a codebase or a change: maps entry points and trust boundaries, follows input to where it is used, and reports only findings it can back with a file, a line and a way to reproduce, ordered by severity. |
+| `/debug` | Finds the cause before any fix: reads the whole error, reproduces it, narrows it down, tests one hypothesis at a time, and proves the fix with a test that failed for the reason found. |
+
+A skill reaches the model in two ways:
+
+- You type its slash command (`/plan map the login flow`). The instructions are part of
+  the run's system prompt for the rest of that chat, on the branch the command is on.
+- The model loads it with the `skill` tool when the task fits the description. The
+  system prompt lists the skills that are on and marked "the model may load it".
+
+**Settings → Manage skills** (or `/skills`) lists them, with a switch for each and a
+second one for whether the model may load it by itself. **Add a skill** takes the
+address of a GitHub or GitLab repository or of one skill's folder in it, an absolute
+folder path, or the pasted text of a `SKILL.md`. The source is brought to your machine
+and every skill in it is shown in full, with its other files listed, before anything is
+kept. Nothing in it is run. A check reads each text for hidden characters, look-alike
+letters, orders to keep something from you, key files and secrets, and hosts that take
+data out; what it finds is shown beside the skill, and a skill with a finding is not
+ticked for you.
+
+What to know before adding somebody else's skill:
+
+- The model follows a skill as your own instructions. That is the point of one and the
+  risk of one: read the text. The check finds known shapes, not intent.
+- A skill cannot change what a tool call is allowed to do. Permissions, the target's
+  scope and the mode decide every call as before.
+- A skill's other files are copied to `~/.hunterai/skills/<name>/` (at most 200 files,
+  1 MiB each, 8 MiB in all; links and hidden folders are left behind). The model reads
+  them with the `read` tool. The `write`, `edit` and download tools are refused there,
+  so a run does not rewrite a skill through them; an approved shell command can do what
+  you can, there as everywhere.
+- Only the repository's default branch is read. `allowed-tools` and other header keys of
+  a skill file are ignored; `mode: plan` (or `pentesting`, `coding`) is HunterAI's own
+  key for the mode the slash command switches to.
 
 ### Sending a message while the agent works
 
@@ -305,6 +354,7 @@ A decision is a model's estimate. The numbers say how sure the model is, not how
 | `web_download` | network | Saves a URL into `<working folder>/downloads`. 200 MB by default, 2048 MB at most; refuses when free disk would fall under 10 GiB. |
 | `web_search` | network | Searches through the local SearXNG container. |
 | `repo_search` | read | ripgrep under a folder. Files that usually hold credentials are never searched. |
+| `skill` | read | Loads a skill you installed, by name. What it returns is followed as your instructions (see [Skills](#skills)). |
 
 A result longer than 30,000 characters reaches the model as its first 22,000 and last
 8,000 characters, with the path of the file that holds all of it.
