@@ -1,3 +1,4 @@
+import type { Skill, SkillInspection } from './types'
 import type {
   ActivitySummary, QueuedMessage, CaidoExchange, CaidoRow, CaidoStatus, Checkup, FindingRow, SystemStatus,
   Memory, MemorySettings,
@@ -6,7 +7,7 @@ import type {
   KbChunk,
   ChatKb, Collection, Job, JobAction, KbDocument, KbHealth, KbHit, KbStatus, UploadResult,
   Chat, Finding, Goal, Grant, McpStatus, Message, Mode, Options, PermissionDecision, PermissionRequest, ProcessInfo, ProviderInfo,
-  RunDetail, RunSummary, SearchHit, Settings, Skill, SkillInspection, StartedRun, Target, ToolInfo, Upload,
+  RunDetail, RunSummary, SearchHit, Settings, StartedRun, Target, ToolInfo, Upload,
 } from './types'
 
 export class ApiError extends Error {
