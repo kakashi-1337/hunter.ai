@@ -134,6 +134,43 @@ async def run_call(conn, chat, run_id, tc, offered=None):
     return out, events, (await runs.get(conn, run_id)).steps
 
 
+def slow_connections(monkeypatch, delay=0.05, fetch=0.0):
+    """Every database connection opened from now on takes `delay` for each of its settings, as on a
+    slow disk or a busy machine, and `fetch` between a statement and the reading of its rows.
+    Returns them in the order they were opened; one is closed when its worker thread has ended
+    (`still_open` says which are not)."""
+    from hunterai import db
+    opened = []
+    real = db.aiosqlite.connect
+
+    def connect(*args, **kwargs):
+        c = real(*args, **kwargs)
+        opened.append(c)
+        execute = c.execute
+
+        async def later(sql, *a, **kw):
+            if str(sql).startswith("pragma"):
+                await asyncio.sleep(delay)
+            return await execute(sql, *a, **kw)
+        c.execute = later
+        return c
+    # The reading is slowed on the class, not on each cursor: a function kept on a cursor would keep the
+    # cursor alive after its statement, and a statement that is still open is what the tests look for.
+    for name in ("fetchone", "fetchall") if fetch else ():
+        read = getattr(db.aiosqlite.Cursor, name)
+
+        async def slowly(self, *a, _read=read, **kw):
+            await asyncio.sleep(fetch)
+            return await _read(self, *a, **kw)
+        monkeypatch.setattr(db.aiosqlite.Cursor, name, slowly)
+    monkeypatch.setattr(db.aiosqlite, "connect", connect)
+    return opened
+
+
+def still_open(connections) -> list:
+    return [c for c in connections if c._thread.is_alive()]
+
+
 async def eventually(pred, timeout=5.0):
     """Wait until pred() is true."""
     for _ in range(int(timeout / 0.02)):
