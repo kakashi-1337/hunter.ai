@@ -186,19 +186,6 @@ not called again in that run after the eighth; one good answer from it clears th
 call that succeeds can be repeated freely. Only tools that name their host are counted per
 host (`web_fetch`, the browser, `caido_send`); what a shell command does is not looked into.
 
-### Sending a message while the agent works
-
-You do not have to stop a run to tell the agent something. While it works, the Send button
-becomes **Queue**: your message is kept, shown above the composer, and handed to the model
-with its next model call, after the tool it is running has finished. Nothing is
-interrupted. The model receives it at the end of the last tool result, inside a block
-marked with a code that is made on your machine for that chat and named in the system
-prompt; only a block with that code counts as you, so a web page or a file cannot pose as
-you by imitating it. The hand-over is a step in the trajectory ("message from you"). If
-the run ends before the agent takes another step, what is still waiting is sent as your
-next message; after a stop or an error it stays in view for you to send or remove. Queued
-messages are text only.
-
 ### Slash commands
 
 A line in the composer that starts with `/` and a command word changes the chat instead
@@ -220,6 +207,19 @@ composer says what there is. While the agent works, only `/new` and `/stop` run.
 that starts with a slash but not with a command word (`/etc/passwd is readable`) is an
 ordinary message, a command that takes no value is a message as soon as more follows it
 (`/new endpoint is broken`), and a space in front of the slash always makes it a message.
+
+### Sending a message while the agent works
+
+You do not have to stop a run to tell the agent something. While it works, the Send button
+becomes **Queue**: your message is kept, shown above the composer, and handed to the model
+with its next model call, after the tool it is running has finished. Nothing is
+interrupted. The model receives it at the end of the last tool result, inside a block
+marked with a code that is made on your machine for that chat and named in the system
+prompt; only a block with that code counts as you, so a web page or a file cannot pose as
+you by imitating it. The hand-over is a step in the trajectory ("message from you"). If
+the run ends before the agent takes another step, what is still waiting is sent as your
+next message; after a stop or an error it stays in view for you to send or remove. Queued
+messages are text only.
 
 ### Answer check
 

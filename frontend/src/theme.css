@@ -149,6 +149,13 @@ details.thinking pre { white-space: pre-wrap; word-break: break-word; font: 12.5
 .composer .box { border: 1px solid var(--line); border-radius: 10px; background: var(--bg); padding: 8px; }
 .composer .box.drag { border-color: var(--accent); background: #0f1a17; }
 .composer textarea { width: 100%; border: 0; background: none; resize: none; padding: 2px 4px; max-height: 40vh; outline: none; }
+.slash { display: flex; flex-direction: column; max-height: 232px; overflow-y: auto; margin: 0 0 6px; border: 1px solid var(--line);
+  border-radius: 6px; background: var(--raised); }
+.slash button { display: flex; gap: 10px; align-items: baseline; text-align: left; border: 0; border-radius: 0; padding: 4px 8px; }
+.slash button.on { background: var(--hover); }
+.slash button .mono { white-space: nowrap; }
+.slash button .hint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.slash > .hint { padding: 6px 8px; }
 .composer .bar { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
 .composer .note { color: var(--faint); font-size: 12px; }
 
@@ -368,11 +375,3 @@ button.link:hover:not(:disabled) { background: none; color: var(--text); }
 .dialog input { width: 100%; }
 .btn.danger-solid { background: var(--bad); border-color: var(--bad); color: #2a0b0e; font-weight: 600; }
 .btn.danger-solid:hover:not(:disabled) { background: #f58a90; }
-
-.slash { display: flex; flex-direction: column; max-height: 232px; overflow-y: auto; margin: 0 0 6px; border: 1px solid var(--line);
-  border-radius: 6px; background: var(--raised); }
-.slash button { display: flex; gap: 10px; align-items: baseline; text-align: left; border: 0; border-radius: 0; padding: 4px 8px; }
-.slash button.on { background: var(--hover); }
-.slash button .mono { white-space: nowrap; }
-.slash button .hint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.slash > .hint { padding: 6px 8px; }
