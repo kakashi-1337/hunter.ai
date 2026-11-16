@@ -131,7 +131,7 @@ export interface Step {
   id: string
   run_id: string
   seq: number
-  kind: 'model_call' | 'tool_call' | 'subagent' | 'permission' | 'fallback' | 'decision' | 'retrieval' | 'user_note'
+  kind: 'model_call' | 'tool_call' | 'subagent' | 'permission' | 'fallback' | 'decision' | 'retrieval' | 'user_note' | 'context'
   parent_step_id?: string | null
   name: string
   status: string

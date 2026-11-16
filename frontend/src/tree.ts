@@ -206,7 +206,20 @@ export function stepSummary(step: Step): string {
   const args = (d.arguments ?? {}) as Record<string, unknown>
   const main = ['command', 'path', 'url', 'query', 'pattern'].map((k) => args[k]).find((v) => typeof v === 'string' && v)
   const what = typeof main === 'string' ? main : step.name
+  const fit = fitNote(d.context)
+  if (fit) return `${what} · ${fit}`
   return typeof d.exit_code === 'number' ? `${what} · exit ${d.exit_code}` : what
+}
+
+/** What was done to a request so that it fits the model's context window, or null when it went out as it was. */
+function fitNote(context: unknown): string | null {
+  if (!context || typeof context !== 'object') return null
+  const c = context as Record<string, unknown>
+  if (typeof c.error === 'string') return `could not be made to fit its context (${c.error})`
+  const cut = Number(c.results_cut ?? 0), summarized = Number(c.messages_summarized ?? 0)
+  const parts = [cut > 0 ? `${cut} old result${cut === 1 ? '' : 's'} cut down` : '', summarized > 0 ? `${summarized} earlier messages summarized` : ''].filter(Boolean)
+  if (parts.length === 0 && c.summary_used) parts.push('the summary of the earlier messages was used')
+  return parts.length ? `made to fit its context: ${parts.join(', ')}` : null
 }
 
 /** One line for a decision step: what the decision model answered. */

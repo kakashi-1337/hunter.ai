@@ -296,3 +296,12 @@ create table if not exists queued_messages (
   created_at text not null
 );
 create index if not exists queued_messages_chat on queued_messages(chat_id, created_at);
+
+-- What stands in for the older part of a chat that no longer fits its model's context window.
+create table if not exists chat_summaries (
+  chat_id text not null references chats(id) on delete cascade,
+  upto_message_id text not null,       -- the summary covers the chat's path up to and including this message
+  summary text not null,
+  created_at text not null,
+  primary key (chat_id, upto_message_id)
+);
