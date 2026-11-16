@@ -12,7 +12,9 @@ import { SetupChecklist } from './components/SetupChecklist'
 import { Sidebar } from './components/Sidebar'
 import { TrajectoryPanel } from './components/TrajectoryPanel'
 import * as api from './api'
+import { confirmBox } from './dialog'
 import { useChatView, useStore } from './store'
+import { AUTO_APPROVE_WARNING, withAuto } from './tree'
 import type { Mode } from './types'
 
 const MODES: Mode[] = ['plan', 'pentesting', 'coding']
@@ -33,6 +35,13 @@ function ChatHeader({ trajectoryOpen, onToggleTrajectory }: { trajectoryOpen: bo
   const openPanel = async (which: 'permissions' | 'processes' | 'goal') => {
     if (!useStore.getState().activeChatId) await newChat()
     setPanel(which)
+  }
+  const auto = chat?.permissions?.auto === true
+  /** Auto-approve is a chat's own switch. Switching it on shows what it means first; off needs no question. */
+  const toggleAuto = async () => {
+    if (!auto && !(await confirmBox(AUTO_APPROVE_WARNING, true))) return
+    if (!useStore.getState().activeChatId) await newChat()
+    await patchChat({ permissions: withAuto(useStore.getState().chat?.permissions, !auto) })
   }
   // How many processes of this chat are running: refreshed as the run makes progress.
   useEffect(() => {
@@ -62,6 +71,9 @@ function ChatHeader({ trajectoryOpen, onToggleTrajectory }: { trajectoryOpen: bo
       <AdvancedOptions />
       <button className="btn" title="Goal record and findings" onClick={() => void openPanel('goal')}>Goal</button>
       <button className="btn" onClick={() => void openPanel('permissions')}>Permissions</button>
+      <button className={`btn${auto ? ' danger-solid' : ''}`} aria-pressed={auto} disabled={busy} onClick={() => void toggleAuto()}
+        title={auto ? 'Auto-approve is on for this chat: calls run without asking, except where one touches what always asks. Click to switch it off.' : 'Stop asking before each call in this chat (you are shown what that means first)'}>
+        {auto ? 'Auto-approve: on' : 'Auto-approve'}</button>
       <button className="btn" onClick={() => void openPanel('processes')}>Processes{running ? ` (${running})` : ''}</button>
       <button className="btn" aria-pressed={trajectoryOpen} title="Toggle trajectory (Ctrl+J)" onClick={onToggleTrajectory}>Trajectory</button>
       {panel === 'permissions' && <PermissionsPanel onClose={() => setPanel(null)} />}

@@ -63,6 +63,8 @@ export type Policy = Partial<{
   read_paths: string[]
   write_paths: string[]
   domains: string[]
+  /** A chat's own switch: do not ask where only the mode or a default says "ask". */
+  auto: boolean
 }>
 
 export interface PermissionRequest {

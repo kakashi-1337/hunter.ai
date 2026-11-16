@@ -316,6 +316,16 @@ tool the identical arguments. It is not offered for `process_input`, for a host 
 out-of-scope list, or for a command that addresses HunterAI's own API. Changing the
 chat's mode or target clears these, and any file write clears the ones for commands.
 
+**Auto-approve** (the button in the chat header) is one chat's switch for "stop asking".
+With it on, a call runs where only the mode preset or a global setting says ask. It lifts
+no deny, and no ask you set for that chat (set one tool to ask in its Permissions panel to
+keep a question for it). Everything in the list above still applies, the risk gate still
+screens calls when it is on, and one more rule comes with it: a host a call names is
+covered only when the chat's target lists what is in scope. With no target, or a target
+with an empty in-scope list, every named host still asks. Subagents follow the chat's
+switch. Switching it on shows what it means and asks you to confirm; a command can reach
+hosts it does not name, so this is for work you are authorised to do and are watching.
+
 The **working folder** of a chat is where relative paths, commands, and downloads go:
 `~/.hunterai/work/<chat id>` unless you set another absolute folder in the chat's
 Permissions panel. Deleting a chat removes the default folder, never a custom one.

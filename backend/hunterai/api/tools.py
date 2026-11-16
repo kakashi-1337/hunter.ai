@@ -27,6 +27,8 @@ async def list_tools(chat_id: str | None = None, conn=Depends(get_conn)):
         if not t.expose:
             continue
         decision, rule = permissions.base_decision(mode, t, global_policy, chat_policy)
+        if decision == "ask" and permissions.auto_applies(rule, chat_policy):
+            decision, rule = "allow", "auto"        # still asked where a call touches what always asks
         out.append({"name": t.name, "description": t.description, "risk": t.risk,
                     "source": t.source, "decision": decision, "rule": rule,
                     "offered": permissions.offered(mode, t, global_policy, chat_policy)

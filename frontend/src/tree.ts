@@ -1,4 +1,4 @@
-import type { AnswerCheckBlock, Block, Goal, Helper, FindingRow, Message, Options, PermissionRequest, RunEvent, SourcesBlock, Step, SwarmMember, SystemStatus } from './types'
+import type { AnswerCheckBlock, Block, Goal, Helper, FindingRow, Message, Options, PermissionRequest, Policy, RunEvent, SourcesBlock, Step, SwarmMember, SystemStatus } from './types'
 
 export function messageText(m: Message): string {
   return m.blocks.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('\n')
@@ -85,6 +85,25 @@ export function siblingPosition(m: Message): { index: number; count: number } {
 export function branchLabel(m: Message): string {
   const { index, count } = siblingPosition(m)
   return `${index + 1}/${count}`
+}
+
+/** What the owner is told, and agrees to, before auto-approve is switched on for a chat. It says what the permission engine does. */
+export const AUTO_APPROVE_WARNING = `Switch auto-approve on for this chat?
+
+HunterAI will stop asking before it writes files, runs commands, or contacts hosts, wherever only the mode or your defaults say "ask". The agent and its subagents then act on their own judgement, and on whatever a page, a file, or a tool result talks them into.
+
+It still asks when a call:
+• names a host that is out of scope or not on the target's in-scope list (with no target scope: every host it names)
+• touches files that usually hold credentials, or that run later
+• addresses this machine or your local network
+• is one you set to "ask" for this chat, or one the risk gate wants confirmed
+
+What is denied stays denied, and plan mode still writes and runs nothing. A command can reach hosts it does not name: switch this on only for work you are authorised to do, and watch the run.`
+
+/** The chat's policy with auto-approve switched on or off. Switched off, nothing of the switch is left in it. */
+export function withAuto(policy: Policy | null | undefined, on: boolean): Policy {
+  const { auto: _, ...rest } = policy ?? {}
+  return on ? { ...rest, auto: true } : rest
 }
 
 export function pruneOptions(options: Options, allowed: string[]): Options {
