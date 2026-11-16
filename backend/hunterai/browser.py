@@ -114,7 +114,7 @@ async def _launch(chat_id: str) -> Session:
     except ImportError:
         raise ToolError("the browser is not installed (the camoufox package is missing)") from None
     proxy = browser_proxy.Proxy()
-    via = await _caido_proxy()            # before anything is started: a Caido that cannot be reached is an error here
+    via, recorded, own_certificates = await _way_out()      # before anything is started: a Caido that cannot be reached is an error here
     proxy.via = via
     port = await proxy.start()
     cm = None
@@ -122,8 +122,8 @@ async def _launch(chat_id: str) -> Session:
         cm = AsyncCamoufox(headless=True, proxy={"server": f"http://127.0.0.1:{port}"}, block_webrtc=True,
                            i_know_what_im_doing=True, firefox_user_prefs=PREFS)
         browser = await cm.__aenter__()
-        # Caido reads https by answering with its own certificates, which the browser has to accept.
-        page = await browser.new_page(ignore_https_errors=True) if via else await browser.new_page()
+        # A proxy that reads https answers with its own certificates, which the browser has to accept.
+        page = await browser.new_page(ignore_https_errors=True) if own_certificates else await browser.new_page()
     except Exception as e:  # noqa: BLE001 - a missing browser binary, a display problem, anything
         await proxy.stop()
         if cm is not None:
@@ -133,7 +133,7 @@ async def _launch(chat_id: str) -> Session:
                 pass
         raise ToolError(f"the browser could not start: {type(e).__name__}: {str(e)[:200]}. "
                         "Run `camoufox fetch` once if its browser was never downloaded.") from None
-    s = Session(chat_id, cm, browser, page, proxy=proxy, via_caido=via is not None)
+    s = Session(chat_id, cm, browser, page, proxy=proxy, via_caido=recorded)
     proxy.local_ok = s.local_ok                       # one set: what allow() adds, the proxy honours
     proxy.on_block = lambda why: _log(s.console, {"type": "blocked", "text": why})
     page.set_default_timeout(ACTION_TIMEOUT_MS)
@@ -172,6 +172,19 @@ async def _launch(chat_id: str) -> Session:
     page.on("console", lambda m: _log(s.console, {"type": m.type, "text": (m.text or "")[:1000]}))
     page.on("pageerror", lambda e: _log(s.console, {"type": "pageerror", "text": str(e)[:1000]}))
     return s
+
+
+async def _way_out() -> tuple[tuple[str, int] | None, bool, bool]:
+    """(the proxy the browser's checked connections are handed to, whether that is Caido, whether its
+    certificates are accepted). Caido when its switch is on, else the owner's own proxy, else none."""
+    via = await _caido_proxy()
+    if via is not None:
+        return via, True, True
+    from . import upstream
+    up = await upstream.load()
+    if up is None:
+        return None, False, False
+    return (up.host, up.port), False, up.presents_its_own_certificates
 
 
 async def _caido_proxy() -> tuple[str, int] | None:

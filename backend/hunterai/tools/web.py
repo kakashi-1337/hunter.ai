@@ -170,11 +170,23 @@ def _named(method: str, url: str, headers: dict, body: bytes | None):
     return {"method": method, "url": url, "headers": send, "content": body}
 
 
+def _proxied(up) -> httpx.AsyncClient:
+    """A client that sends everything through the owner's proxy. The site's certificate is checked
+    unless the owner said the proxy reads https, and then only for a proxy on this machine."""
+    return httpx.AsyncClient(follow_redirects=False, trust_env=False, timeout=TIMEOUT, proxy=up.url,
+                             verify=not up.presents_its_own_certificates)
+
+
+def _proxy_failed(up, host: str, e: Exception) -> ToolError:
+    return ToolError(f"the proxy at {up.address} did not carry the request to {host} ({type(e).__name__}). "
+                     "Nothing was sent directly. Check that the proxy is running, or clear it in Settings.")
+
+
 async def _open(stack, client, ctx: ToolContext, method: str, url: str, headers: dict,
-                body: bytes | None, via: tuple[str, int] | None = None):
+                body: bytes | None, via: tuple[str, int] | None = None, up=None):
     """Send the request, following allowed redirects on the pinned address (or, with `via`,
     through that proxy by name). Returns (response, final url, redirects followed). The
-    response is still streaming."""
+    response is still streaming. `up` is the owner's own proxy when that is the `via`."""
     ips = ctx.prepared.hosts[0].ips
     if not ips:
         raise ToolError("the host was not resolved")
@@ -184,10 +196,11 @@ async def _open(stack, client, ctx: ToolContext, method: str, url: str, headers:
         try:
             response = await stack.enter_async_context(client.stream(
                 **(_named(method, url, headers, body) if via else _pinned(method, url, host, ips[0], headers, body))))
-        except httpx.TimeoutException:
-            raise ToolError(f"request to {host.host} timed out") from None
+        except httpx.TimeoutException as e:
+            raise (_proxy_failed(up, host.host, e) if up else ToolError(f"request to {host.host} timed out")) from None
         except httpx.HTTPError as e:
-            raise ToolError(f"request to {host.host} failed: {type(e).__name__}") from None
+            raise (_proxy_failed(up, host.host, e) if up
+                   else ToolError(f"request to {host.host} failed: {type(e).__name__}")) from None
         location = response.headers.get("location")
         if not (300 <= response.status_code < 400 and location):
             return response, url, followed
@@ -239,6 +252,8 @@ async def _fetch(ctx: ToolContext, args: dict) -> ToolResult:
     method = args.get("method") or "GET"
     body = args["body"].encode("utf-8") if args.get("body") is not None else None
     via, note = await _via_caido(ctx)
+    from .. import upstream
+    up = None if via is not None else await upstream.load()      # the owner's own proxy, when Caido is not the way
     local, allowed = None, None
     if via is not None:
         from .. import caido
@@ -248,13 +263,14 @@ async def _fetch(ctx: ToolContext, args: dict) -> ToolResult:
         allowed = (await caido.egress()).local_ok.own
     try:
         async with asyncio.timeout(FETCH_DEADLINE), AsyncExitStack() as stack:
-            client = await stack.enter_async_context(_client(via))
+            client = await stack.enter_async_context(_proxied(up) if up else _client(via))
             if local:
                 allowed.add(local)
                 stack.callback(allowed.discard, local)
             try:
                 response, final, followed = await _open(stack, client, ctx, method, args["url"],
-                                                        dict(args.get("headers") or {}), body, via)
+                                                        dict(args.get("headers") or {}), body,
+                                                        via or (up and (up.host, up.port)), up)
             except _NotFollowed as e:
                 return ToolResult(e.text)
             ctype = response.headers.get("content-type", "")
@@ -291,6 +307,8 @@ async def _fetch(ctx: ToolContext, args: dict) -> ToolResult:
         lines.append("redirects: " + "; ".join(followed))
     if via is not None:
         lines.append("recorded in Caido: the caido tool lists this request and can show it in full")
+    elif up is not None:
+        lines.append(f"sent through the proxy at {up.address}")
     elif note:
         lines.append(note)
     return ToolResult("\n".join(lines) + "\n\n" + text)
@@ -345,9 +363,12 @@ async def _download(ctx: ToolContext, args: dict) -> ToolResult:
     made = False
     try:
         async with asyncio.timeout(DOWNLOAD_DEADLINE), AsyncExitStack() as stack:
-            client = await stack.enter_async_context(_client())
+            from .. import upstream
+            up = await upstream.load()
+            client = await stack.enter_async_context(_proxied(up) if up else _client())
             try:
-                response, final, _ = await _open(stack, client, ctx, "GET", args["url"], {}, None)
+                response, final, _ = await _open(stack, client, ctx, "GET", args["url"], {}, None,
+                                                 up and (up.host, up.port), up)
             except _NotFollowed as e:
                 return ToolResult(e.text)
             if response.status_code >= 400:

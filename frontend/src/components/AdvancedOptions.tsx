@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from 'react'
+import { effortChoices } from '../options'
 import { useChatView, useStore } from '../store'
 import { pruneOptions } from '../tree'
 import type { Options } from '../types'
 import { useModelInfo } from './ModelPicker'
 
-const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 const VERBOSITY = ['low', 'medium', 'high'] as const
 
 function Slider({ label, value, min, max, step, onChange }: { label: string; value: number | undefined; min: number; max: number; step: number; onChange: (v: number | undefined) => void }) {
@@ -72,7 +72,7 @@ export function AdvancedOptions() {
             <label className="field"><span>Reasoning effort</span>
               <select value={draft.effort ?? ''} onChange={(e) => set({ effort: (e.target.value || undefined) as Options['effort'] })}>
                 <option value="">model default</option>
-                {EFFORTS.map((x) => <option key={x} value={x}>{x}</option>)}
+                {effortChoices(info?.efforts, draft.effort).map((x) => <option key={x} value={x}>{x}</option>)}
               </select>
             </label>
           )}
