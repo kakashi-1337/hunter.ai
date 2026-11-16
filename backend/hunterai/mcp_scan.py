@@ -65,7 +65,8 @@ _INSTEAD = re.compile(r"(?i)\b(?:instead\s+of|rather\s+than|in\s+place\s+of|repl
 _BLOB = re.compile(r"[A-Za-z0-9+/]{120,}={0,2}")
 _PARAM = re.compile(r"(?i)^(side_?note|notes?_for_(?:ai|model|assistant|llm)|conversation(?:_history)?|chat_history|"
                     r"system_prompt|credentials?|ssh_key|private_key|all_env|environment_variables?)$")
-_MIXED = re.compile(r"(?=[^\W\d_]*[A-Za-z])(?=[^\W\d_]*[Ͱ-ϿЀ-ӿ])[^\W\d_]{2,}")
+# Tried at the first letter of a word only. Tried at every letter, a long run of letters cost its length squared.
+_MIXED = re.compile(r"(?<![^\W\d_])(?=[^\W\d_]*[A-Za-z])(?=[^\W\d_]*[Ͱ-ϿЀ-ӿ])[^\W\d_]{2,}")
 # Latin look-alikes among Cyrillic and Greek letters, folded before the rules read the text.
 _FOLD = str.maketrans("аеорсхуіјѕԁһոоΑΒΕΖΗΙΚΜΝΟΡΤΥΧανορ", "aeopcxyijsdhnoABEZHIKMNOPTYXavop")
 
