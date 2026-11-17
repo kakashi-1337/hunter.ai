@@ -129,6 +129,16 @@ export interface Target {
   created_at: string
 }
 
+/** What a pasted program brief says about scope: read by rules on the server, shown for review, never saved by itself. */
+export interface BriefResult {
+  name: string
+  in: string[]
+  out: string[]
+  unplaced: string[]      // hosts the text names without a side
+  unsupported: string[]   // patterns no scope entry can say, as written
+  notes: string
+}
+
 export interface Step {
   id: string
   run_id: string

@@ -47,7 +47,9 @@ what is missing.
 - Trajectory per run: duration, turns, calls, tokens, and every model call, permission
   decision, and tool call. Survives restarts.
 - Modes (plan, pentesting, coding) and targets with scope. Scope is enforced on tool
-  calls: a host outside the target's scope always asks first.
+  calls: a host outside the target's scope always asks first. One **New chat** dialog
+  picks the target or makes one from a pasted program brief (see
+  [Targets and scope](#targets-and-scope)).
 
 - Orchestrator: the chat agent keeps a goal record, asks a decision model for
   probabilities instead of guessing, hands large tasks to subagents and checks what they
@@ -83,6 +85,62 @@ what is missing.
   you allowed stays allowed for the browser session of that chat, also after "once". Page
   text is given to the model as untrusted data. Needs the `camoufox` browser
   (`camoufox fetch` once).
+
+## Targets and scope
+
+**+ New chat** (Ctrl+Shift+O) asks one thing: which target the chat is for. No target is
+a normal chat; a target that exists puts the chat inside its scope; **New target…** makes
+one on the spot. The dialog opens on the target of the chat on screen, so another chat
+for the same engagement is one Enter away. The "+" beside a target in the sidebar still
+starts a chat there at once, and the pencil edits the target.
+
+A target has a name, notes for the model, and two lists with one entry a line: a host,
+`*.domain`, an IP or a CIDR, each with an optional `:port` and `/path-prefix`.
+
+### Pasting a program brief
+
+Paste the program page from HackerOne, Bugcrowd, YesWeHack or Intigriti, a scope table,
+HackerOne's CSV export, or a plain list of hosts into the brief box of a new or an
+existing target. A paste is read at once (typed text waits for **Read the brief**) and
+what it says lands in the fields for you to check. Nothing is saved until you press
+Start chat or Save, and reading a brief only ever adds to the fields.
+
+Rules on your machine do the reading, not a model: the in-scope list decides which hosts
+a call may reach without a second look, and a brief is somebody else's text. The rules
+lean one way:
+
+- In scope: a table row marked in scope, an item of a list under an in-scope heading
+  (`In scope`, `Scope`, Intigriti's tiers), or a sentence that says so.
+- Out of scope: the same, and also a host a sentence says not to test. An out-of-scope
+  mark on a line beats the heading the line is under; an in-scope mark does not.
+- A host named on both sides is out. A rule about a host ("no automated scans on
+  `api.example.com`") does not take it out when a table or a list has it in scope.
+- A host that is only mentioned ("our status page runs on …") is listed as having no
+  side given, with a button for each side. It is saved only if you place it. So is a
+  listed host with a "no" beside it ("old.example.com - not ours"), and "in scope" has
+  to be said of the host, not merely stand in the same sentence.
+- The bare name of a platform everyone shares (`github.com`, `*.amazonaws.com`,
+  `zendesk.com`) is never put in scope from a brief. A tenant or a path on it is
+  (`example.zendesk.com`, `github.com/example/repo`).
+- A URL keeps its path as a prefix (`https://example.com/app/*` becomes
+  `example.com/app`), a range such as `10.0.0.8-11` becomes networks, and `hxxps://` or
+  `example[.]com` is read without the armor. App identifiers, shop links to apps, mail
+  addresses and file names are not hosts.
+- A pattern no entry can say (`*.example.*`, `api-*.example.com`) is shown as written
+  for you to spell out.
+- Lines of an out-of-scope section that name no host (bug classes, "any domain not
+  listed above") and lines with testing rules (a rate limit, a required header,
+  "do not …") go into the notes, where the model reads them.
+- A brief is at most 400,000 characters; paste the scope part of a longer one.
+
+### Which list wins
+
+A host on the out-of-scope list always asks first, with one exception: a host the
+in-scope list names itself (`shop.example.com`, or a single address) stays in scope
+where only a wildcard or a range on the out-of-scope list covers it. A program that
+excludes `*.example.com` and lists `shop.example.com` means the shop. A wildcard or a
+range on the in-scope list lifts nothing, and a host named on both lists is out. The
+model is told the same rule.
 
 ## Knowledge base
 
@@ -367,6 +425,7 @@ Permissions panel. Deleting a chat removes the default folder, never a custom on
 - A host on a domain allowlist is not flagged as outside the target's scope. Loopback is never a scope matter, but it does ask as a local address.
 - A host name on a domain allowlist still asks when it resolves to this machine or the local network; only an IP, a CIDR, or `localhost` entry stops that prompt.
 - Out-of-scope path entries match without regard to case or doubled slashes, so a near miss still warns.
+- `*.example.com` on a scope list covers the subdomains, not `example.com` itself; list both when both are meant. A scope entry that fits no form (`*.example.*`, free text) is shown to the model but matches no host.
 - `web_search` is not checked against scope: the query goes to search engines, not to the target.
 - A background process ends when its shell exits, when you kill it, when its chat is deleted, or when the app stops. A foreground command shows its output when it ends.
 - A run stops after 25 model turns (Settings), after 3 invalid tool calls in a row, and runs at most 20 tool calls per turn.

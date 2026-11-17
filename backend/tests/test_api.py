@@ -329,3 +329,19 @@ async def test_edit_keeps_attachments_unless_replaced(client):
     await events(client, r.json()["run_id"])
     got = (await client.get(f"/api/chats/{chat['id']}")).json()
     assert [b["type"] for b in got["messages"][0]["blocks"]] == ["text"]
+
+
+async def test_a_pasted_brief_is_read_and_nothing_is_saved(client):
+    text = "In scope\n*.example.com\nOut of scope\nblog.example.com\nSelf-XSS\n"
+    r = await client.post("/api/targets/brief", json={"text": text})
+    assert r.status_code == 200
+    assert r.json() == {"name": "example.com", "in": ["*.example.com"], "out": ["blog.example.com"], "unplaced": [],
+                        "unsupported": [], "notes": "Out of scope (from the brief):\n- Self-XSS"}
+    assert (await client.get("/api/targets")).json() == []
+
+
+async def test_a_brief_longer_than_the_limit_is_refused(client):
+    from hunterai import brief
+    r = await client.post("/api/targets/brief", json={"text": "a" * (brief.MAX_TEXT + 1)})
+    assert r.status_code == 422 and "longer than" in r.text
+    assert (await client.post("/api/targets/brief", json={})).status_code == 422

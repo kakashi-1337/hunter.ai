@@ -1,8 +1,11 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Response
+import asyncio
+
+from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, field_validator
 
+from .. import brief
 from ..repo import targets
 from .deps import get_conn, not_found
 
@@ -51,6 +54,19 @@ async def list_targets(conn=Depends(get_conn)):
 async def create_target(body: TargetIn, conn=Depends(get_conn)):
     return await targets.create(conn, body.name, body.notes,
                                 body.scope.as_dict() if body.scope else None)
+
+
+class BriefIn(BaseModel):
+    text: str
+
+
+@router.post("/brief")
+async def read_brief(body: BriefIn):
+    """What a pasted program brief says about scope. Reads only: the owner reviews it before saving."""
+    try:
+        return (await asyncio.to_thread(brief.read, body.text)).as_dict()
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
 
 
 @router.patch("/{tid}")

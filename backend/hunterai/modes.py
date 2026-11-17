@@ -110,6 +110,10 @@ def goal_block(goal) -> str:
     return "\n".join(lines)
 
 
+SCOPE_PRECEDENCE = ("Where the two lists overlap: a host the in-scope list names is in scope even where a wildcard "
+                    "or a range on the out-of-scope list covers it, and a host named on both lists is out of scope.")
+
+
 def build_system(mode: str, target: Target | None, tool_names: Sequence[str] = (),
                  workdir: Path | None = None, goal=None, persona=None) -> str:
     """`persona` says who the assistant is; the mode prompt after it says how it works now."""
@@ -141,4 +145,6 @@ def build_system(mode: str, target: Target | None, tool_names: Sequence[str] = (
     lines.append("In scope: " + (", ".join(in_scope) if in_scope else "not specified"))
     if out_scope:
         lines.append("Out of scope (never test these): " + ", ".join(out_scope))
+    if in_scope and out_scope:
+        lines.append(SCOPE_PRECEDENCE)
     return "\n".join(lines)
