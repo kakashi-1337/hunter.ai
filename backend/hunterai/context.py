@@ -222,6 +222,12 @@ async def fit(conn, run_id: str, provider_name: str, model: str, system: str, wi
     out = await _stored(conn, run_id, wire)
     used = out is not wire
     now = size(system, out, specs)
+    if used and not hard and now <= room * HEADROOM:
+        # The summary this chat already has is enough. It is used again until the chat outgrows the room once
+        # more: making the request smaller each time it passed the target would write a new summary, with a
+        # model call of its own, for nearly every message.
+        return out, {"tokens_before": int(before / CHARS_PER_TOKEN), "tokens_after": int(now / CHARS_PER_TOKEN),
+                     "results_cut": 0, "messages_summarized": 0, "summary_used": True}
     budget = now // 2 if hard else int(room * TARGET)
     cut = summarized = 0
     for keep in (KEEP_RESULTS, 1):          # the latest results stay whole while there is room for them; the last one always does

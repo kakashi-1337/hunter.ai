@@ -122,6 +122,24 @@ async def test_a_chat_longer_than_the_window_keeps_answering_and_what_is_stored_
     assert len(stored) == 40 and [len(t) for t in texts] == [len(f"message {n}: ") + 3000 for n in range(1, 21)]
 
 
+@pytest.mark.parametrize("extra", [0, 300, 490, 1000, 4000])
+async def test_a_summary_is_used_until_the_chat_outgrows_the_room_again(client, monkeypatch, extra):
+    """How often a summary is written must not depend on where the sizes happen to fall. With a system text a few
+    hundred characters longer, one used to be written for nearly every message: a second model call each time."""
+    from hunterai import modes
+    monkeypatch.setitem(modes.SYSTEM_PROMPTS, "pentesting", modes.SYSTEM_PROMPTS["pentesting"] + " " + "y" * extra)
+    p = Small(10_000); registry.override("mock", p)
+    chat = await new_chat(client)
+    written = []
+    for n in range(1, 21):
+        assert await status_of(client, await send(client, chat["id"], f"message {n}: " + "x" * 3000)) == ("done", None)
+        written.append(p.summaries)
+    assert p.refused == 0 and max(p.sizes) <= 10_000 * CHARS_PER_TOKEN
+    assert 1 <= p.summaries <= 6, written
+    after = [n for n in range(1, 20) if written[n] > written[n - 1]]       # the messages that needed a new summary
+    assert all(b - a >= 2 for a, b in zip(after, after[1:])), written       # never two messages in a row
+
+
 async def test_inside_one_run_old_tool_results_are_cut_down_and_no_summary_is_needed(client):
     tool, ran = fake_tool("t_big", text="row " + "y" * 15_000); tools.register(tool)
     p = Small(10_000, dig=6); registry.override("mock", p)
