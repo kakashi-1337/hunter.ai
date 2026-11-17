@@ -13,6 +13,48 @@ const KEY_LABELS: Record<string, string> = {
   XAI_API_KEY: 'xAI', GEMINI_API_KEY: 'Google Gemini',
 }
 
+/** The owner's own proxy for web_fetch, web_download and the browser. The server checks the address and says why it refuses one. */
+function ProxyRow({ settings, onSaved }: { settings: Settings; onSaved: (s: Settings) => void }) {
+  const [value, setValue] = useState(settings.upstream_proxy)
+  const [reads, setReads] = useState(settings.upstream_proxy_intercepts)      // the box answers the click at once
+  const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
+  const save = async (patch: Parameters<typeof api.putProxy>[0]) => {
+    setSaving(true)
+    setError('')
+    try {
+      const s = await api.putProxy(patch)
+      setValue(s.upstream_proxy)
+      setReads(s.upstream_proxy_intercepts)
+      onSaved(s)
+    } catch (e) {
+      setReads(settings.upstream_proxy_intercepts)       // refused: back to what is saved
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+  const changed = value.trim() !== settings.upstream_proxy
+  return (
+    <>
+      <div className="keyrow">
+        <label className="field">
+          <span>HTTP proxy for web_fetch, web_download and the browser · <b className={settings.upstream_proxy ? 'state-on' : 'state-off'}>{settings.upstream_proxy ? 'in use' : 'none'}</b></span>
+          <input className="mono" spellCheck={false} value={value} placeholder="http://127.0.0.1:8080" aria-label="Proxy address"
+            onChange={(e) => setValue(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && changed && void save({ upstream_proxy: value })} />
+        </label>
+        <button className="btn" disabled={!changed || saving} onClick={() => void save({ upstream_proxy: value })}>{saving ? 'Saving…' : value.trim() ? 'Save' : 'Clear'}</button>
+      </div>
+      {error && <div className="ask-warning" role="alert">{error}</div>}
+      <label className="check"><input type="checkbox" checked={reads} disabled={!settings.upstream_proxy}
+        onChange={(e) => { setReads(e.target.checked); void save({ upstream_proxy_intercepts: e.target.checked }) }} />
+        <span>It reads https (Burp, mitmproxy, ZAP): accept the certificates it presents. Only for a proxy on this machine. Leave it off for a proxy that only passes traffic on, so a site's certificate is still checked.</span>
+      </label>
+      <div className="hint">Your own proxy: Burp, mitmproxy, ZAP, or a tunnel. Every host is still resolved and checked first (scope, local addresses); the proxy is then asked for the host by name. When the proxy does not answer, nothing is sent directly. Shell commands are not sent through it: give a command-line tool its own proxy option. Not combined with the Caido switch above.</div>
+    </>
+  )
+}
+
 function KeyRow({ name, isSet, onSaved }: { name: string; isSet: boolean; onSaved: () => Promise<void> }) {
   const [value, setValue] = useState('')
   const [saving, setSaving] = useState(false)
@@ -147,6 +189,8 @@ export function SettingsDialog({ onClose, onSetup }: { onClose: () => void; onSe
           <div className="hint">{settings.caido_available
             ? 'HunterAI runs its own Caido on this machine; open http://127.0.0.1:8791 and continue as a guest to watch the traffic.'
             : 'caido-cli was not found on this machine (PATH, or ~/.hunterai/bin/caido-cli).'}</div>
+          <h3 className="section">Proxy</h3>
+          <ProxyRow settings={settings} onSaved={(s) => { setSettings(s); useStore.setState({ settings: s }) }} />
           <h3 className="section">Knowledge base</h3>
           <label className="check"><input type="checkbox" checked={settings.kb_redact} onChange={(e) => update({ kb_redact: e.target.checked })} />
             <span>Mask strings shaped like keys, tokens, and passwords before a document is indexed. Retrieved passages are sent to the model provider; turn this off only for material where the secrets are what you are looking for. It applies to documents ingested from now on.</span>

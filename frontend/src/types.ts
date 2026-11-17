@@ -174,6 +174,8 @@ export interface ModelInfo {
   supports_images: boolean
   options: string[]
   context_window: number | null
+  /** The effort values this model takes, when they are fewer than the usual five. */
+  efforts?: string[]
 }
 
 export interface ProviderInfo {
@@ -208,6 +210,10 @@ export interface Settings {
   notify_min_severity: Severity
   notify_webhook_set: boolean
   caido_available: boolean
+  /** The owner's own HTTP proxy for web_fetch, web_download and the browser: "http://host:port", or "" for none. */
+  upstream_proxy: string
+  /** It reads https and presents its own certificates (Burp, mitmproxy). Only honoured for a proxy on this machine. */
+  upstream_proxy_intercepts: boolean
 }
 
 export interface Goal {

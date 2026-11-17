@@ -547,6 +547,49 @@ reached, `web_fetch` goes out directly as before and its result says it was not 
 `web_download` and commands of the shell tool are not recorded. With the `caido` tool on
 offer, the model is told to read the history after it browsed or fetched pages of a target.
 
+### Your own proxy
+
+Settings → Proxy takes the address of an HTTP proxy you run: Burp, mitmproxy, ZAP, or a
+tunnel (`http://127.0.0.1:8080`). With one set, `web_fetch`, `web_download` and the
+browser tools send their requests through it instead of connecting themselves.
+
+- Every host is still resolved and checked first: scope, local addresses, HunterAI's
+  own API. The proxy is then asked for the host by name, so where the proxy connects is
+  the proxy's own doing. That is the one check HunterAI gives up here: it no longer
+  connects to the address it checked itself.
+- When the proxy does not answer, nothing is sent directly, and the tool result says
+  so. A proxy set to hide where requests come from must not fall back to showing it.
+- A site's certificate is checked as usual. Tick "It reads https" for a proxy that
+  answers with its own certificates (Burp, mitmproxy, ZAP), and only then, and only for
+  a proxy on this machine, are its certificates accepted. Leave it off for a proxy
+  that only passes traffic on.
+- Shell commands are not sent through it. Give a command-line tool its own proxy
+  option (`curl -x`, `ffuf -x`, `nuclei -proxy`).
+- Only an HTTP proxy, without a user name and password. A SOCKS proxy needs an HTTP
+  proxy in front of it. It is not combined with the Caido switch: one or the other.
+
+### Effort and thinking, per model
+
+The **Options** button in the chat header shows what the chat's model takes. "Reasoning
+effort" is there for every provider that has such a setting, and it lists the values
+the model itself has:
+
+- **Ollama**: what the model reports in `thinking.values` of `/api/show`. A model with
+  named levels (gpt-oss: low, medium, high) gets the effort list, a model with a switch
+  gets "Thinking" on or off, and a model that reports `[false]` gets neither. An Ollama
+  that reports nothing keeps the Thinking switch as before.
+- **Gemini 3 and later**: the effort is sent as the model's thinking level. A level the
+  model does not have becomes the next one up (medium on a model with low and high is
+  sent as high), "Thinking: off" is the lowest level the model has, and a thinking
+  budget is never sent with a level, which the API refuses. The levels per model are a
+  table in `providers/google.py`, taken from Google's documentation; a model that is
+  not in it gets low, medium and high.
+- **Gemini 2.5 and earlier**: the effort chooses a thinking budget (low 1,024 tokens,
+  medium 8,192, high 24,576) unless you give a budget yourself.
+
+An effort the model does not have (xhigh or max where high is the top) is sent as its
+highest.
+
 ### Programs for the rea server
 
 The bundled `rea` server (reverse engineering) can use Ghidra, Hopper, JADX and other

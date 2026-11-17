@@ -12,7 +12,30 @@ from .base import (ModelInfo, Options, ProviderError, Stop, TextDelta, ThinkingD
                    ToolSpec, Usage, WireMessage, error_from_status, flatten_text,
                    parse_arguments, rounds, safe_call_id)
 
-OPTIONS = ["temperature", "top_p", "max_tokens", "context_window", "thinking"]
+OPTIONS = ["temperature", "top_p", "max_tokens", "context_window", "thinking", "effort"]
+_BASE = ["temperature", "top_p", "max_tokens", "context_window"]
+EFFORTS = ("low", "medium", "high", "max")           # the level names of Ollama that HunterAI's effort setting has
+_GPT_OSS = ("low", "medium", "high")                  # what gpt-oss takes, for an Ollama too old to report it
+
+
+def _levels(model: str, values: list | None) -> list[str]:
+    """The thinking levels a model names, in its order, from what /api/show reports in `thinking.values`."""
+    if values is None:
+        return list(_GPT_OSS) if model.split("/")[-1].startswith("gpt-oss") else []
+    return [v for v in values if isinstance(v, str) and v in EFFORTS]
+
+
+def _think(effort: str, levels: list[str]) -> str | bool | None:
+    """What to send as `think` for an effort: the level of that name, else the next one up the model has,
+    else its highest. None when the model names no levels."""
+    if not levels:
+        return None
+    if effort == "none":
+        return False
+    order = ["low", "medium", "high", "xhigh", "max"]
+    wanted = order.index(effort)
+    known = sorted(levels, key=order.index)
+    return next((v for v in known if order.index(v) >= wanted), known[-1])
 TIMEOUT = httpx.Timeout(300.0, connect=5.0)
 
 
@@ -38,6 +61,7 @@ class OllamaProvider:
 
     def __init__(self):
         self._vision: dict[str, bool] = {}
+        self._thinking: dict[str, list | None] = {}     # model -> `thinking.values`, None when Ollama reports none
 
     def configured(self) -> bool:
         return True
@@ -50,11 +74,28 @@ class OllamaProvider:
             async with httpx.AsyncClient(timeout=5.0) as c:
                 r = await c.post(f"{host()}/api/show", json={"model": model})
                 r.raise_for_status()
-                vision = "vision" in (r.json().get("capabilities") or [])
+                shown = r.json()
+                vision = "vision" in (shown.get("capabilities") or [])
+                values = (shown.get("thinking") or {}).get("values") if isinstance(shown.get("thinking"), dict) else None
         except (httpx.HTTPError, ValueError, AttributeError):
             return False  # unknown: send no images, and ask again next time
         self._vision[model] = vision
+        self._thinking[model] = values if isinstance(values, list) else None
         return vision
+
+    async def thinking_values(self, model: str) -> list | None:
+        """`thinking.values` as /api/show reports it: booleans for a switch, names for levels, `[False]`
+        for a model that does not think. None when this Ollama reports nothing, or cannot be asked."""
+        if model not in self._thinking:
+            await self.supports_images(model)       # one /api/show answers both questions
+        return self._thinking.get(model)
+
+    def _options(self, model: str) -> tuple[list[str], list[str]]:
+        values = self._thinking.get(model)
+        levels = _levels(model, values)
+        # A switch where thinking can be turned on or off; `[False]` alone is a model that does not think.
+        switch = values is None or True in values or (False in values and len(values) > 1)
+        return _BASE + (["thinking"] if switch else []) + (["effort"] if levels else []), levels
 
     async def models(self) -> list[ModelInfo]:
         try:
@@ -66,7 +107,7 @@ class OllamaProvider:
             return []
         names = [n for n in names if not _is_embedder(n)]
         vision = await asyncio.gather(*(self.supports_images(n) for n in names))
-        return [ModelInfo(id=n, label=n, options=list(OPTIONS), supports_images=v)
+        return [ModelInfo(id=n, label=n, options=self._options(n)[0], supports_images=v, efforts=self._options(n)[1])
                 for n, v in zip(names, vision)]
 
     @staticmethod
@@ -115,8 +156,13 @@ class OllamaProvider:
             body["messages"].append(entry)
         if o.json_schema is not None:
             body["format"] = o.json_schema      # constrained decoding
-        if o.thinking is not None:
-            body["think"] = o.thinking
+        # Thinking: off is off, an effort is the level of that name where the model has levels, on is on.
+        think: str | bool | None = o.thinking
+        if o.effort is not None and o.thinking is not False:
+            level = _think(o.effort, _levels(model, await self.thinking_values(model)))
+            think = level if level is not None else think
+        if think is not None:
+            body["think"] = think
         if tools:
             body["tools"] = [{"type": "function",
                               "function": {"name": t.name, "description": t.description,

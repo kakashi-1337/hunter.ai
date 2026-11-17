@@ -14,6 +14,7 @@ from . import providers as providers_api
 from ..repo import settings
 from ..tools import runner
 from .deps import default_provider_model, get_conn
+from .. import upstream
 
 router = APIRouter(prefix="/api/settings")
 
@@ -43,6 +44,8 @@ class SettingsIn(BaseModel):
     kb_redact: bool | None = None
     vision_model: str | None = None         # "" or null: the first local model that reads images
     browser_via_caido: bool | None = None   # the browser tools' traffic goes through Caido and is recorded there
+    upstream_proxy: str | None = None       # the owner's own HTTP proxy for the agent's web traffic; "" for none
+    upstream_proxy_intercepts: bool | None = None   # it reads https: accept the certificates it presents
     decision_engine: bool | None = None     # the built-in decide_* tools and the risk gate (off: another engine is used)
 
 
@@ -58,6 +61,7 @@ def _machine() -> dict:
 
 async def _view(conn) -> dict:
     provider, model = await default_provider_model(conn)
+    up = await upstream.get(conn)
     return {
         "default_provider": provider,
         "default_model": model,
@@ -83,6 +87,8 @@ async def _view(conn) -> dict:
         "vision_model": await settings.get(conn, "vision_model") or None,
         "browser_via_caido": bool(await settings.get(conn, "browser_via_caido", False)),
         "caido_available": caido.available(),
+        "upstream_proxy": up.url if up else "",
+        "upstream_proxy_intercepts": bool(up and up.intercepts),
     }
 
 
@@ -91,9 +97,38 @@ async def get_settings(conn=Depends(get_conn)):
     return await _view(conn)
 
 
+async def _put_proxy(conn, fields: dict) -> None:
+    """The owner's proxy and its switch, checked as a whole before anything is written. Caido's switch is
+    read with them because the two ways out are not combined."""
+    typed = fields.pop("upstream_proxy", None) if "upstream_proxy" in fields else None
+    given = "upstream_proxy_intercepts" in fields and fields["upstream_proxy_intercepts"] is not None
+    reads = fields.pop("upstream_proxy_intercepts", None)
+    was = await upstream.get(conn)
+    try:
+        address = upstream.parse(typed) if typed is not None else (was and (was.host, was.port))
+    except upstream.ProxyError as e:
+        raise HTTPException(400, f"proxy: {e}") from None
+    caido_on = fields["browser_via_caido"] if fields.get("browser_via_caido") is not None \
+        else bool(await settings.get(conn, "browser_via_caido", False))
+    if address and caido_on:
+        raise HTTPException(400, "The browser and web_fetch already go through Caido. Switch that off to use another proxy."
+                            if typed is not None else
+                            "A proxy is set for the agent's web traffic. Clear it to send the traffic through Caido instead.")
+    intercepts = bool(reads) if given else bool(was and was.intercepts)
+    if address and intercepts and not upstream.on_this_machine(address[0]):
+        if given and reads:
+            raise HTTPException(400, "Only a proxy on this machine may read https: one elsewhere has to pass the site's "
+                                "certificate on, and it is checked.")
+        intercepts = False               # the proxy moved to another machine: its switch does not move with it
+    await settings.put(conn, "upstream_proxy", upstream.Upstream(*address).url if address else "")
+    await settings.put(conn, "upstream_proxy_intercepts", bool(address) and intercepts)
+
+
 @router.put("")
 async def put_settings(body: SettingsIn, conn=Depends(get_conn)):
     fields = body.model_dump(exclude_unset=True)
+    if {"upstream_proxy", "upstream_proxy_intercepts"} & fields.keys() or fields.get("browser_via_caido"):
+        await _put_proxy(conn, fields)
     if "permissions" in fields:
         try:
             policy = permissions.Policy(**(fields.pop("permissions") or {}))

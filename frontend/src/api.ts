@@ -89,6 +89,8 @@ export const listProviders = () => request<ProviderInfo[]>('GET', '/api/provider
 export const getSettings = () => request<Settings>('GET', '/api/settings')
 export const putSettings = (patch: Partial<Pick<Settings, 'default_provider' | 'default_model' | 'fallback_model' | 'permissions' | 'max_turns' | 'swarm_width' | 'decision_provider' | 'decision_model' | 'decision_gate' | 'kb_redact' | 'vision_model' | 'browser_via_caido' | 'answer_check' | 'mcp_on_demand' | 'notify_findings' | 'notify_min_severity' | 'decision_engine'>>) =>
   request<Settings>('PUT', '/api/settings', patch)
+/** The owner's own proxy for the agent's web traffic. The server refuses an address it cannot use and says why. */
+export const putProxy = (proxy: Partial<Pick<Settings, 'upstream_proxy' | 'upstream_proxy_intercepts'>>) => request<Settings>('PUT', '/api/settings', proxy)
 export const putKey = (name: string, value: string) => request<void>('PUT', `/api/settings/keys/${name}`, { value })
 
 export const pendingPermissions = (runId: string) => request<PermissionRequest[]>('GET', `/api/runs/${runId}/permissions`)

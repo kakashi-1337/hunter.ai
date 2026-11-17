@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import re
 
 import httpx
 from google import genai
@@ -13,7 +14,43 @@ from .base import (ModelInfo, Options, ProviderError, Stop, TextDelta, ThinkingD
                    rounds)
 
 KEY_ENV = "GEMINI_API_KEY"
-OPTIONS = ["temperature", "top_p", "max_tokens", "thinking", "thinking_budget"]
+OPTIONS = ["temperature", "top_p", "max_tokens", "thinking", "thinking_budget", "effort"]
+_BASE = ["temperature", "top_p", "max_tokens", "thinking"]
+# Thinking levels by model, from https://ai.google.dev/gemini-api/docs/thinking (read 2026-11-16): the
+# longest matching start of the name decides. A Gemini 3 model that is not listed gets the common three.
+_LEVELS = (
+    ("gemini-3.1-flash-lite-image", ("minimal", "high")),
+    ("gemini-3.5-flash-lite", ("minimal", "low", "medium", "high")),
+    ("gemini-3.6-flash", ("minimal", "low", "medium", "high")),
+    ("gemini-3.8-flash", ("low", "medium", "high")),
+    ("gemini-3.1-pro", ("low", "medium", "high")),
+    ("gemini-3-flash", ("minimal", "low", "medium", "high")),
+    ("gemini-3-pro", ("low", "high")),
+)
+_COMMON = ("low", "medium", "high")
+_ORDER = ("minimal", "low", "medium", "high")
+_BUDGET = {"none": 0, "low": 1024, "medium": 8192}      # Gemini 2.5 and earlier: tokens for an effort
+_BUDGET_HIGH = 24576                                    # the most a 2.5 Flash takes; a 2.5 Pro takes it too
+_VERSION = re.compile(r"^gemini-(\d+)")
+
+
+def _thinks_by(model: str) -> tuple[str, tuple[str, ...]]:
+    """("level", the levels the model has) for Gemini 3 and later, ("budget", ()) for 2.5 and earlier,
+    ("", ()) for a model that is not a Gemini model. An alias with no number (gemini-flash-latest) is
+    the current generation."""
+    if not model.startswith("gemini-"):
+        return "", ()
+    m = _VERSION.match(model)
+    if m and int(m.group(1)) < 3:
+        return "budget", ()
+    return "level", next((levels for start, levels in _LEVELS if model.startswith(start)), _COMMON)
+
+
+def _level(effort: str, levels: tuple[str, ...]) -> str:
+    """The model's level for an effort: that level, else the next one up it has, else its highest."""
+    wanted = {"none": 0, "low": 1, "medium": 2}.get(effort, 3)
+    have = sorted(levels, key=_ORDER.index)
+    return next((v for v in have if _ORDER.index(v) >= wanted), have[-1])
 
 
 def _parts(m: WireMessage) -> list[dict]:
@@ -83,15 +120,17 @@ class GoogleProvider:
                 if "generateContent" not in (getattr(m, "supported_actions", None) or []):
                     continue
                 mid = (m.name or "").removeprefix("models/")
-                out.append(ModelInfo(id=mid, label=getattr(m, "display_name", None) or mid,
-                                     supports_images=True, options=list(OPTIONS),
-                                     context_window=getattr(m, "input_token_limit", None)))
+                kind, levels = _thinks_by(mid)
+                efforts = [v for v in (levels or _COMMON) if v != "minimal"] if kind else []    # minimal is "thinking: off"
+                out.append(ModelInfo(id=mid, label=getattr(m, "display_name", None) or mid, supports_images=True,
+                                     options=_BASE + ([] if kind == "level" else ["thinking_budget"]) + (["effort"] if kind else []),
+                                     context_window=getattr(m, "input_token_limit", None), efforts=efforts))
             return out
         except (errors.APIError, ProviderError, httpx.HTTPError):
             return []
 
     def _config(self, system: str, options: Options,
-                tools: list[ToolSpec] | None = None) -> dict:
+                tools: list[ToolSpec] | None = None, model: str = "") -> dict:
         o = options.only(OPTIONS)
         cfg: dict = {}
         if system:
@@ -102,12 +141,24 @@ class GoogleProvider:
             cfg["top_p"] = o.top_p
         if o.max_tokens is not None:
             cfg["max_output_tokens"] = o.max_tokens
-        if o.thinking is False:
+        kind, levels = _thinks_by(model)
+        if kind == "level":
+            # A level and a budget in one request is an error, and the Pro models cannot be switched off:
+            # off is the lowest level the model has.
+            if o.thinking is False:
+                cfg["thinking_config"] = {"thinking_level": _level("none", levels)}
+            else:
+                cfg["thinking_config"] = {"include_thoughts": True}
+                if o.effort is not None:
+                    cfg["thinking_config"]["thinking_level"] = _level(o.effort, levels)
+        elif o.thinking is False:
             cfg["thinking_config"] = {"thinking_budget": 0}
         else:
             cfg["thinking_config"] = {"include_thoughts": True}
             if o.thinking_budget is not None:
                 cfg["thinking_config"]["thinking_budget"] = o.thinking_budget
+            elif kind == "budget" and o.effort is not None:
+                cfg["thinking_config"]["thinking_budget"] = _BUDGET.get(o.effort, _BUDGET_HIGH)
         if tools:
             cfg["tools"] = [{"function_declarations": [
                 {"name": t.name, "description": t.description,
@@ -128,7 +179,7 @@ class GoogleProvider:
         usage, reason = Usage(0, 0), "end"
         try:
             stream = await client.aio.models.generate_content_stream(
-                model=model, contents=contents, config=self._config(system, options, tools))
+                model=model, contents=contents, config=self._config(system, options, tools, model))
             async for chunk in stream:
                 um = getattr(chunk, "usage_metadata", None)
                 if um:

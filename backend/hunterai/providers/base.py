@@ -130,6 +130,9 @@ class ModelInfo(BaseModel):
     supports_images: bool = False
     options: list[str] = []
     context_window: int | None = None
+    # The effort values this model takes, when they are fewer than low, medium, high, xhigh, max. A higher
+    # value than the model has is sent as its highest.
+    efforts: list[str] = []
 
 
 @dataclass
