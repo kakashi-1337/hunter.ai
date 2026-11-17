@@ -281,7 +281,7 @@ Tab to complete, Enter to take the highlighted row, Escape to close the list.
 | `/stop` | Stops the run. |
 | `/go`, `/go coding` | Approves a plan: puts the chat back in the mode the work is done in and tells the model to carry it out. |
 | `/skills` | Opens the list of skills. |
-| `/plan <task>`, `/audit <what>`, `/debug <what>`, and every skill you add | Starts the skill: the line goes to the model together with the skill's instructions. See [Skills](#skills). |
+| `/plan <task>`, `/audit <what>`, `/debug <what>`, `/fix <what>`, and every skill you add | Starts the skill: the line goes to the model together with the skill's instructions. See [Skills](#skills). |
 
 A value that fits nothing, or more than one thing, is not sent: the line under the
 composer says what there is. While the agent works, only `/new` and `/stop` run. A line
@@ -295,13 +295,18 @@ A skill is a set of instructions for a kind of work, in the Agent Skills shape: 
 `SKILL.md` with a name, a description and the instructions, and optionally other files
 beside it. Its name is its slash command.
 
-Three come built in. You can edit, switch off or delete each of them.
+Four come built in. You can edit, switch off or delete each of them.
 
 | Skill | What the model does |
 |---|---|
 | `/plan` | Plans before it acts: says back what is asked, reads first, writes numbered steps with a check for each, lists assumptions and risks, then stops and asks for approval. The command puts the chat in plan mode, where nothing can be written or run, and `/go` approves the plan and returns the chat to the mode it was in. |
 | `/audit` | Audits a codebase or a change: maps entry points and trust boundaries, follows input to where it is used, and reports only findings it can back with a file, a line and a way to reproduce, ordered by severity. |
 | `/debug` | Finds the cause before any fix: reads the whole error, reproduces it, narrows it down, tests one hypothesis at a time, and proves the fix with a test that failed for the reason found. |
+| `/fix` | Fixes a bug or a failing test in steps that can each be taken back: makes the fault visible with a check, changes one thing, runs the check, and takes a change that did not work back out before it tries the next (by editing it back, never with `git checkout`, `reset`, `stash` or `clean`, which would also throw away your own work). It does not make a check pass by weakening it, stops after three changes that did not work, and reports the cause, the change and the output that proves it. The command puts the chat in coding mode, where the list of what the run changed, its Undo, and the folder's check stand under the answer (see [Undo what a run changed](#undo-what-a-run-changed-coding-mode)). |
+
+A built-in skill that is new in a later version arrives once, with the update. One you
+deleted stays deleted, one you rewrote stays as you wrote it, and a skill of your own
+that has the new one's name is kept.
 
 A skill reaches the model in two ways:
 

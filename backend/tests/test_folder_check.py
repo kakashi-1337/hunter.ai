@@ -254,3 +254,20 @@ async def test_undo_still_works_on_a_list_with_a_check(client, conn, work):     
     got = (await client.post(f"/api/runs/{run.id}/undo")).json()
     assert got["restored"] == ["app.py"] and (work / "app.py").read_text() == "def main():\n    return 1\n"
     assert next(b for b in got["message"]["blocks"] if b["type"] == "changes")["check"]["after"]["passed"] is False
+
+
+# ---- with the /fix skill
+
+async def test_a_fix_started_with_its_command_runs_with_the_list_and_the_check(conn, work):      # noqa: F811
+    """The three parts of the break-fix method together: the skill's instructions reach the model, and what the model
+    then did stands under its answer, held against the folder's check."""
+    prov = Turns("abliteration", [FIX], [TextDelta("Cause: main() returned 1. Changed app.py. The check passes now.")])
+    use(abliteration=prov)
+    chat, user = await checked(conn, work, RETURNS_2, text="/fix main() must return 2")
+    run, msg = await go(conn, chat, user)
+    system = prov.calls[0]["system"]
+    assert 'started the skill "fix"' in system and "# Fix it, and prove it" in system and "Take it back out" in system
+    found = block(msg)
+    assert found.files == [{"path": "app.py", "change": "changed"}]
+    assert (found.check["before"]["passed"], found.check["after"]["passed"]) == (False, True)
+    assert (await chats.get(conn, chat.id)).title == "main() must return 2"

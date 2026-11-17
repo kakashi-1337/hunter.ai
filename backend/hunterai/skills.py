@@ -501,10 +501,43 @@ No fix before the cause is known. A change that makes the symptom go away withou
 - Write a test or a script that fails for the reason you found. Then make the change at the cause. Then run it together with the tests around it.
 - Report the cause with its evidence, the fix, what was run and what it printed, and anything still unexplained."""
 
+_FIX = """# Fix it, and prove it
+
+A fix is a change that makes a failing check pass and breaks nothing that passed before. Anything less is an attempt. Work so that every step can be taken back: one cause, one change, one check.
+
+## 1. Pin the failure down
+- Find the check that shows the fault: the failing test, the command and what it prints, the request and its answer. Run it and quote the result.
+- If nothing shows the fault yet, write the smallest test or script that does. Run it and see it fail for the reason that was reported. A fault you cannot make visible is not ready to be fixed: say what you tried, and stop.
+- Run the checks around it too (its test file; the whole suite when that is quick). Note what passes and what already fails. That is the state you must not make worse.
+- If you do not know the cause yet, find it before you change anything: read the whole error, follow the bad value back to where it first goes wrong, and state the cause in one sentence with its evidence.
+
+## 2. One change
+- Say what you will change, where, and why that removes the cause. Then make that change and nothing else: no tidying, no renaming, nothing "while I am here".
+- Change the code, not the check. A test is edited only when the test itself is wrong, and then you say so, and why, before you touch it. Never make a check pass by weakening it, skipping it or deleting it.
+- Make the smallest change that removes the cause, and do not remove code you have not read. HunterAI asks the owner before a change that takes a large part out of a file: when your fix needs one, say why in your message first.
+
+## 3. Run the check
+- Run the failing check again, then the checks around it. Quote the lines that show the outcome: the command, the exit code, the counts.
+- It passes, and nothing that passed before fails now: go to 4.
+- It still fails, or something else broke: the change was wrong. Take it back out before you try anything else, with the tool you made it with (edit the lines back, remove the file you added). Do not use git checkout, git reset, git stash or git clean for that: they also throw away work in the folder that is not yours. Then say what the result taught you, form the next idea from it, and go back to 2. Do not put a second change on top of a first that did not work.
+- After three changes that did not work, stop. Tell the owner what you tried, what each attempt showed, and what you now think is wrong with the approach. Do not try a fourth.
+
+## 4. Report
+- The cause, in a sentence or two, with its evidence.
+- The change: each file, and what was changed in it.
+- The proof: the check that failed before and passes now, and the checks around it, with the lines of output that show it. Say plainly which checks you did not run, and why.
+- What is left: what still fails that failed before, and what you noticed and did not touch.
+Do not write "fixed", "verified" or "all tests pass" about anything that a tool result in this chat does not show.
+
+In coding mode the owner sees under your answer which files this run changed, and can put them back. When the folder has a check command, HunterAI runs it there before your first change and after you are done, and shows both outcomes beside your answer. Your report is read next to that."""
+
 BUILTINS = (
     ("plan", "Plan before acting, and wait for approval. Use when the owner asks for a plan or says to plan first.", "plan", _PLAN),
     ("audit", "Audit or review a codebase. Use when the owner asks for a code review, a security audit, or an assessment "
               "of a repository or of a change.", None, _AUDIT),
     ("debug", "Find the cause of a bug or a failure before proposing a fix. Use when something does not work, a test fails, "
               "or behaviour is unexpected.", None, _DEBUG),
+    ("fix", "Fix a bug or a failing test, and prove the fix: one change at a time, the check run after each, a change that "
+            "did not work taken back out. Use when the owner asks to fix or repair something, or to make a test pass.",
+     "coding", _FIX),
 )

@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from hunterai import config, skills
+from hunterai import config, db, skills
 from hunterai.providers.base import TextDelta, WireMessage
-from hunterai.repo import chats, messages
+from hunterai.repo import chats, messages, settings
 from hunterai.repo import skills as store
 from hunterai.tools import registry, resolve
 from hunterai.tools.base import ToolContext
@@ -105,11 +105,49 @@ def test_the_check_reads_the_description_too():
 
 async def test_builtin_skills_are_seeded_once_and_stay_deleted(conn):
     first = await store.list(conn)
-    assert [s.name for s in first] == ["audit", "debug", "plan"]
+    assert [s.name for s in first] == ["audit", "debug", "fix", "plan"]
     assert all(s.builtin and s.enabled and s.auto and s.source == "built in" for s in first)
-    assert {s.name: s.mode for s in first} == {"audit": None, "debug": None, "plan": "plan"}
+    assert {s.name: s.mode for s in first} == {"audit": None, "debug": None, "fix": "coding", "plan": "plan"}
     await store.delete(conn, first[0].id)
-    assert [s.name for s in await store.list(conn)] == ["debug", "plan"]
+    assert [s.name for s in await store.list(conn)] == ["debug", "fix", "plan"]
+
+
+async def a_skill_from_before(conn, name: str, body: str, builtin: bool = True) -> None:
+    t = db.now()
+    await conn.execute("insert into skills(id,name,description,body,mode,source,builtin,created_at,updated_at) values(?,?,?,?,?,?,?,?,?)",
+                       (db.new_id(), name, "d", body, None, "built in" if builtin else "pasted text", int(builtin), t, t))
+    await conn.commit()
+
+
+async def test_an_install_from_before_a_built_in_skill_existed_gets_it_once(conn):
+    """Seeded when there were three, and the owner has deleted /audit and rewritten /debug since: /fix arrives, the rest stays."""
+    await a_skill_from_before(conn, "debug", "the owner's own wording")
+    await a_skill_from_before(conn, "plan", "plan as it was")
+    await settings.put(conn, "skills_seeded", True)                     # how an install marked it then
+    got = await store.list(conn)
+    assert [s.name for s in got] == ["debug", "fix", "plan"]
+    assert next(s for s in got if s.name == "debug").body == "the owner's own wording"
+    fix = next(s for s in got if s.name == "fix")
+    assert fix.builtin and fix.mode == "coding" and fix.body == skills.BUILTINS[-1][3]
+    await store.delete(conn, fix.id)
+    assert [s.name for s in await store.list(conn)] == ["debug", "plan"]         # deleted is deleted, for this one too
+
+
+async def test_a_skill_of_the_owners_that_has_the_name_of_a_new_built_in_one_is_kept(conn):
+    await a_skill_from_before(conn, "fix", "my own way to fix", builtin=False)
+    await settings.put(conn, "skills_seeded", True)
+    mine = [s for s in await store.list(conn) if s.name == "fix"]
+    assert [(s.body, s.builtin) for s in mine] == [("my own way to fix", False)]
+    assert [(s.body, s.builtin) for s in await store.list(conn) if s.name == "fix"] == [("my own way to fix", False)]
+
+
+def test_the_fix_skill_keeps_the_rules_that_protect_the_owners_work():
+    """The lines a later edit must not lose: they are what stands between a fix loop and the owner's files."""
+    name, description, mode, body = skills.BUILTINS[-1]
+    assert (name, mode) == ("fix", "coding") and "fix" in description.lower() and "test" in description.lower()
+    for kept in ("git checkout", "git reset", "git stash", "git clean", "weakening it, skipping it or deleting it",
+                 "After three changes that did not work, stop", "Take it back out", "does not show"):
+        assert kept in body, kept
 
 
 async def test_a_name_is_taken_once(conn):

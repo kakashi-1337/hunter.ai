@@ -2,6 +2,7 @@
 the database, which no tool writes; a skill's other files, when it has any, are in its folder."""
 from __future__ import annotations
 
+import builtins
 import sqlite3
 from pathlib import Path
 
@@ -40,17 +41,28 @@ def _row(r) -> Skill:
                  auto=bool(r["auto"]), builtin=bool(r["builtin"]), created_at=r["created_at"], updated_at=r["updated_at"])
 
 
+SEEDED = "skills_seeded"            # true once an install was given built-in skills: all an install kept at first
+GIVEN = "skills_given"              # the names of the built-in skills this install was ever given
+FIRST = ("plan", "audit", "debug")  # what an install was given that was seeded before the names were kept
+
+
 async def ensure_builtins(conn) -> None:
-    """The built-in skills, once. Deleting or rewriting them later is the owner's choice and stays."""
-    if await settings.get(conn, "skills_seeded"):
-        return
+    """Each built-in skill, once per install. Deleting or rewriting one later is the owner's choice and stays.
+    A built-in skill that is new in this version arrives once; a skill of the owner's with its name is kept."""
+    given = await settings.get(conn, GIVEN)
+    if not isinstance(given, builtins.list):            # `list` is a function of this module
+        given = [*FIRST] if await settings.get(conn, SEEDED) else []
     from ..skills import BUILTINS
+    new = [b for b in BUILTINS if b[0] not in given]
+    if not new:
+        return
     t = now()
-    for name, description, mode, body in BUILTINS:
+    for name, description, mode, body in new:
         await conn.execute("insert or ignore into skills(id,name,description,body,mode,source,builtin,created_at,updated_at) "
                            "values(?,?,?,?,?,'built in',1,?,?)", (new_id(), name, description, body, mode, t, t))
     await conn.commit()
-    await settings.put(conn, "skills_seeded", True)
+    await settings.put(conn, GIVEN, [*given, *(b[0] for b in new)])
+    await settings.put(conn, SEEDED, True)
 
 
 async def list(conn) -> list[Skill]:  # noqa: A001
