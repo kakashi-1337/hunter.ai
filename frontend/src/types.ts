@@ -539,8 +539,10 @@ export interface FindingRow extends Finding {
 export interface SystemStatus {
   cpu_temp: number | null
   cpu_limit: number | null
-  /** null: Ollama does not answer. */
-  local_models: { name: string; vram_mb: number }[] | null
+  /** null: Ollama does not answer. `size_mb`: all of the model in memory; `vram_mb`: the part on the GPU; `processor`:
+   * where it runs, in the words of `ollama ps`; `context`: the window it was loaded with. The last three are absent
+   * from a server that could not tell yet. */
+  local_models: { name: string; vram_mb: number; size_mb?: number; processor?: string; context?: number | null }[] | null
   /** The server's code changed on disk after it started. Absent: a server from before it could tell. */
   restart_needed?: boolean
   /** The parts that were in use and do not run now: a service beside HunterAI that answered within the last week,
@@ -548,6 +550,19 @@ export interface SystemStatus {
   stopped?: { id: string; label: string }[]
   /** The script the built interface starts with now. Null: nothing is built. Absent: a server from before it could tell. */
   page?: string | null
+}
+
+/** The local model in use (the fallback model) and its window, for the hint beside the window setting. */
+export interface LocalModel {
+  answers: boolean             // Ollama answers
+  model: string
+  installed: boolean
+  window: number               // what a call to it gets now
+  limit: number | null         // the most tokens the model takes
+  bytes_per_token: number | null   // memory for one token of window, from the layers of the model
+  overhead: { tokens: number; tools: number; on_demand: number }   // what a new chat sends before the conversation
+  enough: number               // the window that leaves room for a chat beside that
+  loaded: { processor: string; context: number | null; size_mb: number } | null
 }
 
 export interface CheckupItem {

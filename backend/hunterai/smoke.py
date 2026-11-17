@@ -39,7 +39,7 @@ WIDTH = 18                  # of the column that names the check
 ASK = httpx.Timeout(5.0, connect=2.0)
 WORD = "PAPAYA-7731"        # what the local model is told and asked for again
 EARLY = "/zx-admin-7731"    # what the long chat finds in its first message
-ROOM = 8192                 # tokens a local window should have left beside the rules and the tools
+ROOM = system_api.ROOM      # tokens a local window should have left beside the rules and the tools
 CLI = ("codex", "claude_code")      # providers that are a program on this machine, not a key
 
 
@@ -145,19 +145,6 @@ async def _check_ollama(env: Env) -> list[Result]:
     return [Result("Ollama", "ok", f"{version} at {ollama.host()}, {len(names)} model{'' if len(names) == 1 else 's'}")]
 
 
-def processor(model: dict) -> str:
-    """Where Ollama runs a loaded model, in the words of `ollama ps`, from an entry of /api/ps."""
-    size, vram = int(model.get("size") or 0), int(model.get("size_vram") or 0)
-    if vram == 0:
-        return "100% CPU"
-    if vram == size:
-        return "100% GPU"
-    if vram > size or size == 0:
-        return "unknown"
-    cpu = round((size - vram) / size * 100)
-    return f"{cpu}%/{100 - cpu}% CPU/GPU"
-
-
 async def _fallback(env: Env) -> str:
     return await settings.get(env.conn, "fallback_model", engine.DEFAULT_FALLBACK_MODEL)
 
@@ -213,7 +200,7 @@ async def _check_local(env: Env) -> list[Result]:
     loaded = next((m for m in (await _get(ollama.host() + "/api/ps") or {}).get("models") or []
                    if isinstance(m, dict) and _has([str(m.get("name"))], model)), None)
     if loaded:
-        words += f"; Ollama runs it {processor(loaded)}"
+        words += f"; Ollama runs it {ollama.processor(loaded)}"
         if loaded.get("context_length"):
             words += f" with a window of {int(loaded['context_length']):,}"
     out.append(Result("local model", "ok", words))

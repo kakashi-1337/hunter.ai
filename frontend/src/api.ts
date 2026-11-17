@@ -1,6 +1,6 @@
 import type { ProxyTest, Skill, SkillInspection } from './types'
 import type {
-  ActivitySummary, QueuedMessage, CaidoExchange, CaidoRow, CaidoStatus, Checkup, FindingRow, SystemStatus,
+  ActivitySummary, QueuedMessage, CaidoExchange, CaidoRow, CaidoStatus, Checkup, FindingRow, LocalModel, SystemStatus,
   Memory, MemorySettings,
   Persona,
   McpCheck, McpInspection, McpReview, McpScan, McpServer,
@@ -214,6 +214,8 @@ export const memorizeChat = (chatId: string) => request<Job>('POST', `/api/chats
 
 export const systemStatus = () => request<SystemStatus>('GET', '/api/system/status')
 export const systemCheckup = () => request<Checkup>('GET', '/api/system/checkup')
+/** The local model in use and its window: what a window costs for it, what the rules and tools take of it. */
+export const systemLocal = () => request<LocalModel>('GET', '/api/system/local')
 /** The parts that do not run now are not announced again until they have run again. */
 export const hideStopped = () => request<{ stopped: { id: string; label: string }[] }>('POST', '/api/system/stopped/hide')
 /** The state of this install as text for a report: versions, what runs and what does not. No key, proxy address, target or message. */

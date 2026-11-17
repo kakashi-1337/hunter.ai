@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as api from '../api'
 import { SettingsDialog } from '../components/SettingsDialog'
 import { useStore } from '../store'
-import type { Settings } from '../types'
+import type { LocalModel, Settings } from '../types'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -20,6 +20,12 @@ const SETTINGS: Settings = {
   provider_proxy: '', provider_proxy_password: false,
 }
 
+/** What the server says about the fallback model of this machine. */
+const LOCAL: LocalModel = {
+  answers: true, model: 'qwen3:8b', installed: true, window: 16384, limit: 40960, bytes_per_token: 147456,
+  overhead: { tokens: 6752, tools: 36, on_demand: 0 }, enough: 16384, loaded: null,
+}
+
 let root: Root
 let host: HTMLElement
 let put: ReturnType<typeof vi.spyOn>
@@ -32,6 +38,7 @@ beforeEach(() => {
   vi.spyOn(api, 'getSettings').mockResolvedValue(SETTINGS)
   vi.spyOn(api, 'listTools').mockResolvedValue([])
   vi.spyOn(api, 'mcpStatus').mockResolvedValue({ configured: [], servers: [], error: null })
+  vi.spyOn(api, 'systemLocal').mockResolvedValue(LOCAL)
   put = vi.spyOn(api, 'putSettings').mockImplementation(async (patch) => ({ ...SETTINGS, ...patch, local_window: (patch as { local_window?: number | null }).local_window ?? 16384 }) as Settings)
 })
 afterEach(() => {
@@ -65,6 +72,28 @@ describe('Settings', () => {
 
   describe('the context window for local models', () => {
     it('shows the size in use and says what it is for', async () => {
+      await open()
+      expect(windowField().value).toBe('16384')
+      expect(field(/^Context window for local models/).textContent).toMatch(/summary of its early part/)
+    })
+
+    it('says what a window costs for the fallback model of this machine and what the rules and tools take', async () => {
+      await open()
+      const said = field(/^Context window for local models/).textContent ?? ''
+      expect(said).toContain('With qwen3:8b, each 8,192 tokens of window take about 1.1 GB of memory beside the model itself. It takes 40,960 tokens at most.')
+      expect(said).toContain("HunterAI's rules and tools take about 6,752 tokens of the window (36 tools).")
+      expect(field(/^Context window for local models/).querySelector('[role="alert"]')).toBeNull()
+    })
+
+    it('warns when the window in use leaves no room for a chat beside the rules and tools', async () => {
+      vi.spyOn(api, 'systemLocal').mockResolvedValue({ ...LOCAL, overhead: { tokens: 25608, tools: 112, on_demand: 40 }, enough: 36864 })
+      await open()
+      expect(field(/^Context window for local models/).querySelector('[role="alert"]')?.textContent)
+        .toBe('Too small here: with the rules and tools, less than 8,192 tokens are left for the chat. Set 36,864 or more.')
+    })
+
+    it('still shows the field when the server cannot describe the model', async () => {
+      vi.spyOn(api, 'systemLocal').mockRejectedValue(new Error('404: Not Found'))
       await open()
       expect(windowField().value).toBe('16384')
       expect(field(/^Context window for local models/).textContent).toMatch(/summary of its early part/)

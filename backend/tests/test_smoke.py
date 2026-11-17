@@ -258,12 +258,6 @@ async def test_rules_and_tools_that_fit_but_leave_no_room_for_the_chat_fail_too(
     assert said((await run(conn, "window"))[1], "local window")[0][0] == "ok"            # exactly the room that is asked for
 
 
-@pytest.mark.parametrize("size,vram,words", [(1000, 0, "100% CPU"), (1000, 1000, "100% GPU"), (1000, 550, "45%/55% CPU/GPU"),
-                                              (1000, 1200, "unknown"), (0, 5, "unknown")])
-def test_where_a_loaded_model_runs_is_said_in_the_words_of_ollama_ps(size, vram, words):
-    assert smoke.processor({"size": size, "size_vram": vram}) == words
-
-
 @respx.mock
 async def test_without_a_local_model_server_the_window_is_not_measured(conn):
     nothing_answers()

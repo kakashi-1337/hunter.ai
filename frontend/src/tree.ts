@@ -1,4 +1,4 @@
-import type { AnswerCheckBlock, Block, Goal, Helper, FindingRow, Message, Options, PermissionRequest, Policy, RunEvent, SourcesBlock, Step, SwarmMember, SystemStatus } from './types'
+import type { AnswerCheckBlock, Block, Goal, Helper, FindingRow, LocalModel, Message, Options, PermissionRequest, Policy, RunEvent, SourcesBlock, Step, SwarmMember, SystemStatus } from './types'
 
 export function messageText(m: Message): string {
   return m.blocks.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('\n')
@@ -399,17 +399,63 @@ export function swarmMembers(steps: Step[], callId: string, result: string | nul
 const NEAR_LIMIT = 10   // degrees under the limit at which the line turns yellow
 
 /** One line about the machine: how hot the processor is and which local models hold memory. */
-export function machineLine(s: SystemStatus): { text: string; level: '' | 'warn' | 'bad' } {
+const whole = (n: number) => n.toLocaleString('en-US')
+type Loaded = NonNullable<SystemStatus['local_models']>[number]
+const inMemory = (m: Loaded) => ((m.size_mb ?? m.vram_mb) / 1024).toFixed(1)
+/** Partly on the GPU and partly on the processor, in the words of `ollama ps`: "40%/60% CPU/GPU". */
+const split = (m: Loaded) => /\/\d+% CPU\/GPU$/.test(m.processor ?? '')
+/** "GPU", "CPU", or the share that is on the GPU; "" from a server that does not say. */
+function share(m: Loaded): string {
+  if (m.processor === '100% GPU') return 'GPU'
+  if (m.processor === '100% CPU') return 'CPU'
+  const part = /\/(\d+)% CPU\/GPU$/.exec(m.processor ?? '')
+  return part ? `${part[1]}% GPU` : ''
+}
+
+/** How hot the processor is against its limit: '' | 'warn' (within ten degrees) | 'bad' (at or over it). */
+export function heat(s: SystemStatus): '' | 'warn' | 'bad' {
+  return s.cpu_temp === null || s.cpu_limit === null ? '' : s.cpu_temp >= s.cpu_limit ? 'bad' : s.cpu_temp >= s.cpu_limit - NEAR_LIMIT ? 'warn' : ''
+}
+
+/** The line at the bottom of the sidebar. `about` says of each loaded model how much memory it takes, where Ollama
+ * runs it and with which window, and what it means when part of it is on the processor; '' when the server does not say. */
+export function machineLine(s: SystemStatus): { text: string; level: '' | 'warn' | 'bad'; about: string } {
   const parts: string[] = []
+  let about = ''
   if (s.cpu_temp !== null) parts.push(`CPU ${Math.round(s.cpu_temp)}°C`)
   if (s.local_models === null) parts.push('Ollama is not running')
   else if (!s.local_models.length) parts.push('no local model loaded')
   else {
-    const gb = s.local_models.reduce((n, m) => n + m.vram_mb, 0) / 1024
-    parts.push(`${s.local_models.map((m) => m.name).join(', ')} loaded (${gb.toFixed(1)} GB)`)
+    const size = (m: Loaded) => `(${inMemory(m)} GB${share(m) ? `, ${share(m)}` : ''})`
+    parts.push(s.local_models.length === 1 ? `${s.local_models[0].name} loaded ${size(s.local_models[0])}`
+      : `${s.local_models.map((m) => `${m.name} ${size(m)}`).join(', ')} loaded`)
+    about = s.local_models.filter((m) => m.processor).map((m) =>
+      `${m.name}: ${inMemory(m)} GB in memory, ${m.processor} as \`ollama ps\` says it${m.context ? `, loaded with a window of ${whole(m.context)} tokens` : ''}.`
+      + (split(m) ? ' Part of it is on the processor, which makes it slow. On a machine with a graphics card it did not fit the memory of that card with this window: a smaller window or a smaller model fits.' : '')).join(' ')
   }
-  const level = s.cpu_temp === null || s.cpu_limit === null ? '' : s.cpu_temp >= s.cpu_limit ? 'bad' : s.cpu_temp >= s.cpu_limit - NEAR_LIMIT ? 'warn' : ''
-  return { text: parts.join(' · '), level }
+  const level = heat(s) || (s.local_models?.some(split) ? 'warn' : '')
+  return { text: parts.join(' · '), level, about }
+}
+
+/** What the window setting says about the local model in use: what a window costs for it, how much of the window
+ * the rules and tools take, how Ollama runs it now; and a warning when the size in the field (`value`) leaves no
+ * room for a chat. */
+export function localWindowHint(local: LocalModel | null, value: number): { lines: string[]; warn: string | null } {
+  if (!local) return { lines: [], warn: null }
+  const most = local.limit ? ` It takes ${whole(local.limit)} tokens at most.` : ''
+  const lines = [
+    !local.answers ? `Ollama does not answer, so ${local.model} could not be asked what a window costs.`
+      : !local.installed ? `${local.model}, the fallback model, is not installed in Ollama (\`ollama pull ${local.model}\`).`
+        : local.bytes_per_token ? `With ${local.model}, each 8,192 tokens of window take about ${(local.bytes_per_token * 8192 / 2 ** 30).toFixed(1)} GB of memory beside the model itself.${most}`
+          : `What a larger window takes in memory depends on the model: \`ollama ps\` shows it once ${local.model} is loaded.${most}`,
+    `HunterAI's rules and tools take about ${whole(local.overhead.tokens)} tokens of the window (${whole(local.overhead.tools)} tools${local.overhead.on_demand ? `, and ${whole(local.overhead.on_demand)} more that are loaded on demand` : ''}).`,
+  ]
+  if (local.loaded) lines.push(`Ollama runs it ${local.loaded.processor}${local.loaded.context ? ` with a window of ${whole(local.loaded.context)}` : ''} now.`)
+  const short = 'Too small here: with the rules and tools, less than 8,192 tokens are left for the chat'
+  const warn = value >= local.enough ? null
+    : local.limit && local.limit < local.enough ? `${short}, and ${local.model} takes ${whole(local.limit)} at most. Switch off the MCP servers you do not need, or choose a fallback model with a larger window.`
+      : `${short}. Set ${whole(local.enough)} or more.`
+  return { lines, warn }
 }
 
 const HOW_TO_RESTART = 'Press Ctrl+C where it runs, then start it again (scripts/start.sh).'

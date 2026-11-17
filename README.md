@@ -377,8 +377,16 @@ HunterAI's rules and tool definitions alone are 6,000 tokens or more. A chat tha
 fit beside them is shortened for the call as described above: a summary of its early part,
 and its latest turns as they were said. This is what a local model gets when it answers in
 place of the chat's own model (the fallback) after a long chat with a model whose window is
-far larger. A larger window keeps more of the chat and costs memory: about 1 GB for every
-8,000 tokens with an 8B model; `ollama ps` shows whether the model still runs on the GPU.
+far larger.
+
+A larger window keeps more of the chat and costs memory, and how much depends on the model.
+The field in Settings says it for the fallback model of your machine: what each 8,192
+tokens take (worked out from the model's layers as Ollama reports them: for every layer
+and every key-value head, the key and the value at two bytes a number; measured against
+Ollama 0.40.16 this was 2 to 6 percent under what Ollama reported), the most tokens the
+model takes, how many tokens your rules and tools take (the tools of your MCP servers
+included), and how Ollama runs the model now. When the window leaves less than 8,192 tokens
+for the chat beside the rules and tools, the field says which size is enough.
 
 Left to itself, Ollama removes the oldest messages of a request that is larger than the
 window, then tokens from its middle, and answers as if nothing had happened: the model has
@@ -962,8 +970,10 @@ An error says what is wrong and what to do about it.
   it.
 
 The bottom of the sidebar shows the processor temperature and the local models Ollama holds
-in memory, asked again every ten seconds. The line turns yellow within ten degrees of
-`HUNTERAI_MAX_CPU_TEMP` and red at it. **Findings** next to it lists every finding of every
+in memory, asked again every ten seconds: `gemma3:12b loaded (9.8 GB, 60% GPU)`. The line
+turns yellow within ten degrees of `HUNTERAI_MAX_CPU_TEMP` and red at it. It also turns
+yellow when a model is partly on the processor, which makes it slow; pointing at the line
+says how Ollama runs each model (in the words of `ollama ps`) and with which window. **Findings** next to it lists every finding of every
 target, with filters, and exports what is shown as Markdown (evidence included: read it
 before you send it anywhere). A `swarm` call shows one line per subagent in the chat: its
 brief, whether it waits, works, or is finished, and whether its answer was verified.

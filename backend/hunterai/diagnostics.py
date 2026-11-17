@@ -55,6 +55,14 @@ def _version() -> str:
             f"{len(lines) - own} file(s) changed here, {own} file(s) of the owner's own")
 
 
+def _loaded(m: dict) -> str:
+    """A model Ollama holds in memory, as the status describes it; an older status names only what is on the GPU."""
+    if m.get("processor") is None:
+        return f"{m['name']} ({m['vram_mb']} MB on the GPU)"
+    window = f", window {m['context']:,}" if m.get("context") else ""
+    return f"{m['name']} ({m['size_mb'] / 1024:.1f} GB, {m['processor']}{window})"
+
+
 def _servers(servers) -> list[str]:
     if servers is None:
         return ["MCP servers: switched off"]
@@ -66,9 +74,26 @@ def _servers(servers) -> list[str]:
     return lines
 
 
-def text(check: dict, status: dict, settings: dict, servers, tools, now: float | None = None) -> str:
+def _local(local: dict | None) -> list[str]:
+    """The local model in use: its window, what a window costs for it, and what a new chat sends before the chat."""
+    if not local:
+        return []
+    said = f"Local model in use: {local['model']}"
+    if not local.get("installed"):
+        said += ", not installed" if local.get("answers") else " (Ollama does not answer)"
+    said += f", window {local['window']:,}" + (f" of its own {local['limit']:,}" if local.get("limit") else "")
+    if local.get("bytes_per_token"):
+        said += f"; about {local['bytes_per_token'] * 8192 / 2**30:.1f} GB for each 8,192 tokens of window"
+    over = local.get("overhead") or {}
+    more = f", and {over['on_demand']:,} loaded on demand" if over.get("on_demand") else ""
+    return [said, f"A new chat sends about {over.get('tokens', 0):,} tokens of rules and tools ({over.get('tools', 0):,} tools{more}); "
+                  f"a window of {local.get('enough', 0):,} leaves room for the chat"]
+
+
+def text(check: dict, status: dict, settings: dict, servers, tools, now: float | None = None, local: dict | None = None) -> str:
     """`check` is the setup check, `status` the machine status, `settings` what the Settings dialog is sent,
-    `servers` what the MCP manager says about its servers (None: there is none), `tools` every registered tool."""
+    `servers` what the MCP manager says about its servers (None: there is none), `tools` every registered tool,
+    `local` what /api/system/local says about the local model in use."""
     now = time.time() if now is None else now
     at = lambda t: time.strftime("%Y-%m-%d %H:%M", time.localtime(t))      # noqa: E731
     machine = settings.get("machine") or {}
@@ -83,12 +108,12 @@ def text(check: dict, status: dict, settings: dict, servers, tools, now: float |
     ]
     if status.get("cpu_temp") is not None:
         lines.append(f"Processor: {status['cpu_temp']:.0f} C (limit {status.get('cpu_limit') or '?'} C)")
-    lines.append("Local models loaded: " + ("Ollama does not answer" if models is None
-                                            else ", ".join(f"{m['name']} ({m['vram_mb']} MB on the GPU)" for m in models) or "none"))
+    lines.append("Local models loaded: " + ("Ollama does not answer" if models is None else ", ".join(_loaded(m) for m in models) or "none"))
     lines += [
         f"Default model: {settings.get('default_provider')}/{settings.get('default_model')}",
         f"Fallback model: {settings.get('fallback_model') or 'none'}",
         f"Context window for local models: {settings.get('local_window')}",
+        *_local(local),
         "Keys: " + "; ".join(f"{name}: {'set' if has else 'none'}" for name, has in sorted((settings.get("keys") or {}).items())),
         f"Proxy for targets: {'set' if settings.get('upstream_proxy') else 'none'}",
         f"Proxy for model providers: {'set' if settings.get('provider_proxy') else 'none'}",

@@ -34,6 +34,7 @@ IN_USE = 7 * 86400          # a service that has not answered for this long is n
 LOOK_EVERY = 60.0           # seconds between two looks at the services on behalf of the status
 REASON = 160                # characters of an MCP server's error that the setup check shows
 HIDDEN = "stopped:hidden"   # settings key: the stopped parts the owner asked not to be told about again
+ROOM = 8192                 # tokens a local window should have left for the chat beside the rules and the tools
 
 
 _ENTRY = re.compile(r"""<script\b[^>]*\bsrc=["'](/assets/[^"']+)["']""")
@@ -77,15 +78,47 @@ async def _fetch(url: str) -> dict | None:
     return body if isinstance(body, dict) else {}
 
 
+def _loaded(m: dict) -> dict:
+    """A model Ollama holds in memory: how much of it, how much of that on the GPU, where it runs in the words of
+    `ollama ps`, and the window it was loaded with (None from an Ollama that does not say)."""
+    window = m.get("context_length")
+    return {"name": str(m.get("name") or m.get("model") or "?"), "vram_mb": round((m.get("size_vram") or 0) / 2**20),
+            "size_mb": round((m.get("size") or 0) / 2**20), "processor": ollama.processor(m),
+            "context": window if isinstance(window, int) and window > 0 else None}
+
+
+def _same(a: str, b: str) -> bool:
+    return a == b or a + ":latest" == b or a == b + ":latest"
+
+
+@router.get("/system/local")
+async def local_model(conn=Depends(get_conn)):
+    """The local model in use (the fallback model) and its window: what the model takes at most, what a token
+    of window costs in memory for it, how much of the window HunterAI's rules and tools take, the window that
+    leaves room for a chat, and how Ollama runs the model now. For the hint beside the window setting."""
+    model = await store.get(conn, "fallback_model", engine.DEFAULT_FALLBACK_MODEL)
+    tags, ps = await asyncio.gather(_fetch(ollama.host() + "/api/tags"), _fetch(ollama.host() + "/api/ps"))
+    names = [str(m.get("name")) for m in (tags or {}).get("models") or [] if isinstance(m, dict)]
+    installed = any(_same(n, model) for n in names)
+    said = await registry.get(LOCAL).described(model) if installed else None
+    limit, cost = said or (None, None)
+    setting = ollama.default_num_ctx()
+    before = await overhead(conn)
+    now = next((_loaded(m) for m in (ps or {}).get("models") or [] if isinstance(m, dict) and _same(str(m.get("name")), model)), None)
+    return {"answers": tags is not None, "model": model, "installed": installed, "window": min(setting, limit) if limit else setting,
+            "limit": limit, "bytes_per_token": cost,
+            "overhead": {k: before[k] for k in ("tokens", "tools", "on_demand")},
+            "enough": -(-(before["tokens"] + ROOM) // 4096) * 4096,
+            "loaded": {k: now[k] for k in ("processor", "context", "size_mb")} if now else None}
+
+
 @router.get("/system/status")
 async def status(request: Request, conn=Depends(get_conn)):
     """Cheap enough to ask every few seconds. `local_models` is null when Ollama does not answer. `stopped`
     names the services that answered before and do not now; they are looked at once a minute. `page` is the
     script the built interface starts with: a page that runs another one is older than this server."""
     ps = await _fetch(ollama.host() + "/api/ps")
-    models = None if ps is None else [
-        {"name": str(m.get("name") or m.get("model") or "?"), "vram_mb": round((m.get("size_vram") or 0) / 2**20)}
-        for m in ps.get("models") or [] if isinstance(m, dict)]
+    models = None if ps is None else [_loaded(m) for m in ps.get("models") or [] if isinstance(m, dict)]
     looked = getattr(request.app.state, "looked", None)
     if looked is None or time.time() - looked >= LOOK_EVERY:
         await checkup(request, conn)
@@ -278,7 +311,7 @@ async def diagnostics_text(request: Request, conn=Depends(get_conn)):
     check = await checkup(request, conn)
     manager = mcp_manager.get()
     return {"text": diagnostics.text(check, await status(request, conn), await settings_api._view(conn),
-                                     manager.status() if manager else None, tools.all())}
+                                     manager.status() if manager else None, tools.all(), local=await local_model(conn))}
 
 
 @router.get("/system/toolbox")

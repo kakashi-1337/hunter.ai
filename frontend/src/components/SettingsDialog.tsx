@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react'
 import * as api from '../api'
 import { proxyTestText } from '../proxy'
 import { useStore } from '../store'
-import type { McpStatus, Settings, ToolInfo } from '../types'
+import { localWindowHint } from '../tree'
+import type { LocalModel, McpStatus, Settings, ToolInfo } from '../types'
 import { McpManager } from './McpManager'
 import { MemoryManager } from './MemoryManager'
 import { PersonaManager } from './PersonaManager'
@@ -110,6 +111,13 @@ function ProxyRow({ settings, onSaved }: { settings: Settings; onSaved: (s: Sett
  * with the size in use after the attempt, so a size the server refused does not stay in the field. */
 function LocalWindow({ value, save }: { value: number; save(size: number | null): Promise<number> }) {
   const [text, setText] = useState(String(value))
+  const [local, setLocal] = useState<LocalModel | null>(null)
+  useEffect(() => {          // what this machine's fallback model says of itself: asked when the dialog opens
+    let gone = false
+    api.systemLocal().then((l) => { if (!gone) setLocal(l) }).catch(() => {})
+    return () => { gone = true }
+  }, [])
+  const { lines, warn } = localWindowHint(local, value)
   const leave = async () => {
     const typed = text.trim()
     if (typed !== String(value)) setText(String(await save(typed ? Number(typed) : null)))
@@ -118,7 +126,9 @@ function LocalWindow({ value, save }: { value: number; save(size: number | null)
     <label className="field"><span>Context window for local models (tokens)</span>
       <input type="number" min={2048} step={1024} value={text} onChange={(e) => setText(e.target.value)} onBlur={() => void leave()}
         onKeyDown={(e) => e.key === 'Enter' && void leave()} />
-      <span className="hint">What every call to an Ollama model gets, the fallback included. A chat can set its own, and a model never gets more than it takes. HunterAI's rules and tool list alone take 6,000 tokens or more; a chat that does not fit is shortened for the call to a summary of its early part and its latest messages, and a request that still does not fit is refused with the reason. A larger window keeps more of the chat and needs more memory: about 1 GB for every 8,000 tokens with an 8B model. Empty: 16,384.</span>
+      <span className="hint">What every call to an Ollama model gets, the fallback included. A chat can set its own, and a model never gets more than it takes. A chat that does not fit is shortened for the call to a summary of its early part and its latest messages, and a request that still does not fit is refused with the reason. A larger window keeps more of the chat and needs more memory. Empty: 16,384.</span>
+      {lines.map((line) => <span key={line} className="hint">{line}</span>)}
+      {warn && <span className="ask-warning" role="alert">{warn}</span>}
     </label>
   )
 }

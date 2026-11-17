@@ -80,6 +80,38 @@ def _is_embedder(name: str) -> bool:
     return "embed" in n or n.startswith("bge-")
 
 
+def processor(entry: dict) -> str:
+    """Where Ollama runs a loaded model, in the words of `ollama ps`, from an entry of /api/ps."""
+    size, vram = int(entry.get("size") or 0), int(entry.get("size_vram") or 0)
+    if vram == 0:
+        return "100% CPU"
+    if vram == size:
+        return "100% GPU"
+    if vram > size or size == 0:
+        return "unknown"
+    cpu = round((size - vram) / size * 100)
+    return f"{cpu}%/{100 - cpu}% CPU/GPU"
+
+
+def bytes_per_token(info: dict) -> int | None:
+    """What one token of context window takes in memory for a model, from the `model_info` of /api/show: the key
+    and the value of every head of every layer, two bytes a number, which is how Ollama keeps them unless it is
+    told otherwise (OLLAMA_KV_CACHE_TYPE). Measured on Ollama 0.40.16 with qwen3:0.6b: 2 to 6 percent more than
+    this. None when the model does not say enough."""
+    def number(name: str) -> int | None:
+        v = info.get(f"{info.get('general.architecture')}.{name}")
+        return v if isinstance(v, int) and not isinstance(v, bool) and v > 0 else None
+    layers, heads = number("block_count"), number("attention.head_count")
+    kv = number("attention.head_count_kv") or heads
+    key = number("attention.key_length")
+    if key is None:
+        width = number("embedding_length")
+        key = width // heads if width and heads else None
+    if not (layers and kv and key):
+        return None
+    return layers * kv * (key + (number("attention.value_length") or key)) * 2
+
+
 class OllamaProvider:
     supports_tools = True
 
@@ -89,6 +121,7 @@ class OllamaProvider:
         self._vision: dict[str, bool] = {}
         self._thinking: dict[str, list | None] = {}     # model -> `thinking.values`, None when Ollama reports none
         self._limit: dict[str, int | None] = {}         # model -> the most tokens it takes, None when its file does not say
+        self._cost: dict[str, int | None] = {}          # model -> bytes of memory for one token of window
 
     def configured(self) -> bool:
         return True
@@ -111,7 +144,15 @@ class OllamaProvider:
         self._vision[model] = vision
         self._thinking[model] = values if isinstance(values, list) else None
         self._limit[model] = limit
+        self._cost[model] = bytes_per_token(info)
         return vision
+
+    async def described(self, model: str) -> tuple[int | None, int | None] | None:
+        """(the most tokens the model takes, the bytes one token of window takes), as far as its file says; None
+        when Ollama does not have the model or does not answer."""
+        if model not in self._limit:
+            await self.supports_images(model)       # one /api/show answers this too
+        return (self._limit[model], self._cost.get(model)) if model in self._limit else None
 
     async def thinking_values(self, model: str) -> list | None:
         """`thinking.values` as /api/show reports it: booleans for a switch, names for levels, `[False]`

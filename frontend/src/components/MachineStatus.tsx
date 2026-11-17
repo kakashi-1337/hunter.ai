@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import * as api from '../api'
 import * as build from '../build'
-import { machineLine, reloadNotice, restartNotice, stoppedNotice } from '../tree'
+import { heat, machineLine, reloadNotice, restartNotice, stoppedNotice } from '../tree'
 import type { SystemStatus } from '../types'
 
 const EVERY_MS = 10_000
@@ -21,9 +21,11 @@ export function MachineStatus({ onSetup }: { onSetup?: () => void }) {
     return () => { stop = true; clearInterval(t); document.removeEventListener('visibilitychange', ask) }
   }, [])
   if (!status) return <div className="machine hint">local · 127.0.0.1</div>
-  const { text, level } = machineLine(status)
-  const title = level === 'bad' ? `At or over the limit of ${status.cpu_limit}°C: look_at_image waits for the processor to cool before it loads its model.`
-    : level === 'warn' ? `Close to the limit of ${status.cpu_limit}°C.` : 'The processor temperature and the local models that hold memory now.'
+  const { text, level, about } = machineLine(status)
+  const hot = heat(status)
+  const title = [hot === 'bad' ? `At or over the limit of ${status.cpu_limit}°C: look_at_image waits for the processor to cool before it loads its model.`
+    : hot === 'warn' ? `Close to the limit of ${status.cpu_limit}°C.` : '', about].filter(Boolean).join(' ')
+    || 'The processor temperature and the local models that hold memory now.'
   const restart = restartNotice(status)
   const stale = reloadNotice(status, build.ownScript())
   const down = stoppedNotice(status)
