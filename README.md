@@ -921,9 +921,35 @@ brief, whether it waits, works, or is finished, and whether its answer was verif
 
 ## Update
 
-Stop HunterAI (Ctrl+C where it runs), bring this folder up to date (`git pull`), and start it
-again with `scripts/start.sh`, which installs what changed and builds the interface again.
+```sh
+scripts/update.sh
+```
 
+One command stops HunterAI if it runs, fetches the newest version (the `main` branch of this
+folder's `origin`, or of GitHub when the folder has none), changes the files, and runs
+`scripts/start.sh`, which installs what changed, builds the interface, and starts HunterAI
+in this terminal. It needs git 2.38 or newer.
+
+What you changed in the folder is kept. A file that you changed and that the update changes
+too is merged when the two changes do not meet, and your version from before is copied to
+`~/.hunterai/updates/<time>/`. When a file cannot be merged, nothing at all is changed and
+the files are named: settle them yourself, or run the update with `--aside`. Files that are
+not part of HunterAI (your programs in `bin/`, your notes) are never read. Afterwards
+`git status` and `git diff` show your own changes and nothing else.
+
+| Switch | What it does |
+|---|---|
+| `--check` | Says what an update would bring, and changes nothing |
+| `--no-start` | Does not start HunterAI afterwards |
+| `--aside` | Where a file of yours cannot be merged with its new version: takes the new one and keeps yours beside it as `<file>.mine` |
+| `--branch NAME` | Follows another branch than `main` |
+| `--from URL` | Fetches from another place than `origin` |
+| `--reanchor` | For a folder that was updated by hand and has commits of its own that mirror GitHub: puts it on GitHub's history and keeps every difference of yours as an uncommitted change. Refused for a folder that is no copy of the branch |
+
+A folder that was downloaded, not cloned with git, cannot be updated in place: download the
+new version and copy your `.env` over.
+
+If you update by hand instead (`git pull`), stop HunterAI first and start it again afterwards.
 A server that is left running goes on with the code it started with, while the interface is
 built from the new files and asks it for things it does not know. HunterAI notices this: the
 server compares its own code on disk with what it loaded at its start, and the bottom of the
