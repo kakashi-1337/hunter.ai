@@ -121,7 +121,7 @@ export default function App() {
 
   return (
     <div className="app">
-      <ErrorBoundary><Sidebar onSettings={() => setSettingsOpen(true)} /></ErrorBoundary>
+      <ErrorBoundary><Sidebar onSettings={() => setSettingsOpen(true)} onSetup={() => setSetupOpen(true)} /></ErrorBoundary>
       <ErrorBoundary resetKey={`${view}:${shown}`}>
       {view === 'knowledge' ? <KnowledgeView onClose={() => setView('chat')} /> : <ChatView header={
         <>

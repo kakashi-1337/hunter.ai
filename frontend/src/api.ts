@@ -214,6 +214,10 @@ export const memorizeChat = (chatId: string) => request<Job>('POST', `/api/chats
 
 export const systemStatus = () => request<SystemStatus>('GET', '/api/system/status')
 export const systemCheckup = () => request<Checkup>('GET', '/api/system/checkup')
+/** The parts that do not run now are not announced again until they have run again. */
+export const hideStopped = () => request<{ stopped: { id: string; label: string }[] }>('POST', '/api/system/stopped/hide')
+/** The state of this install as text for a report: versions, what runs and what does not. No key, proxy address, target or message. */
+export const systemDiagnostics = () => request<{ text: string }>('GET', '/api/system/diagnostics')
 export const caidoStatus = () => request<CaidoStatus>('GET', '/api/caido/status')
 export const caidoStart = () => request<CaidoStatus>('POST', '/api/caido/start')
 export const caidoRequests = (filter: string, limit = 50) =>

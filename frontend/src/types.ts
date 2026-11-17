@@ -540,9 +540,16 @@ export interface SystemStatus {
   local_models: { name: string; vram_mb: number }[] | null
   /** The server's code changed on disk after it started. Absent: a server from before it could tell. */
   restart_needed?: boolean
+  /** The parts that were in use and do not run now: a service beside HunterAI that answered within the last week,
+   * an MCP server that is switched on and gave up. Absent: a server from before it could tell. */
+  stopped?: { id: string; label: string }[]
 }
 
-export interface CheckupItem { id: string; label: string; ok: boolean; required: boolean; detail: string; fix: string }
+export interface CheckupItem {
+  id: string; label: string; ok: boolean; required: boolean; detail: string; fix: string
+  /** It was in use and does not run now. Absent: a server from before it could tell. */
+  stopped?: boolean
+}
 export interface Checkup { ready: boolean; items: CheckupItem[] }
 
 export interface CaidoStatus {

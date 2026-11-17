@@ -86,7 +86,7 @@ function ChatRow({ chat }: { chat: Chat }) {
   )
 }
 
-export function Sidebar({ onSettings }: { onSettings: () => void }) {
+export function Sidebar({ onSettings, onSetup }: { onSettings: () => void; onSetup?: () => void }) {
   const [panel, setPanel] = useState<'findings' | 'caido' | 'activity' | null>(null)
   const { targets, chats, searchResults } = useStore()
   const newChat = useStore((s) => s.newChat)
@@ -159,7 +159,7 @@ export function Sidebar({ onSettings }: { onSettings: () => void }) {
         ))}
       </nav>
       <div className="side-foot">
-        <MachineStatus />
+        <MachineStatus onSetup={onSetup} />
         <div className="side-buttons">
           <button className="btn" title="Every finding of every target" onClick={() => setPanel('findings')}>Findings</button>
           <button className="btn" title="What Caido recorded of the agent's requests" onClick={() => setPanel('caido')}>Caido</button>

@@ -19,11 +19,12 @@ async def test_the_machine_state_names_the_temperature_and_the_loaded_local_mode
     monkeypatch.delenv("HUNTERAI_MAX_CPU_TEMP", raising=False)
     answers(monkeypatch, {"http://127.0.0.1:11434/api/ps": {"models": [{"name": "mimo:9b", "size_vram": 9 * 2**30}]}})
     assert (await client.get("/api/system/status")).json() == {
-        "cpu_temp": 71.0, "cpu_limit": 90.0, "local_models": [{"name": "mimo:9b", "vram_mb": 9216}], "restart_needed": False}
+        "cpu_temp": 71.0, "cpu_limit": 90.0, "local_models": [{"name": "mimo:9b", "vram_mb": 9216}], "restart_needed": False,
+        "stopped": []}
     answers(monkeypatch, {})                      # Ollama does not answer: unknown, which is not "none loaded"
     monkeypatch.setattr(thermal, "cpu_temp", lambda: None)
     assert (await client.get("/api/system/status")).json() == {
-        "cpu_temp": None, "cpu_limit": 90.0, "local_models": None, "restart_needed": False}
+        "cpu_temp": None, "cpu_limit": 90.0, "local_models": None, "restart_needed": False, "stopped": []}
 
 
 async def test_the_checkup_says_what_is_missing_and_how_to_get_it(client, monkeypatch):
@@ -34,9 +35,10 @@ async def test_the_checkup_says_what_is_missing_and_how_to_get_it(client, monkey
     got = (await client.get("/api/system/checkup")).json()
     items = {i["id"]: i for i in got["items"]}
     assert got["ready"] is False
-    assert set(items) == {"model", "ollama", "embedder", "qdrant", "searxng", "caido", "browser", "toolbox", "rea"}
+    assert set(items) == {"model", "ollama", "embedder", "qdrant", "searxng", "caido", "browser", "toolbox", "rea", "mcp"}
     assert items["model"]["required"] and not items["model"]["ok"] and ".env" in items["model"]["fix"]
-    assert all(not i["ok"] and i["fix"] for i in items.values())
+    assert all(not i["ok"] and i["fix"] for k, i in items.items() if k != "mcp")
+    assert items["mcp"]["ok"] and not items["mcp"]["fix"]       # no MCP server is switched on and not running
     assert [i["id"] for i in got["items"] if i["required"]] == ["model"]
 
     # A key in .env is enough to chat, whatever else is missing.
@@ -52,7 +54,7 @@ async def test_the_checkup_says_what_is_missing_and_how_to_get_it(client, monkey
     got = (await client.get("/api/system/checkup")).json()
     items = {i["id"]: i for i in got["items"]}
     assert got["ready"] is False
-    assert [k for k, i in items.items() if i["ok"]] == ["ollama", "embedder", "qdrant", "searxng", "browser"]
+    assert [k for k, i in items.items() if i["ok"]] == ["ollama", "embedder", "qdrant", "searxng", "browser", "mcp"]
     answers(monkeypatch, {"http://127.0.0.1:11434/api/tags": {"models": [{"name": "bge-m3:latest"}, {"name": "qwen3:8b"}]}})
     got = (await client.get("/api/system/checkup")).json()
     assert got["ready"] is True and "qwen3:8b" in {i["id"]: i for i in got["items"]}["model"]["detail"]

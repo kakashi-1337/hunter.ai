@@ -908,9 +908,34 @@ The server listens on 127.0.0.1 only. Set `HUNTERAI_PORT` to use another port.
 
 On a start with no model to talk to (no API key, and no chat model in Ollama) the interface
 opens a **setup check**: one line per part (a model, Ollama, the embedding model, Qdrant,
-SearXNG, Caido, Camoufox) with what was found and the command or place that fixes it. Only
-the model is required; each other line switches one feature on. It is under Settings →
-"Setup check" at any time.
+SearXNG, Caido, Camoufox, your tool folder, the MCP servers) with what was found and the
+command or place that fixes it. Only the model is required; each other line switches one
+feature on. It is under Settings → "Setup check" at any time.
+
+### When a part stops working
+
+A part that was in use and does not run now is said on the page, above the machine line at
+the bottom of the sidebar: **Not working: SearXNG (web_search)**, with a button that opens
+the setup check, where the line of that part says how to start it again. Two kinds of parts
+are watched:
+
+- **Ollama, Qdrant and SearXNG**, the services that run beside HunterAI. One of them counts
+  as in use when it answered within the last seven days, so a service you never set up stays
+  "optional, missing" and is not announced. They are looked at once a minute.
+- **MCP servers** that are switched on and gave up starting. The model then works with fewer
+  tools than you think it has. The reason stands in Settings → "Manage MCP servers".
+
+The ✕ on the notice is for a part you stopped yourself (Ollama closed to free memory, Docker
+not started today): the page stops saying it until that part has run again, and the setup
+check keeps marking it "not working".
+
+**Copy diagnostics** in the setup check puts the state of the install on the clipboard as
+text for a bug report: the version of the code and how many files differ from it, when the
+server started and whether it has to be restarted, the system, the models in use, the
+context window of local models, every line of the setup check, the MCP servers and the
+number of tools. It holds no key (only whether one is set), no proxy address, no target and
+no message; the home folder is written `~`, and an address loses its login and what follows
+its `?`. When the browser refuses to copy, the text is shown to copy by hand.
 
 The bottom of the sidebar shows the processor temperature and the local models Ollama holds
 in memory, asked again every ten seconds. The line turns yellow within ten degrees of

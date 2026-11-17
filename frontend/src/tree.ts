@@ -421,6 +421,13 @@ export function restartNotice(status: SystemStatus | null): string | null {
     : `Restart HunterAI: the server that answers is older than this page, so parts of the page will not work. ${HOW_TO_RESTART}`
 }
 
+/** The parts that were in use and do not run now, for the line above the machine state. Null: nothing to say
+ * (also when the server does not answer, or is from before it could tell). */
+export function stoppedNotice(status: SystemStatus | null): string | null {
+  const stopped = status?.stopped ?? []
+  return stopped.length ? `Not working: ${stopped.map((s) => s.label).join(', ')}.` : null
+}
+
 export interface FindingFilter { severity?: string; status?: string; target_id?: string; text?: string }
 
 export function filterFindings(list: FindingRow[], f: FindingFilter): FindingRow[] {

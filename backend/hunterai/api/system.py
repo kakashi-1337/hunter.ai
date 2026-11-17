@@ -6,20 +6,38 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import os
+import time
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from .. import activity, caido, config, rea_tools, stale, thermal, toolbox
+from .. import activity, caido, config, diagnostics, mcp_manager, rea_tools, stale, thermal, toolbox
+from . import settings as settings_api
 from .deps import get_conn
 from ..kb import embed
 from ..providers import ollama, registry
+from ..repo import settings as store
 from ..tools import caido_tools
+from ..tools import registry as tools
 
 router = APIRouter(prefix="/api")
 
 PROBE = httpx.Timeout(2.0, connect=1.0)
 LOCAL = "ollama"
+# The services that run beside HunterAI. One that answered before and does not answer now has stopped, and
+# the page says so; the start script only says it in the terminal it ran in. Programs and folders are not
+# watched: what is missing there is the owner's doing, and the setup check lists it.
+WATCHED = ("ollama", "qdrant", "searxng")
+ANSWERED = "answered:"      # settings key: when the service last answered
+IN_USE = 7 * 86400          # a service that has not answered for this long is no longer taken to be in use
+LOOK_EVERY = 60.0           # seconds between two looks at the services on behalf of the status
+REASON = 160                # characters of an MCP server's error that the setup check shows
+HIDDEN = "stopped:hidden"   # settings key: the stopped parts the owner asked not to be told about again
+
+
+def forget(app) -> None:
+    """Nothing is held about the services: the next status looks again."""
+    app.state.looked, app.state.stopped, app.state.stopped_now = None, [], []
 
 
 async def _fetch(url: str) -> dict | None:
@@ -39,14 +57,18 @@ async def _fetch(url: str) -> dict | None:
 
 
 @router.get("/system/status")
-async def status():
-    """Cheap enough to ask every few seconds. `local_models` is null when Ollama does not answer."""
+async def status(request: Request, conn=Depends(get_conn)):
+    """Cheap enough to ask every few seconds. `local_models` is null when Ollama does not answer. `stopped`
+    names the services that answered before and do not now; they are looked at once a minute."""
     ps = await _fetch(ollama.host() + "/api/ps")
     models = None if ps is None else [
         {"name": str(m.get("name") or m.get("model") or "?"), "vram_mb": round((m.get("size_vram") or 0) / 2**20)}
         for m in ps.get("models") or [] if isinstance(m, dict)]
+    looked = getattr(request.app.state, "looked", None)
+    if looked is None or time.time() - looked >= LOOK_EVERY:
+        await checkup(request, conn)
     return {"cpu_temp": thermal.cpu_temp(), "cpu_limit": thermal.limit(), "local_models": models,
-            "restart_needed": stale.restart_needed()}
+            "restart_needed": stale.restart_needed(), "stopped": request.app.state.stopped}
 
 
 def _browser_installed() -> bool:
@@ -54,11 +76,76 @@ def _browser_installed() -> bool:
 
 
 def _item(id_: str, label: str, ok: bool, detail: str, fix: str, required: bool = False) -> dict:
-    return {"id": id_, "label": label, "ok": ok, "required": required, "detail": detail, "fix": "" if ok else fix}
+    return {"id": id_, "label": label, "ok": ok, "required": required, "detail": detail, "fix": "" if ok else fix,
+            "stopped": False}
+
+
+def _reason(error: str | None) -> str:
+    lines = (error or "").strip().splitlines()
+    return lines[0].strip()[:REASON] if lines else ""
+
+
+def _mcp_item() -> tuple[dict, list[str]]:
+    """The line of the MCP servers, and the names of the ones that are switched on and gave up: the model then
+    works with fewer tools than the owner thinks it has."""
+    label, manager = "MCP servers (tools from other programs)", mcp_manager.get()
+    if manager is None:
+        return _item("mcp", label, True, "not started" if config.mcp_enabled() else "switched off with HUNTERAI_MCP=off", ""), []
+    servers = manager.status()
+    dead = [s for s in servers if s.state == "dead"]
+    parts = []
+    if dead:
+        parts.append("not working: " + ", ".join(s.name + (f" ({_reason(s.error)})" if _reason(s.error) else "") for s in dead))
+    for word, states in (("running", ("ready",)), ("starting", ("starting", "restarting"))):
+        names = [s.name for s in servers if s.state in states]
+        if names:
+            parts.append(f"{word}: " + ", ".join(names))
+    item = _item("mcp", label, not dead, "; ".join(parts) or "none switched on",
+                 'Open Settings and press "Manage MCP servers": the reason stands beside the server. Switch it off and on '
+                 "there to start it again, or leave it off if you do not use it.")
+    item["stopped"] = bool(dead)
+    return item, [s.name for s in dead]
+
+
+async def _answered(conn, name: str) -> float | None:
+    """When the service last answered, as far as the store knows."""
+    last = await store.get(conn, ANSWERED + name)
+    return float(last) if isinstance(last, (int, float)) and not isinstance(last, bool) else None
+
+
+async def _mark_stopped(conn, items: list[dict]) -> None:
+    """Remember when each watched service last answered, and mark the ones that did within the last week and
+    do not now."""
+    now = time.time()
+    for item in items:
+        if item["id"] not in WATCHED:
+            continue
+        last = await _answered(conn, item["id"])
+        if item["ok"]:
+            if last is None or now - last >= 3600:                  # written once an hour, not at every look
+                await store.put(conn, ANSWERED + item["id"], now)
+        else:
+            item["stopped"] = last is not None and now - last <= IN_USE
+
+
+async def _announced(conn, items: list[dict], dead: list[str]) -> tuple[list[dict], list[str]]:
+    """What the page says is not working, and every part that is stopped now (a service by its id, an MCP
+    server as mcp:<name>). The parts the owner hid are left out for as long as they stay stopped: one that
+    has run again is no longer hidden, so its next stop is said."""
+    now = [i["id"] for i in items if i["stopped"] and i["id"] != "mcp"] + [f"mcp:{name}" for name in dead]
+    stored = await store.get(conn, HIDDEN, [])
+    hidden = [h for h in stored if h in now] if isinstance(stored, list) else []
+    if hidden != stored:
+        await store.put(conn, HIDDEN, hidden)
+    said = [{"id": i["id"], "label": i["label"]} for i in items if i["stopped"] and i["id"] != "mcp" and i["id"] not in hidden]
+    servers = [name for name in dead if f"mcp:{name}" not in hidden]
+    if servers:
+        said.append({"id": "mcp", "label": f"MCP server{'s' if len(servers) > 1 else ''} {', '.join(servers)}"})
+    return said, now
 
 
 @router.get("/system/checkup")
-async def checkup():
+async def checkup(request: Request, conn=Depends(get_conn)):
     """What a new install has and lacks. Only a model to talk to is required; the rest switches features on."""
     tags, qdrant, searx = await asyncio.gather(
         _fetch(ollama.host() + "/api/tags"), _fetch(config.qdrant_url() + "/"), _fetch(config.searxng_url() + "/"))
@@ -115,7 +202,31 @@ async def checkup():
               f"Put or link them in {rea_tools.folder()}: ghidra/ (a Ghidra installation), jdk/, hopper/, ilspycmd, adb, "
               "and bin/ for programs found by name (jadx, rizin, apktool). Switch the rea server off and on afterwards."),
     ]
+    mcp, dead = _mcp_item()
+    items.append(mcp)
+    await _mark_stopped(conn, items)
+    request.app.state.looked = time.time()
+    request.app.state.stopped, request.app.state.stopped_now = await _announced(conn, items, dead)
     return {"ready": all(i["ok"] for i in items if i["required"]), "items": items}
+
+
+@router.post("/system/stopped/hide")
+async def hide_stopped(request: Request, conn=Depends(get_conn)):
+    """The owner knows that these parts do not run (Ollama closed to free memory, Docker not started today):
+    the page stops saying it until a part has run again. The setup check keeps marking them."""
+    await checkup(request, conn)
+    await store.put(conn, HIDDEN, request.app.state.stopped_now)
+    request.app.state.stopped = []
+    return {"stopped": []}
+
+
+@router.get("/system/diagnostics")
+async def diagnostics_text(request: Request, conn=Depends(get_conn)):
+    """The state of this install as text for a report. See diagnostics.py for what is left out."""
+    check = await checkup(request, conn)
+    manager = mcp_manager.get()
+    return {"text": diagnostics.text(check, await status(request, conn), await settings_api._view(conn),
+                                     manager.status() if manager else None, tools.all())}
 
 
 @router.get("/system/toolbox")
