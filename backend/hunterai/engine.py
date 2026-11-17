@@ -7,11 +7,12 @@ to SQLite so it survives a restart.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
 import time
 from typing import Awaitable, Callable
 
-from . import hub, permissions, secrets
+from . import context, hub, permissions, secrets
 from .modes import build_system
 from .providers import registry
 from .providers.base import (Options, ProviderError, Stop, TextDelta, ThinkingDelta,
@@ -177,8 +178,52 @@ async def _context(conn, chat, user_message_id: str, load_bytes: LoadBytes) -> l
                 except Exception:
                     pass  # adapter renders a missing image as a placeholder
         out.append(WireMessage(role=m.role, blocks=[b for b in m.blocks if b.type not in NOT_FOR_MODELS],
-                               images=images))
+                               images=images, id=m.id))
     return out
+
+
+async def _fitted(conn, run_id: str, provider, provider_name: str, model: str, system: str,
+                  wire: list[WireMessage], options: Options, specs: list[ToolSpec] | None, note: dict):
+    """The provider's events for one call, with the request made to fit the model's context
+    window first (see context.py). When the provider refuses the request for its size before it
+    has sent anything, the request is made smaller once more and the call is made again, once.
+    `note` gets what was done to the request, for the trajectory."""
+    async def fit(hard: bool = False) -> list[WireMessage]:
+        try:
+            fitted, done = await context.fit(conn, run_id, provider_name, model, system, wire, options, specs, hard=hard)
+        except Exception as e:      # a fault in the shortening must not break a chat that would have worked
+            fitted, done = wire, {"error": f"{type(e).__name__}: {e}"[:300]}
+        if done:
+            note["context"] = done
+        return fitted
+
+    def events(fitted: list[WireMessage]):
+        if specs and getattr(provider, "supports_tools", False):
+            return provider.stream(model, system, fitted, options, tools=specs)
+        return provider.stream(model, system, fitted, options)   # the Phase 1 call
+
+    fitted, sent = await fit(), False
+    try:
+        async with contextlib.aclosing(events(fitted)) as stream:
+            async for ev in stream:
+                sent = True
+                yield ev
+        return
+    except ProviderError as e:
+        if sent or not context.is_overflow(e):
+            raise
+        refused = e
+    smaller = await fit(hard=True)
+    if smaller is fitted or smaller is wire:
+        raise ProviderError(refused.kind, refused.message + context.TOO_LONG, refused.status)
+    try:
+        async with contextlib.aclosing(events(smaller)) as stream:
+            async for ev in stream:
+                yield ev
+    except ProviderError as e:
+        if context.is_overflow(e):
+            raise ProviderError(e.kind, e.message + context.TOO_LONG, e.status) from None
+        raise
 
 
 async def _attempt(conn, run_id: str, mid: str, provider_name: str, model: str, system: str,
@@ -190,15 +235,11 @@ async def _attempt(conn, run_id: str, mid: str, provider_name: str, model: str, 
     step = await runs.add_step(conn, run_id, "model_call", f"{provider_name}/{model}", {})
     await hub.publish(run_id, {"type": "step_started", "step": step.model_dump()})
     usage = Usage(0, 0)
-    status, detail = "error", {}
+    status, detail, fit = "error", {}, {}
     acc.output, acc.calls = False, []
     try:
         provider = registry.get(provider_name)
-        if specs and getattr(provider, "supports_tools", False):
-            stream = provider.stream(model, system, wire, options, tools=specs)
-        else:
-            stream = provider.stream(model, system, wire, options)   # the Phase 1 call
-        async for ev in stream:
+        async for ev in _fitted(conn, run_id, provider, provider_name, model, system, wire, options, specs, fit):
             flush = False
             if isinstance(ev, TextDelta):
                 acc.text(ev.text)
@@ -245,7 +286,7 @@ async def _attempt(conn, run_id: str, mid: str, provider_name: str, model: str, 
         raise ProviderError("bad_request", f"{type(e).__name__}: {e}") from e
     finally:
         done = await asyncio.shield(runs.finish_step(
-            conn, step.id, status, usage.input_tokens, usage.output_tokens, detail))
+            conn, step.id, status, usage.input_tokens, usage.output_tokens, {**detail, **fit}))
         await asyncio.shield(hub.publish(run_id, {"type": "step_finished",
                                                   "step": done.model_dump()}))
 

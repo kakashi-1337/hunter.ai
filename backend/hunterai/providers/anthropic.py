@@ -101,6 +101,8 @@ class AnthropicProvider:
             client = self._get_client()
             out = []
             async for m in client.models.list():
+                if is_legacy(m.id):
+                    continue        # the older models have a fifth of the context window; a chat that uses one keeps it
                 out.append(_info(m.id, getattr(m, "display_name", None) or m.id,
                                  getattr(m, "max_input_tokens", None)))
             if out:

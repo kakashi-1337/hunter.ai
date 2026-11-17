@@ -137,6 +137,7 @@ class WireMessage:
     role: str
     blocks: list[Block]
     images: dict[str, bytes] = field(default_factory=dict)
+    id: str | None = None      # the stored message this was made from, when there is one (never sent to a model)
 
 
 IMAGE_OMITTED = "[image omitted: model has no image input]"

@@ -199,6 +199,26 @@ the run ends before the agent takes another step, what is still waiting is sent 
 next message; after a stop or an error it stays in view for you to send or remove. Queued
 messages are text only.
 
+### A chat longer than the model's context window
+
+Every model call sends the whole chat. A chat that has outgrown its model's window is
+refused by the provider, and so is every message after that one. Before a call that comes
+close to the window, HunterAI makes the request smaller, in this order:
+
+1. old tool results are cut down to their first 300 characters, oldest first (the latest
+   four stay whole while there is room for them);
+2. the older turns are replaced by a summary that the chat's own model writes. The summary
+   is kept and used again for the calls after it.
+
+Only the request changes. What is stored, and what you see in the chat, stays whole, and
+the trajectory says on the model call what was done ("made to fit its context: ...").
+The window comes from the provider's model list. Where a provider does not say, the first
+refusal for size teaches it: the request is halved and the call is made once more. A
+summary is a model's account of the earlier part, so it can leave something out; a cut-down
+result says how long it was, and the tool can be run again. Subagents are not covered (they
+stop after 12 turns). The Anthropic list no longer offers the models before Claude 4.6,
+whose window is 200K tokens; a chat that already uses one keeps it.
+
 ### Answer check
 
 After a run in a chat that has tools, the decision model reads the final answer next to the

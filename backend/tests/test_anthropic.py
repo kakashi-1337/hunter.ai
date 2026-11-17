@@ -223,10 +223,8 @@ async def test_models_from_api():
         NS(id="claude-haiku-4-5", display_name="Claude Haiku 4.5", max_input_tokens=200000)])
     ms = await AnthropicProvider(client=c).models()
     assert [(m.id, m.label, m.context_window) for m in ms] == [
-        ("claude-opus-5-5", "Claude Opus 5.5", 1000000),
-        ("claude-haiku-4-5", "Claude Haiku 4.5", 200000)]
+        ("claude-opus-5-5", "Claude Opus 5.5", 1000000)]            # the models before 4.6, with a 200K window, are not offered
     assert ms[0].options == ["max_tokens", "effort"] and ms[0].supports_images
-    assert ms[1].options == ["max_tokens"]
 
 
 async def test_models_static_fallback():
