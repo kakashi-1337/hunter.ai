@@ -12,7 +12,7 @@ from hunterai.repo import chats, runs
 from hunterai.tools import registry, shell
 from hunterai.tools.base import ToolError
 from tests.test_engine import no_bytes, setup, use  # noqa: F401 (setup is a fixture)
-from tests.toolkit import Turns, alive, eventually, run_call, seeded_run
+from tests.toolkit import Turns, alive, eventually, run_call, seeded_run, slow_connections, still_open
 
 ALLOW = {"risk": {"execute": "allow"}}
 
@@ -60,6 +60,22 @@ async def test_cancel_mid_command_kills_the_group_and_closes_the_step(conn, setu
     run = await runs.get(conn, run_id)
     assert run.status == "cancelled" and [(s.kind, s.status) for s in run.steps][-1] == ("tool_call", "cancelled")
     with pytest.raises(ProcessLookupError): os.killpg(proc.pgid, 0)
+
+async def test_cancel_as_a_command_starts_leaves_no_connection_open(conn, setup, monkeypatch):
+    """Stop pressed while the process is being recorded: the connection for that record was left open on a slow disk,
+    and its thread kept the whole app from exiting."""
+    for t in shell.tools(): registry.register(t)
+    use(abliteration=Turns("abliteration", [ToolCall("c1", "execute", {"command": "sleep 300"})], [TextDelta("unreached")]))
+    chat, user = await setup()
+    await chats.update(conn, chat.id, permissions={"risk": {"execute": "allow"}})
+    opened = slow_connections(monkeypatch)
+    run_id, _ = await engine.start_run(db.connect, chat.id, user.id, no_bytes)
+    await eventually(lambda: procs.running(chat.id))             # started, and its record is still being written
+    proc = procs.running(chat.id)[0]
+    assert await engine.cancel(run_id); await engine.wait(run_id)
+    assert (await runs.get(conn, run_id)).status == "cancelled"
+    with pytest.raises(ProcessLookupError): os.killpg(proc.pgid, 0)
+    await eventually(lambda: not still_open(opened))
 
 async def test_shutdown_kills_background_processes_and_closes_their_steps(conn, shell_registered):   # Review Focus 2
     chat, run_id = await seeded_run(conn, permissions=ALLOW)

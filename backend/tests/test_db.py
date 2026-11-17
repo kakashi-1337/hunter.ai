@@ -1,4 +1,9 @@
+import asyncio
+
+import pytest
+
 from hunterai import config, db
+from tests.toolkit import eventually, slow_connections, still_open
 
 TABLES = {"targets", "findings", "chats", "messages", "messages_fts", "runs", "steps",
           "uploads", "settings", "jobs", "kb_collections", "kb_documents", "kb_chunks", "kb_chunks_fts",
@@ -58,3 +63,40 @@ def test_home_is_created_and_overridable(isolated_home):
     assert config.home() == isolated_home and isolated_home.is_dir()
     assert config.db_path().parent == isolated_home
     assert config.uploads_dir().is_dir()
+
+
+async def test_a_connect_cancelled_while_it_opens_leaves_no_connection_behind(isolated_home, monkeypatch):
+    """Nobody holds it, so nobody would close it, and its worker thread would keep the process from exiting."""
+    opened = slow_connections(monkeypatch)
+    waiting = asyncio.ensure_future(db.connect())
+    await eventually(lambda: still_open(opened))            # the connection exists and its settings are being made
+    waiting.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiting
+    await eventually(lambda: not still_open(opened))
+
+
+async def test_a_connect_that_fails_at_its_settings_closes_what_it_opened(isolated_home, monkeypatch):
+    opened = slow_connections(monkeypatch, delay=0)
+    real = db.aiosqlite.connect
+
+    def connect(*args, **kwargs):
+        c = real(*args, **kwargs)
+
+        async def refuse(sql, *a, **kw):
+            raise OSError("disk I/O error")
+        c.execute = refuse
+        return c
+    monkeypatch.setattr(db.aiosqlite, "connect", connect)
+    with pytest.raises(OSError):
+        await db.connect()
+    await eventually(lambda: opened and not still_open(opened))
+
+
+async def test_a_connect_nobody_cancels_is_handed_over_open(isolated_home, monkeypatch):
+    opened = slow_connections(monkeypatch, delay=0.01)
+    c = await db.connect()
+    try:
+        assert still_open(opened) == [c] and (await (await c.execute("select 1")).fetchone())[0] == 1
+    finally:
+        await c.close()
