@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path
 
 ALLOWED = {"ABLIT_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "XAI_API_KEY",
-           "GEMINI_API_KEY", "ABLIT_MODEL"}
+           "GEMINI_API_KEY", "ABLIT_MODEL", "DISCORD_WEBHOOK_URL"}
 
 
 def _is_assignment(line: bytes, name: bytes) -> bool:

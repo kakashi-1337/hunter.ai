@@ -77,6 +77,23 @@ async def test_key_endpoint_rejects_bad_values(client):
                              json={"value": "   "})).status_code == 400
 
 
+async def test_the_webhook_address_is_saved_from_settings(client):
+    hook = "https://discord.com/api/webhooks/123456789012345678/abcDEF_123-xyz"
+    assert (await client.get("/api/settings")).json()["notify_webhook_set"] is False
+    r = await client.put("/api/settings/keys/DISCORD_WEBHOOK_URL", json={"value": f"  {hook} "})
+    assert r.status_code == 204, r.text
+    assert config.env("DISCORD_WEBHOOK_URL") == hook
+    assert (await client.get("/api/settings")).json()["notify_webhook_set"] is True
+    bad = await client.put("/api/settings/keys/DISCORD_WEBHOOK_URL", json={"value": "https://evil.test/api/webhooks/1/a"})
+    assert bad.status_code == 400 and config.env("DISCORD_WEBHOOK_URL") == hook          # a refused value changes nothing
+
+
+def test_every_name_settings_offers_to_save_can_be_written():
+    from hunterai import envfile
+    from hunterai.api import settings as settings_api
+    assert set(settings_api.SECRET_NAMES) <= envfile.ALLOWED
+
+
 async def test_providers_lists_configured_flag_and_models(client):
     ps = {p["name"]: p for p in (await client.get("/api/providers")).json()}
     assert list(ps)[0] == "abliteration" and "mock" in ps
