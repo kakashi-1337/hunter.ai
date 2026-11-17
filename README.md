@@ -504,7 +504,7 @@ Permissions panel. Deleting a chat removes the default folder, never a custom on
 ### Known limits
 
 - An approved `execute` command runs with the owner's full rights. It can read files, call HunterAI's own API with `curl`, or `setsid` away from its process group. The guard is the ask that shows the exact command and cwd; host and path detection on a command string is a heuristic that only adds warnings or denials.
-- Scrubbing covers HunterAI's five keys. Other variables in the same `.env` file are never read, so their values cannot be scrubbed; the file tools hard-deny the env file instead. Variables of other tools in the process environment are kept from commands when you list their prefixes in `HUNTERAI_PRIVATE_ENV` (for example `MYTOOL_,INTERNAL_`).
+- Scrubbing covers HunterAI's five keys, and the login of each proxy you set where it stands as a login (`user:password@` in an address, and the `Proxy-Authorization` value). Other variables in the same `.env` file are never read, so their values cannot be scrubbed; the file tools hard-deny the env file instead. Variables of other tools in the process environment are kept from commands when you list their prefixes in `HUNTERAI_PRIVATE_ENV` (for example `MYTOOL_,INTERNAL_`).
 - Path and host detection for MCP tools is by argument name and URL shape. An MCP tool can touch things its arguments do not name; that is why unknown servers default to `execute` = ask.
 - A grant remembers only that a warning was shown with it, not which one. Within one call the runner asks again for a warning the owner has not seen, and a change of mode or target clears the grants; between those, a call granted under one warning can pass a different warning later (for example a granted host name that starts resolving to a local address). HunterAI's own API stays denied in every case.
 - `read` checks the path and then hands it to the chunker, which opens it itself. A symlink swapped in between is not caught (`write` and `edit` do re-check).
@@ -701,24 +701,94 @@ offer, the model is told to read the history after it browsed or fetched pages o
 
 ### Your own proxy
 
-Settings → Proxy takes the address of an HTTP proxy you run: Burp, mitmproxy, ZAP, or a
-tunnel (`http://127.0.0.1:8080`). With one set, `web_fetch`, `web_download` and the
-browser tools send their requests through it instead of connecting themselves.
+Settings → Proxy takes the address of a proxy for the agent's traffic: Burp, mitmproxy,
+ZAP, a tunnel, or a proxy service a bug bounty program asks its hunters to come through.
+That one is the default. A target can have a proxy of its own, set in the target's form
+(**Proxy for this target**); chats on that target use it instead of the default. The
+chat header shows which proxy a chat goes through (`via host:port`).
+
+An address is one of:
+
+```
+http://127.0.0.1:8080
+http://user:password@host:port
+socks5://user:password@host:port
+```
+
+An HTTP proxy carries https too; its own address still starts with `http://`. A proxy
+service that picks the country in the user name is written the same way, for example
+`http://brd-customer-<id>-zone-<zone>-country-fr:<password>@brd.superproxy.io:33335`
+(take the real address from the service's own panel).
+
+What goes through it:
+
+- `web_fetch`, `web_download` and the browser tools.
+- Commands of the shell tool. A command runs with `HTTP_PROXY`, `HTTPS_PROXY` and
+  `ALL_PROXY` (and the lower-case names) set to an address on `127.0.0.1` that leads to
+  the proxy. curl, wget and most HTTP libraries follow them without being told, and the
+  model is told to hand `"$HTTP_PROXY"` to a scanner that wants a flag (`ffuf -x`,
+  `nuclei -proxy`, `sqlmap --proxy`). A program that ignores the variables, or cannot
+  speak through an HTTP proxy at all (nmap, masscan, ping, dig, ssh), connects from this
+  machine's own address: the model is told to ask you before it runs one against the
+  target.
+- Web sources of the knowledge base, when you tick **Send knowledge crawls through it
+  too**. Off by default: a crawl reads public pages and is not work on a target.
+
+What does not: the model providers (they have a setting of their own, below),
+`web_search` (SearXNG fetches the results; give it a proxy in its own settings, below),
+the `cve` and `profundis` lookups, MCP servers, and the Discord webhook.
+
+How it behaves:
 
 - Every host is still resolved and checked first: scope, local addresses, HunterAI's
   own API. The proxy is then asked for the host by name, so where the proxy connects is
   the proxy's own doing. That is the one check HunterAI gives up here: it no longer
   connects to the address it checked itself.
-- When the proxy does not answer, nothing is sent directly, and the tool result says
-  so. A proxy set to hide where requests come from must not fall back to showing it.
+- When the proxy does not carry a connection, nothing is sent directly, and the tool
+  result says why (nothing answers at its address, it refused the user name or the
+  password, it could not reach the host). A proxy set to hide where requests come from
+  must not fall back to showing it.
+- **Test** sends one request through the proxy to a page that says where it came from
+  (`https://www.cloudflare.com/cdn-cgi/trace`, then `https://api.ipify.org`) and shows
+  the address and the country that sites see. `HUNTERAI_PROXY_TEST_URL` names other
+  pages, comma-separated.
+- The password is stored with the address in HunterAI's database, in clear text, like
+  the rest of the data in `~/.hunterai`. It is never shown again, never sent to the
+  page, and never given to the model: a command sees only the address on `127.0.0.1`.
+  Should a tool ever print a stored address, the password in it is masked, and a call
+  whose arguments carry the login is refused. That local address asks for no login, so
+  while HunterAI runs, any program on this machine can use the proxy through it.
 - A site's certificate is checked as usual. Tick "It reads https" for a proxy that
   answers with its own certificates (Burp, mitmproxy, ZAP), and only then, and only for
-  a proxy on this machine, are its certificates accepted. Leave it off for a proxy
-  that only passes traffic on.
-- Shell commands are not sent through it. Give a command-line tool its own proxy
-  option (`curl -x`, `ffuf -x`, `nuclei -proxy`).
-- Only an HTTP proxy, without a user name and password. A SOCKS proxy needs an HTTP
-  proxy in front of it. It is not combined with the Caido switch: one or the other.
+  a proxy on this machine, are its certificates accepted. A proxy elsewhere has to pass
+  https through untouched. A proxy service that signs https again with a certificate of
+  its own is refused with a certificate error: use a zone or plan of that service that
+  does not (with Bright Data: Datacenter and ISP zones, or Residential after its
+  identity check).
+- A browser session ends when its chat's proxy changes (you set or cleared one, or
+  moved the chat to another target): the next `browser_navigate` starts a new session
+  on the new way out. A background process keeps the variables it was started with.
+- It is not combined with the Caido switch: Settings refuses to have both, and in a
+  chat whose target has a proxy of its own, the browser and `web_fetch` stop and say so
+  while Caido's recording is on.
+
+**The model providers** have a proxy of their own, in the same section of Settings
+(`HUNTERAI_PROVIDER_PROXY` in `.env`). It is separate on purpose: what you send to a
+model should not go through a proxy that a program asked for. Anthropic, Gemini, the
+OpenAI-compatible providers, and the Claude and Codex programs use it; Ollama on this
+machine never does.
+
+**SearXNG** takes a proxy in `~/.hunterai/searxng/settings.yml`:
+
+```yaml
+outgoing:
+  proxies:
+    all://:
+      - socks5h://user:password@host:1080
+```
+
+Then `scripts/searxng.sh stop` and `scripts/searxng.sh start`. It runs in a container,
+so `127.0.0.1` there is the container itself, not this machine.
 
 ### Effort and thinking, per model
 
@@ -836,6 +906,7 @@ shows a key again.
 | `OLLAMA_HOST` | Ollama address (default `http://127.0.0.1:11434`) |
 | `HUNTERAI_PORT` | Port (default 8790) |
 | `HUNTERAI_HOME` | Data folder (default `~/.hunterai`) |
+| `HUNTERAI_PROVIDER_PROXY` | Proxy the model providers are reached through (see "Your own proxy") |
 
 Codex needs no key: it is used when the `codex` CLI is installed and logged in.
 

@@ -474,6 +474,10 @@ async def _execute(conn_factory, run_id: str, chat_id: str, user_message_id: str
             system = build_system(chat.mode, target, [s.name for s in specs],
                                   chats.resolve_workdir(chat), goal=await goals.get(conn, chat_id),
                                   persona=persona)
+            from . import upstream
+            via = upstream.rule(await upstream.in_effect(conn, chat.target_id), [s.name for s in specs])
+            if via:
+                system += "\n\n" + via
             if later:
                 from .tools import on_demand
                 system += "\n\n" + on_demand.index(later)

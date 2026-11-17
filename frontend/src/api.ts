@@ -1,4 +1,4 @@
-import type { Skill, SkillInspection } from './types'
+import type { ProxyTest, Skill, SkillInspection } from './types'
 import type {
   ActivitySummary, QueuedMessage, CaidoExchange, CaidoRow, CaidoStatus, Checkup, FindingRow, SystemStatus,
   Memory, MemorySettings,
@@ -51,11 +51,11 @@ const q = (params: Record<string, string | null | undefined>) => {
 }
 
 export const listTargets = () => request<Target[]>('GET', '/api/targets')
-export const createTarget = (name: string, notes = '', scope?: Target['scope']) =>
-  request<Target>('POST', '/api/targets', scope ? { name, notes, scope } : { name, notes })
+export const createTarget = (name: string, notes = '', scope?: Target['scope'], proxy = '') =>
+  request<Target>('POST', '/api/targets', { name, notes, ...(scope ? { scope } : {}), ...(proxy.trim() ? { proxy } : {}) })
 /** What a pasted program brief says about scope. Reads only: nothing is saved. */
 export const readBrief = (text: string) => request<BriefResult>('POST', '/api/targets/brief', { text })
-export const updateTarget = (id: string, patch: Partial<Pick<Target, 'name' | 'notes' | 'scope'>>) =>
+export const updateTarget = (id: string, patch: Partial<Pick<Target, 'name' | 'notes' | 'scope' | 'proxy'>>) =>
   request<Target>('PATCH', `/api/targets/${id}`, patch)
 export const deleteTarget = (id: string) => request<void>('DELETE', `/api/targets/${id}`)
 
@@ -94,7 +94,12 @@ export const getSettings = () => request<Settings>('GET', '/api/settings')
 export const putSettings = (patch: Partial<Pick<Settings, 'default_provider' | 'default_model' | 'fallback_model' | 'permissions' | 'max_turns' | 'swarm_width' | 'decision_provider' | 'decision_model' | 'decision_gate' | 'kb_redact' | 'vision_model' | 'browser_via_caido' | 'answer_check' | 'mcp_on_demand' | 'notify_findings' | 'notify_min_severity' | 'decision_engine'>>) =>
   request<Settings>('PUT', '/api/settings', patch)
 /** The owner's own proxy for the agent's web traffic. The server refuses an address it cannot use and says why. */
-export const putProxy = (proxy: Partial<Pick<Settings, 'upstream_proxy' | 'upstream_proxy_intercepts'>>) => request<Settings>('PUT', '/api/settings', proxy)
+export const putProxy = (proxy: Partial<Pick<Settings, 'upstream_proxy' | 'upstream_proxy_intercepts' | 'upstream_proxy_kb' | 'provider_proxy'>>) =>
+  request<Settings>('PUT', '/api/settings', proxy)
+/** Send one request through a proxy: whether it answers, and the address and country that sites see. `address` is the
+ * field as it stands, saved or not; one shown without its password is tested with the stored password. */
+export const testProxy = (address: string, targetId?: string, providers = false) =>
+  request<ProxyTest>('POST', '/api/settings/proxy/test', { address, ...(targetId ? { target_id: targetId } : {}), ...(providers ? { providers } : {}) })
 export const putKey = (name: string, value: string) => request<void>('PUT', `/api/settings/keys/${name}`, { value })
 
 export const pendingPermissions = (runId: string) => request<PermissionRequest[]>('GET', `/api/runs/${runId}/permissions`)

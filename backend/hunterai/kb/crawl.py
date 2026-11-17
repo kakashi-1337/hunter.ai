@@ -218,15 +218,32 @@ def _same_site(a: str, b: str) -> bool:
 
 class Fetcher:
     """Pinned-address GET requests, one site. `allow_local` is the owner saying the site is
-    on this machine or network; without it such an address is refused, whoever names it."""
+    on this machine or network; without it such an address is refused, whoever names it.
+
+    With `via` set (the owner's proxy, switched on for crawls), a host is still looked up and
+    checked here, and the proxy is then asked for it by name. A local site is fetched directly
+    all the same: a proxy elsewhere cannot see it. When the proxy does not carry a request,
+    the page fails and nothing is fetched directly."""
 
     def __init__(self, allow_local: bool = False):
         self.allow_local = allow_local
+        self.via = None                                       # upstream.Upstream | None; `crawl` sets it
         self._ips: dict[str, str] = {}
         self._client = httpx.AsyncClient(follow_redirects=False, trust_env=False, timeout=TIMEOUT)
+        self._proxied: httpx.AsyncClient | None = None        # made at the first request that needs it
 
     async def close(self) -> None:
         await self._client.aclose()
+        if self._proxied is not None:
+            await self._proxied.aclose()
+
+    async def _through_proxy(self) -> httpx.AsyncClient:
+        if self._proxied is None:
+            from .. import hop
+            self._proxied = httpx.AsyncClient(follow_redirects=False, trust_env=False, timeout=TIMEOUT,
+                                              proxy=await hop.address(self.via),
+                                              verify=not self.via.presents_its_own_certificates)
+        return self._proxied
 
     async def _ip(self, host: str) -> str:
         if host not in self._ips:
@@ -257,9 +274,17 @@ class Fetcher:
         default = 443 if scheme == "https" else 80
         headers = {"Host": h.host if h.port == default else f"{h.host}:{h.port}", "User-Agent": USER_AGENT,
                    "Accept": "text/html,text/plain,application/pdf;q=0.9,*/*;q=0.5"}
+        proxied = self.via is not None and not resolve.is_local(ip)
+        if proxied:
+            from .. import hop
+            request = (await self._through_proxy()).stream("GET", url, headers={k: v for k, v in headers.items() if k != "Host"})
+        else:
+            request = self._client.stream("GET", httpx.URL(url).copy_with(host=ip), headers=headers,
+                                          extensions={"sni_hostname": h.host} if scheme == "https" else {})
         try:
-            async with self._client.stream("GET", httpx.URL(url).copy_with(host=ip), headers=headers,
-                                           extensions={"sni_hostname": h.host} if scheme == "https" else {}) as r:
+            async with request as r:
+                if proxied and hop.answered_itself(r):
+                    raise ToolError(f"the proxy at {self.via.address} did not carry it: {hop.answered_itself(r)}")
                 body = bytearray()
                 ctype = (r.headers.get("content-type") or "").split(";")[0].strip().lower()
                 if r.status_code != 200 or (ctype not in TYPES and not url.endswith("/robots.txt")):
@@ -272,6 +297,8 @@ class Fetcher:
         except httpx.TimeoutException:
             raise ToolError("timed out") from None
         except httpx.HTTPError as e:
+            if proxied:
+                raise ToolError(f"the proxy at {self.via.address} did not carry it: {hop.why(e)}") from None
             raise ToolError(f"request failed: {type(e).__name__}") from None
 
 
@@ -306,6 +333,9 @@ async def crawl(source: dict, dest: Path, budget: Budget, fetcher: Fetcher | Non
     max_depth = max(0, min(int(source.get("max_depth") if source.get("max_depth") is not None else MAX_DEPTH), MAX_DEPTH_LIMIT))
     own = fetcher is None
     fetcher = fetcher or Fetcher(bool(source.get("allow_local")))
+    if own:
+        from .. import upstream
+        fetcher.via = await upstream.for_crawls()           # the owner's proxy, when it is switched on for crawls
     dest.mkdir(parents=True, exist_ok=True)
     obey = bool(source.get("robots", True))
     rules: dict[str, robotparser.RobotFileParser] = {}      # by host: the start site, and a parent site taken up

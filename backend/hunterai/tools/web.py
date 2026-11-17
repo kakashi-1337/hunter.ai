@@ -170,16 +170,39 @@ def _named(method: str, url: str, headers: dict, body: bytes | None):
     return {"method": method, "url": url, "headers": send, "content": body}
 
 
-def _proxied(up) -> httpx.AsyncClient:
-    """A client that sends everything through the owner's proxy. The site's certificate is checked
-    unless the owner said the proxy reads https, and then only for a proxy on this machine."""
-    return httpx.AsyncClient(follow_redirects=False, trust_env=False, timeout=TIMEOUT, proxy=up.url,
+async def _own_proxy(ctx: ToolContext | None, caido_carries: bool = False):
+    """The owner's proxy for this call: the target's own, else the default from Settings. A target with a
+    proxy of its own is never carried by Caido instead: the program asked for that proxy, so the call stops."""
+    from .. import db, upstream
+    target_id = ctx.target.id if ctx is not None and ctx.target is not None else None
+    conn = await db.connect()
+    try:
+        if not caido_carries:
+            return await upstream.in_effect(conn, target_id)
+        if await upstream.of_target(conn, target_id) is not None:
+            raise ToolError("this target has a proxy of its own, and recording in Caido is switched on. The two are not "
+                            "combined: switch Caido's recording off in Settings for this work, or clear the target's "
+                            "proxy. Nothing was sent.")
+        return None
+    finally:
+        await conn.close()
+
+
+async def _proxied(up) -> httpx.AsyncClient:
+    """A client that sends everything to the owner's proxy, through the local hop that holds its login.
+    The site's certificate is checked unless the owner said the proxy reads https, and then only for a
+    proxy on this machine."""
+    from .. import hop
+    return httpx.AsyncClient(follow_redirects=False, trust_env=False, timeout=TIMEOUT, proxy=await hop.address(up),
                              verify=not up.presents_its_own_certificates)
 
 
-def _proxy_failed(up, host: str, e: Exception) -> ToolError:
-    return ToolError(f"the proxy at {up.address} did not carry the request to {host} ({type(e).__name__}). "
-                     "Nothing was sent directly. Check that the proxy is running, or clear it in Settings.")
+def _proxy_failed(up, host: str, why: str) -> ToolError:
+    return ToolError(f"the proxy at {up.address} did not carry the request to {host}: {why}. Nothing was sent "
+                     "directly. Check the proxy, or change it in Settings or in the target.")
+
+
+_PROXY_SAYS = ("proxy-status", "x-brd-", "x-luminati-")      # where a proxy service says why it answered itself
 
 
 async def _open(stack, client, ctx: ToolContext, method: str, url: str, headers: dict,
@@ -196,11 +219,18 @@ async def _open(stack, client, ctx: ToolContext, method: str, url: str, headers:
         try:
             response = await stack.enter_async_context(client.stream(
                 **(_named(method, url, headers, body) if via else _pinned(method, url, host, ips[0], headers, body))))
-        except httpx.TimeoutException as e:
-            raise (_proxy_failed(up, host.host, e) if up else ToolError(f"request to {host.host} timed out")) from None
+        except httpx.TimeoutException:
+            raise (_proxy_failed(up, host.host, "no answer in time") if up
+                   else ToolError(f"request to {host.host} timed out")) from None
         except httpx.HTTPError as e:
-            raise (_proxy_failed(up, host.host, e) if up
+            from .. import hop
+            raise (_proxy_failed(up, host.host, hop.why(e)) if up
                    else ToolError(f"request to {host.host} failed: {type(e).__name__}")) from None
+        if up is not None:             # an answer the hop or the proxy made itself is not the site's answer
+            from .. import hop
+            why = hop.answered_itself(response)
+            if why:
+                raise _proxy_failed(up, host.host, why)
         location = response.headers.get("location")
         if not (300 <= response.status_code < 400 and location):
             return response, url, followed
@@ -252,8 +282,7 @@ async def _fetch(ctx: ToolContext, args: dict) -> ToolResult:
     method = args.get("method") or "GET"
     body = args["body"].encode("utf-8") if args.get("body") is not None else None
     via, note = await _via_caido(ctx)
-    from .. import upstream
-    up = None if via is not None else await upstream.load()      # the owner's own proxy, when Caido is not the way
+    up = await _own_proxy(ctx, caido_carries=via is not None)      # the owner's own proxy, when Caido is not the way
     local, allowed = None, None
     if via is not None:
         from .. import caido
@@ -263,7 +292,7 @@ async def _fetch(ctx: ToolContext, args: dict) -> ToolResult:
         allowed = (await caido.egress()).local_ok.own
     try:
         async with asyncio.timeout(FETCH_DEADLINE), AsyncExitStack() as stack:
-            client = await stack.enter_async_context(_proxied(up) if up else _client(via))
+            client = await stack.enter_async_context(await _proxied(up) if up else _client(via))
             if local:
                 allowed.add(local)
                 stack.callback(allowed.discard, local)
@@ -309,7 +338,9 @@ async def _fetch(ctx: ToolContext, args: dict) -> ToolResult:
         lines.append("recorded in Caido: the caido tool lists this request and can show it in full")
     elif up is not None:
         lines.append(f"sent through the proxy at {up.address}")
-    elif note:
+        if status >= 400 and not args.get("raw"):       # a proxy service that answers itself says so in these
+            lines += [f"{k}: {v}" for k, v in headers.items() if k.lower().startswith(_PROXY_SAYS)]
+    if note:                 # Caido is switched on and could not be used: said whichever way the request went
         lines.append(note)
     return ToolResult("\n".join(lines) + "\n\n" + text)
 
@@ -363,9 +394,8 @@ async def _download(ctx: ToolContext, args: dict) -> ToolResult:
     made = False
     try:
         async with asyncio.timeout(DOWNLOAD_DEADLINE), AsyncExitStack() as stack:
-            from .. import upstream
-            up = await upstream.load()
-            client = await stack.enter_async_context(_proxied(up) if up else _client())
+            up = await _own_proxy(ctx)
+            client = await stack.enter_async_context(await _proxied(up) if up else _client())
             try:
                 response, final, _ = await _open(stack, client, ctx, "GET", args["url"], {}, None,
                                                  up and (up.host, up.port), up)

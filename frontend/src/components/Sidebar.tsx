@@ -9,7 +9,7 @@ import { FindingsPanel } from './FindingsPanel'
 import { confirmBox } from '../dialog'
 import { MachineStatus } from './MachineStatus'
 import { NewChatDialog } from './NewChatDialog'
-import { TargetForm } from './TargetForm'
+import { PROXY_REFUSED, TargetForm } from './TargetForm'
 import { emptyScopeForm, scopeOf, scopeProblemMark, scopeProblemText, type ScopeForm } from '../scope'
 
 function TargetDialog({ target, onClose }: { target: Target; onClose: () => void }) {
@@ -19,16 +19,17 @@ function TargetDialog({ target, onClose }: { target: Target; onClose: () => void
     ...emptyScopeForm(), name: target.name, notes: target.notes, inScope: target.scope.in.join('\n'), outScope: target.scope.out.join('\n'),
   }))
   const [unread, setUnread] = useState(false)
+  const [proxy, setProxy] = useState(target.proxy ?? '')       // as the server shows it: the password is never sent here
   const [problem, setProblem] = useState(() => scopeProblemText(target.scope_problems))
   const blocked = !form.name.trim() || unread
   const save = async () => {
     if (blocked) return
     try {
-      await api.updateTarget(target.id, { name: form.name.trim(), notes: form.notes, scope: scopeOf(form) })
+      await api.updateTarget(target.id, { name: form.name.trim(), notes: form.notes, scope: scopeOf(form), proxy })
       await refreshLists()
       onClose()
     } catch (e) {
-      if (e instanceof api.ApiError && e.status === 422) setProblem(e.message)     // a scope line that cannot be read: said in the form, beside the lists
+      if (e instanceof api.ApiError && e.status === 422) setProblem(e.message)     // a scope line or a proxy address that is refused: said in the form, beside the field
       else setError(e instanceof Error ? e.message : String(e))
     }
   }
@@ -42,7 +43,9 @@ function TargetDialog({ target, onClose }: { target: Target; onClose: () => void
         <button className="btn primary" disabled={blocked} onClick={() => void save()}>Save</button>
       </>}
     >
-      <TargetForm form={form} problem={problem} onChange={setForm} onUnread={setUnread} onEnter={() => void save()} focusName />
+      <TargetForm form={form} problem={problem} onChange={setForm} onUnread={setUnread} onEnter={() => void save()} focusName
+        proxy={proxy} targetId={target.id} proxyKept={target.proxy_password && proxy.trim() === (target.proxy ?? '')}
+        onProxy={(value) => { setProxy(value); setProblem((said) => (said.startsWith(PROXY_REFUSED) ? '' : said)) }} />
     </Modal>
   )
 }

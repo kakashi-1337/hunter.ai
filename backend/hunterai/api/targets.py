@@ -5,7 +5,7 @@ import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, field_validator
 
-from .. import brief
+from .. import brief, upstream
 from ..repo import targets
 from ..tools import resolve
 from .deps import get_conn, not_found
@@ -36,8 +36,18 @@ def _problems(scope: dict) -> list[dict]:
             for side, _ in _SIDES for line, why in resolve.unreadable(scope.get(side) or [])]
 
 
-def _view(target) -> dict:
-    return {**target.model_dump(), "scope_problems": _problems(target.scope)}
+def _view(target, up: upstream.Upstream | None) -> dict:
+    """A target as the app shows it. Its own proxy is shown with the user name and never with the password."""
+    return {**target.model_dump(), "scope_problems": _problems(target.scope),
+            "proxy": up.shown if up else "", "proxy_password": bool(up and up.password)}
+
+
+def _proxy(typed: str, was: upstream.Upstream | None = None) -> None:
+    """Refuse an address that cannot be a proxy, before anything of the request is kept."""
+    try:
+        upstream.typed(typed, was)
+    except upstream.ProxyError as e:
+        raise HTTPException(422, f"The proxy address is refused: {e}.") from None
 
 
 def _checked(scope: Scope) -> dict:
@@ -55,6 +65,7 @@ class TargetIn(BaseModel):
     name: str
     notes: str = ""
     scope: Scope | None = None
+    proxy: str | None = None      # this target's own proxy: http://user:password@host:port or socks5://…
 
     @field_validator("name")
     @classmethod
@@ -68,16 +79,22 @@ class TargetPatch(BaseModel):
     name: str | None = None
     notes: str | None = None
     scope: Scope | None = None
+    proxy: str | None = None      # "" clears it; left out or null: unchanged
 
 
 @router.get("")
 async def list_targets(conn=Depends(get_conn)):
-    return [_view(t) for t in await targets.list(conn)]
+    own = await upstream.of_targets(conn)
+    return [_view(t, own.get(t.id)) for t in await targets.list(conn)]
 
 
 @router.post("")
 async def create_target(body: TargetIn, conn=Depends(get_conn)):
-    return _view(await targets.create(conn, body.name, body.notes, _checked(body.scope) if body.scope else None))
+    scope = _checked(body.scope) if body.scope else None
+    if body.proxy is not None:
+        _proxy(body.proxy)
+    target = await targets.create(conn, body.name, body.notes, scope)
+    return _view(target, await upstream.put_target(conn, target.id, body.proxy) if body.proxy is not None else None)
 
 
 class BriefIn(BaseModel):
@@ -97,12 +114,17 @@ async def read_brief(body: BriefIn):
 async def update_target(tid: str, body: TargetPatch, conn=Depends(get_conn)):
     if not await targets.get(conn, tid):
         raise not_found("target")
-    fields = body.model_dump(exclude_unset=True, exclude={"scope"})
+    fields = body.model_dump(exclude_unset=True, exclude={"scope", "proxy"})
     if body.scope is not None:
         fields["scope"] = _checked(body.scope)
     if "name" in fields and not (fields["name"] or "").strip():
         fields.pop("name")
-    return _view(await targets.update(conn, tid, **fields))
+    if body.proxy is not None:
+        _proxy(body.proxy, await upstream.of_target(conn, tid))
+    target = await targets.update(conn, tid, **fields)
+    if body.proxy is not None:
+        return _view(target, await upstream.put_target(conn, tid, body.proxy))
+    return _view(target, await upstream.of_target(conn, tid))
 
 
 @router.delete("/{tid}", status_code=204)

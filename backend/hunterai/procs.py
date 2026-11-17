@@ -116,7 +116,8 @@ def _free() -> int:
 
 
 async def start(*, chat_id: str, run_id: str, step_id: str, command: str, cwd: str,
-                background: bool) -> Proc:
+                background: bool, env: dict[str, str] | None = None) -> Proc:
+    """`env` is added to what every command is given (`child_env`), and wins where both name a variable."""
     if _free() < FREE_DISK_FLOOR:
         raise ToolError(f"not enough free disk for process output: {_free() / 1024**3:.1f} GiB "
                         "free, the floor is 10 GiB")
@@ -125,7 +126,7 @@ async def start(*, chat_id: str, run_id: str, step_id: str, command: str, cwd: s
     fd = os.open(log, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
         process = await asyncio.create_subprocess_exec(
-            "/bin/bash", "-c", command, cwd=cwd, env=child_env(),
+            "/bin/bash", "-c", command, cwd=cwd, env={**child_env(), **(env or {})},
             stdin=asyncio.subprocess.PIPE if background else asyncio.subprocess.DEVNULL,
             stdout=fd, stderr=asyncio.subprocess.STDOUT, start_new_session=True)
     finally:

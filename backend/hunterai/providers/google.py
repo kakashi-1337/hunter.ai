@@ -6,12 +6,12 @@ import re
 
 import httpx
 from google import genai
-from google.genai import errors
+from google.genai import errors, types
 
 from .. import config
 from .base import (ModelInfo, Options, ProviderError, Stop, TextDelta, ThinkingDelta, ToolCall,
                    ToolSpec, Usage, WireMessage, call_id, error_from_status, render_file_block,
-                   rounds)
+                   rounds, way_out)
 
 KEY_ENV = "GEMINI_API_KEY"
 OPTIONS = ["temperature", "top_p", "max_tokens", "thinking", "thinking_budget", "effort"]
@@ -104,17 +104,21 @@ class GoogleProvider:
     def configured(self) -> bool:
         return bool(config.env(KEY_ENV))
 
-    def _get_client(self):
+    def _get_client(self, via: str | None = None):
+        """`via`: the local hop to the owner's proxy for the model providers (`base.way_out`), when one is set."""
         if self._client is not None:
             return self._client
         key = config.env(KEY_ENV)
         if not key:
             raise ProviderError("auth", f"{KEY_ENV} is not set")
+        if via:
+            return genai.Client(api_key=key, http_options=types.HttpOptions(
+                client_args={"proxy": via}, async_client_args={"proxy": via}))
         return genai.Client(api_key=key)
 
     async def models(self) -> list[ModelInfo]:
         try:
-            pager = await self._get_client().aio.models.list()
+            pager = await self._get_client(await way_out()).aio.models.list()
             out = []
             async for m in pager:
                 if "generateContent" not in (getattr(m, "supported_actions", None) or []):
@@ -169,7 +173,7 @@ class GoogleProvider:
 
     async def stream(self, model: str, system: str, messages: list[WireMessage],
                      options: Options, tools: list[ToolSpec] | None = None):
-        client = self._get_client()
+        client = self._get_client(await way_out())
         contents: list[dict] = []
         for m in messages:
             if m.role == "assistant" and any(b.type == "tool_call" for b in m.blocks):

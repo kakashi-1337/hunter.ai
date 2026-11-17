@@ -3,7 +3,7 @@ import * as api from '../api'
 import { emptyScopeForm, scopeOf, type ScopeForm } from '../scope'
 import { useStore } from '../store'
 import { Modal } from './Modal'
-import { TargetForm } from './TargetForm'
+import { PROXY_REFUSED, TargetForm } from './TargetForm'
 
 const NEW = 'new'
 
@@ -20,6 +20,7 @@ export function NewChatDialog({ onClose }: { onClose: () => void }) {
   })
   const [form, setForm] = useState<ScopeForm>(emptyScopeForm)
   const [unread, setUnread] = useState(false)
+  const [proxy, setProxy] = useState('')
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState('')
   const blocked = busy || (choice === NEW && (!form.name.trim() || unread))
@@ -30,13 +31,13 @@ export function NewChatDialog({ onClose }: { onClose: () => void }) {
     try {
       let targetId: string | null = choice || null
       if (choice === NEW) {
-        targetId = (await api.createTarget(form.name.trim(), form.notes, scopeOf(form))).id
+        targetId = (await api.createTarget(form.name.trim(), form.notes, scopeOf(form), proxy)).id
         await refreshLists()
       }
       await newChat(targetId)
       onClose()
     } catch (e) {
-      if (e instanceof api.ApiError && e.status === 422) setProblem(e.message)     // a scope line that cannot be read: said in the form, beside the lists
+      if (e instanceof api.ApiError && e.status === 422) setProblem(e.message)     // a scope line or a proxy address that is refused: said in the form, beside the field
       else setError(e instanceof Error ? e.message : String(e))
       setBusy(false)
     }
@@ -62,7 +63,8 @@ export function NewChatDialog({ onClose }: { onClose: () => void }) {
       </label>
       {choice === '' && <div className="hint">No scope is checked in a chat without a target. You can still give the chat a target later, in its header.</div>}
       {choice !== '' && choice !== NEW && <div className="hint">The chat works inside this target's scope and sees its notes and findings.</div>}
-      {choice === NEW && <TargetForm form={form} problem={problem} onChange={setForm} onUnread={setUnread} onEnter={() => void start()} focusName />}
+      {choice === NEW && <TargetForm form={form} problem={problem} onChange={setForm} onUnread={setUnread} onEnter={() => void start()} focusName
+        proxy={proxy} onProxy={(value) => { setProxy(value); setProblem((said) => (said.startsWith(PROXY_REFUSED) ? '' : said)) }} />}
     </Modal>
   )
 }

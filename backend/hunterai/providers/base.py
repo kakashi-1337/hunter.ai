@@ -243,3 +243,38 @@ class Provider(Protocol):
     # A provider that can use tools sets the class attribute `supports_tools = True`.
     def stream(self, model: str, system: str, messages: list[WireMessage], options: Options,
                tools: list[ToolSpec] | None = None) -> AsyncIterator[Event]: ...
+
+
+async def way_out() -> str | None:
+    """Where a provider's HTTP client is pointed when the owner set a proxy for the model providers: the
+    local hop to it, which holds its login. None when there is none: connect as before."""
+    from .. import hop, upstream
+    try:
+        up = upstream.of_providers()
+    except upstream.ProxyError as e:
+        raise ProviderError("unavailable", f"{upstream.PROVIDER_ENV} is not a proxy address: {e}. Set it again under "
+                                           "Settings, or clear it.") from None
+    if up is None:
+        return None
+    try:
+        return await hop.address(up)
+    except OSError as e:
+        raise ProviderError("unavailable", "the local hop to the proxy for the model providers could not start "
+                                           f"({type(e).__name__})") from None
+
+
+def cli_env(base: dict[str, str], via: str | None) -> dict[str, str]:
+    """The environment of a provider that is a program: `base`, with the way to the proxy when there is one.
+    The variable that holds the proxy's own address, and its password, is never handed on."""
+    from .. import upstream
+    env = {k: v for k, v in base.items() if k != upstream.PROVIDER_ENV}
+    return {**env, **upstream.variables(via)} if via else env
+
+
+def through_proxy(e: Exception) -> str:
+    """What to add to an error when a request made through the providers' proxy failed, "" when there is nothing to add."""
+    import httpx
+
+    from .. import hop
+    return f" (through the proxy for the model providers: {hop.why(e)})" if isinstance(e, httpx.ProxyError) else ""
+

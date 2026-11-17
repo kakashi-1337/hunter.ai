@@ -260,8 +260,8 @@ async def call(conn, *, chat_id: str, run_id: str, tc: ToolCall, offered: Collec
     # 4. decide
     def judge(p: Prepared) -> Verdict:
         if secrets.scrub_obj(args) != args:
-            return Verdict("deny", "secret", ("the arguments contain a HunterAI API key value",),
-                           (), False)
+            return Verdict("deny", "secret", ("the arguments contain a secret HunterAI keeps: an API key value, or "
+                                              "the login of a proxy",), (), False)
         v = permissions.decide(mode=chat.mode, tool=tool, prepared=p, target=target,
                                workdir=ctx.workdir, global_policy=global_policy,
                                chat_policy=chat_policy, grants=granted)

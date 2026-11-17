@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import * as api from '../api'
+import { proxyTestText } from '../proxy'
 import { useStore } from '../store'
 import type { McpStatus, Settings, ToolInfo } from '../types'
 import { McpManager } from './McpManager'
@@ -13,44 +14,94 @@ const KEY_LABELS: Record<string, string> = {
   XAI_API_KEY: 'xAI', GEMINI_API_KEY: 'Google Gemini',
 }
 
-/** The owner's own proxy for web_fetch, web_download and the browser. The server checks the address and says why it refuses one. */
-function ProxyRow({ settings, onSaved }: { settings: Settings; onSaved: (s: Settings) => void }) {
-  const [value, setValue] = useState(settings.upstream_proxy)
-  const [reads, setReads] = useState(settings.upstream_proxy_intercepts)      // the box answers the click at once
+/** One proxy address with its Save and Test buttons. The field holds the address as the server shows it: with the
+ * user name, never with the password. Sent back like that, the stored password is kept. */
+function ProxyAddress({ label, name, shown, kept, save, providers }: {
+  label: string
+  name: string                              // what a screen reader calls the field
+  shown: string
+  kept: boolean                             // a password is stored for it
+  save(value: string): Promise<string>      // the address as the server shows it now; rejects with the server's reason
+  providers?: boolean                       // it is the proxy for the model providers
+}) {
+  const [value, setValue] = useState(shown)
   const [error, setError] = useState('')
-  const [saving, setSaving] = useState(false)
-  const save = async (patch: Parameters<typeof api.putProxy>[0]) => {
-    setSaving(true)
+  const [found, setFound] = useState('')
+  const [busy, setBusy] = useState<'' | 'save' | 'test'>('')
+  const changed = value.trim() !== shown
+  const run = async (what: 'save' | 'test') => {
+    setBusy(what)
     setError('')
+    setFound('')
     try {
-      const s = await api.putProxy(patch)
-      setValue(s.upstream_proxy)
-      setReads(s.upstream_proxy_intercepts)
-      onSaved(s)
+      if (what === 'save') setValue(await save(value))      // a password that was typed leaves the page here
+      else setFound(proxyTestText(await api.testProxy(value, undefined, providers)))
     } catch (e) {
-      setReads(settings.upstream_proxy_intercepts)       // refused: back to what is saved
       setError(e instanceof Error ? e.message : String(e))
     } finally {
-      setSaving(false)
+      setBusy('')
     }
   }
-  const changed = value.trim() !== settings.upstream_proxy
   return (
     <>
       <div className="keyrow">
         <label className="field">
-          <span>HTTP proxy for web_fetch, web_download and the browser · <b className={settings.upstream_proxy ? 'state-on' : 'state-off'}>{settings.upstream_proxy ? 'in use' : 'none'}</b></span>
-          <input className="mono" spellCheck={false} value={value} placeholder="http://127.0.0.1:8080" aria-label="Proxy address"
-            onChange={(e) => setValue(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && changed && void save({ upstream_proxy: value })} />
+          <span>{label} · <b className={shown ? 'state-on' : 'state-off'}>{shown ? 'in use' : 'none'}</b>{kept && !changed ? ' · a password is stored and not shown' : ''}</span>
+          <input className="mono" spellCheck={false} autoComplete="off" value={value} aria-label={name}
+            placeholder="http://127.0.0.1:8080 or socks5://user:password@host:port"
+            onChange={(e) => { setFound(''); setValue(e.target.value) }} onKeyDown={(e) => e.key === 'Enter' && changed && void run('save')} />
         </label>
-        <button className="btn" disabled={!changed || saving} onClick={() => void save({ upstream_proxy: value })}>{saving ? 'Saving…' : value.trim() ? 'Save' : 'Clear'}</button>
+        <div className="row">
+          <button className="btn" disabled={!changed || busy !== ''} onClick={() => void run('save')}>{busy === 'save' ? 'Saving…' : value.trim() ? 'Save' : 'Clear'}</button>
+          <button className="btn" disabled={!value.trim() || busy !== ''} title="Send one request through it and see what sites see" onClick={() => void run('test')}>{busy === 'test' ? 'Testing…' : 'Test'}</button>
+        </div>
       </div>
       {error && <div className="ask-warning" role="alert">{error}</div>}
+      {found && <div className="hint" role="status">{found}</div>}
+    </>
+  )
+}
+
+/** The owner's proxies: the one for the agent's traffic to targets, with its switches, and the one for the model
+ * providers. The server checks each address and says why it refuses one. */
+function ProxyRow({ settings, onSaved }: { settings: Settings; onSaved: (s: Settings) => void }) {
+  const [reads, setReads] = useState(settings.upstream_proxy_intercepts)      // the box answers the click at once
+  const [crawls, setCrawls] = useState(settings.upstream_proxy_kb)
+  const [error, setError] = useState('')
+  const put = async (patch: Parameters<typeof api.putProxy>[0]) => {
+    const s = await api.putProxy(patch)
+    setReads(s.upstream_proxy_intercepts)
+    setCrawls(s.upstream_proxy_kb)
+    onSaved(s)
+    return s
+  }
+  const flip = async (patch: Parameters<typeof api.putProxy>[0]) => {
+    setError('')
+    try {
+      await put(patch)
+    } catch (e) {
+      setReads(settings.upstream_proxy_intercepts)       // refused: back to what is saved
+      setCrawls(settings.upstream_proxy_kb)
+      setError(e instanceof Error ? e.message : String(e))
+    }
+  }
+  return (
+    <>
+      <ProxyAddress label="Proxy for the agent's traffic: web_fetch, web_download, the browser and commands" name="Proxy address"
+        shown={settings.upstream_proxy} kept={settings.upstream_proxy_password} save={async (value) => (await put({ upstream_proxy: value })).upstream_proxy} />
+      {error && <div className="ask-warning" role="alert">{error}</div>}
       <label className="check"><input type="checkbox" checked={reads} disabled={!settings.upstream_proxy}
-        onChange={(e) => { setReads(e.target.checked); void save({ upstream_proxy_intercepts: e.target.checked }) }} />
+        onChange={(e) => { setReads(e.target.checked); void flip({ upstream_proxy_intercepts: e.target.checked }) }} />
         <span>It reads https (Burp, mitmproxy, ZAP): accept the certificates it presents. Only for a proxy on this machine. Leave it off for a proxy that only passes traffic on, so a site's certificate is still checked.</span>
       </label>
-      <div className="hint">Your own proxy: Burp, mitmproxy, ZAP, or a tunnel. Every host is still resolved and checked first (scope, local addresses); the proxy is then asked for the host by name. When the proxy does not answer, nothing is sent directly. Shell commands are not sent through it: give a command-line tool its own proxy option. Not combined with the Caido switch above.</div>
+      <label className="check"><input type="checkbox" checked={crawls} disabled={!settings.upstream_proxy}
+        onChange={(e) => { setCrawls(e.target.checked); void flip({ upstream_proxy_kb: e.target.checked }) }} />
+        <span>Send knowledge crawls through it too. Off: a web source of the knowledge base is fetched from this machine's own address. A site you mark as local is always fetched directly.</span>
+      </label>
+      <div className="hint">Your own proxy: Burp, mitmproxy, ZAP, a tunnel, or a proxy service (an http:// or socks5:// address, with a user name and password when it asks for them). It is the default; a target can have a proxy of its own, set in the target. Every host is still resolved and checked first (scope, local addresses); the proxy is then asked for the host by name. When the proxy does not carry a connection, nothing is sent directly. Commands get proxy variables that lead to it, through a local address that holds the login: a program that ignores them, or cannot speak through an HTTP proxy (nmap), connects from this machine itself. Not combined with the Caido switch above.</div>
+      <ProxyAddress label="Proxy for the model providers" name="Proxy for the model providers" providers
+        shown={settings.provider_proxy} kept={settings.provider_proxy_password} save={async (value) => (await put({ provider_proxy: value })).provider_proxy} />
+      <div className="hint">Separate on purpose: what you send to a model does not go through a proxy that a program asked for. Used for Anthropic, Gemini, the OpenAI-compatible providers, and the Claude and Codex programs; written to .env as HUNTERAI_PROVIDER_PROXY. Ollama on this machine is never sent through it.</div>
     </>
   )
 }

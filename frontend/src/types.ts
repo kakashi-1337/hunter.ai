@@ -130,7 +130,20 @@ export interface Target {
   notes: string
   scope: { in: string[]; out: string[] }
   scope_problems?: ScopeProblem[]
+  /** This target's own proxy as it is shown: with the user name, never with the password. "" for none. */
+  proxy?: string
+  proxy_password?: boolean
   created_at: string
+}
+
+/** What the test of a proxy found: whether it carried a request, and the address and country sites see. */
+export interface ProxyTest {
+  ok: boolean
+  through: string
+  ms: number
+  ip: string
+  country: string
+  error: string
 }
 
 /** What a pasted program brief says about scope: read by rules on the server, shown for review, never saved by itself. */
@@ -224,10 +237,17 @@ export interface Settings {
   notify_min_severity: Severity
   notify_webhook_set: boolean
   caido_available: boolean
-  /** The owner's own HTTP proxy for web_fetch, web_download and the browser: "http://host:port", or "" for none. */
+  /** The owner's proxy for the agent's traffic, as it is shown: "http://host:port" or "socks5://user@host:port"; "" for none. */
   upstream_proxy: string
+  /** A password is stored with it. It is never sent to the page. */
+  upstream_proxy_password: boolean
   /** It reads https and presents its own certificates (Burp, mitmproxy). Only honoured for a proxy on this machine. */
   upstream_proxy_intercepts: boolean
+  /** Knowledge crawls go through that proxy too. Off: they connect directly. */
+  upstream_proxy_kb: boolean
+  /** The proxy the model providers are reached through, as it is shown; "" for none. */
+  provider_proxy: string
+  provider_proxy_password: boolean
 }
 
 export interface Goal {

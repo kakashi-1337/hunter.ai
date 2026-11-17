@@ -3,6 +3,7 @@ process whose output is read by offset."""
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import re
 import time
 from pathlib import Path
@@ -53,20 +54,52 @@ def _finished(p: procs.Proc, seconds: float, timeout: float | None) -> ToolResul
                             "full_output_path": p.log_path})
 
 
+async def _way_out(ctx: ToolContext):
+    """(the proxy in effect for this chat or None, the variables that send a command's traffic to it).
+    The variables name a hop on loopback, which holds the login: a command, and the model that wrote it,
+    never see it."""
+    from .. import hop, upstream
+    up = await upstream.load(ctx.target.id if ctx.target is not None else None)
+    if up is None:
+        return None, {}
+    try:
+        return up, upstream.variables(await hop.address(up))
+    except OSError as e:
+        raise ToolError(f"the local hop to the proxy at {up.address} could not start ({type(e).__name__}). The command "
+                        "was not run: without the hop its traffic would have gone out directly.") from None
+
+
+def _not_carried(up, before: int) -> str:
+    """A line for the end of a command's output when the proxy did not carry what the command asked for."""
+    from .. import hop
+    count, why = hop.refused(up)
+    if count <= before:
+        return ""
+    n = count - before
+    return (f"\n[the proxy at {up.address} did not carry {n} connection{'' if n == 1 else 's'} while this command "
+            f"ran: {why}. Nothing was sent directly.]")
+
+
 async def _execute(ctx: ToolContext, args: dict) -> ToolResult:
     cwd = ctx.prepared.cwd
     background = bool(args.get("background"))
     if background and len(procs.running(ctx.chat_id)) >= procs.MAX_PROCS_PER_CHAT:
         raise ToolError(f"this chat already has {procs.MAX_PROCS_PER_CHAT} background processes "
                         "running; kill one first")
+    up, env = await _way_out(ctx)
+    if up is not None:
+        from .. import hop
+        before = hop.refused(up)[0]
     began = time.monotonic()
     p = await procs.start(chat_id=ctx.chat_id, run_id=ctx.run_id, step_id=ctx.step_id,
-                          command=args["command"], cwd=cwd, background=background)
+                          command=args["command"], cwd=cwd, background=background, env=env)
     if not background:
         timeout = float(args.get("timeout") or procs.DEFAULT_TIMEOUT)
         done = await procs.wait(p.id, timeout)
         took = time.monotonic() - began
-        return _finished(done, took, timeout if done.status == "killed" and took >= timeout else None)
+        result = _finished(done, took, timeout if done.status == "killed" and took >= timeout else None)
+        note = _not_carried(up, before) if up is not None else ""
+        return dataclasses.replace(result, text=result.text + note) if note else result
     deadline = time.monotonic() + procs.BACKGROUND_FIRST_WAIT
     while time.monotonic() < deadline and p.id in [x.id for x in procs.running(ctx.chat_id)]:
         await asyncio.sleep(0.05)

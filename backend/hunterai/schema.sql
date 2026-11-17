@@ -6,6 +6,12 @@ create table if not exists targets (
   created_at text not null
 );
 
+-- A target's own proxy, for the program that asks its hunters to come through one. The address holds the password.
+create table if not exists target_proxies (
+  target_id text primary key references targets(id) on delete cascade,
+  url text not null
+);
+
 create table if not exists chats (
   id text primary key,
   target_id text references targets(id) on delete set null,

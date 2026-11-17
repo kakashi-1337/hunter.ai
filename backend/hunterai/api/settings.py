@@ -46,6 +46,8 @@ class SettingsIn(BaseModel):
     browser_via_caido: bool | None = None   # the browser tools' traffic goes through Caido and is recorded there
     upstream_proxy: str | None = None       # the owner's own HTTP proxy for the agent's web traffic; "" for none
     upstream_proxy_intercepts: bool | None = None   # it reads https: accept the certificates it presents
+    upstream_proxy_kb: bool | None = None   # knowledge crawls go through the proxy too (off: they connect directly)
+    provider_proxy: str | None = None       # the proxy the model providers are reached through; "" for none
     decision_engine: bool | None = None     # the built-in decide_* tools and the risk gate (off: another engine is used)
 
 
@@ -59,9 +61,17 @@ def _machine() -> dict:
     return {"cores": os.cpu_count(), "memory_gb": memory}
 
 
+def _provider_proxy() -> upstream.Upstream | None:
+    try:
+        return upstream.of_providers()
+    except upstream.ProxyError:
+        return None                  # written by hand and not an address: shown as none, and the providers say so
+
+
 async def _view(conn) -> dict:
     provider, model = await default_provider_model(conn)
     up = await upstream.get(conn)
+    models_via = _provider_proxy()
     return {
         "default_provider": provider,
         "default_model": model,
@@ -87,8 +97,12 @@ async def _view(conn) -> dict:
         "vision_model": await settings.get(conn, "vision_model") or None,
         "browser_via_caido": bool(await settings.get(conn, "browser_via_caido", False)),
         "caido_available": caido.available(),
-        "upstream_proxy": up.url if up else "",
+        "upstream_proxy": up.shown if up else "",          # with its user name, never with its password
+        "upstream_proxy_password": bool(up and up.password),
         "upstream_proxy_intercepts": bool(up and up.intercepts),
+        "upstream_proxy_kb": bool(await settings.get(conn, "upstream_proxy_kb", False)),
+        "provider_proxy": models_via.shown if models_via else "",
+        "provider_proxy_password": bool(models_via and models_via.password),
     }
 
 
@@ -105,30 +119,43 @@ async def _put_proxy(conn, fields: dict) -> None:
     reads = fields.pop("upstream_proxy_intercepts", None)
     was = await upstream.get(conn)
     try:
-        address = upstream.parse(typed) if typed is not None else (was and (was.host, was.port))
+        up = upstream.typed(typed, was) if typed is not None else was
     except upstream.ProxyError as e:
         raise HTTPException(400, f"proxy: {e}") from None
     caido_on = fields["browser_via_caido"] if fields.get("browser_via_caido") is not None \
         else bool(await settings.get(conn, "browser_via_caido", False))
-    if address and caido_on:
+    if up and caido_on:
         raise HTTPException(400, "The browser and web_fetch already go through Caido. Switch that off to use another proxy."
                             if typed is not None else
                             "A proxy is set for the agent's web traffic. Clear it to send the traffic through Caido instead.")
     intercepts = bool(reads) if given else bool(was and was.intercepts)
-    if address and intercepts and not upstream.on_this_machine(address[0]):
+    if up and intercepts and not upstream.on_this_machine(up.host):
         if given and reads:
             raise HTTPException(400, "Only a proxy on this machine may read https: one elsewhere has to pass the site's "
                                 "certificate on, and it is checked.")
         intercepts = False               # the proxy moved to another machine: its switch does not move with it
-    await settings.put(conn, "upstream_proxy", upstream.Upstream(*address).url if address else "")
-    await settings.put(conn, "upstream_proxy_intercepts", bool(address) and intercepts)
+    await settings.put(conn, "upstream_proxy", up.url if up else "")
+    await settings.put(conn, "upstream_proxy_intercepts", bool(up) and intercepts)
 
 
 @router.put("")
 async def put_settings(body: SettingsIn, conn=Depends(get_conn)):
     fields = body.model_dump(exclude_unset=True)
+    typed = fields.pop("provider_proxy", None)
+    if typed is not None:                # checked before anything of this request is written
+        try:
+            models_via = upstream.typed(typed, _provider_proxy())
+        except upstream.ProxyError as e:
+            raise HTTPException(400, f"proxy for the model providers: {e}") from None
     if {"upstream_proxy", "upstream_proxy_intercepts"} & fields.keys() or fields.get("browser_via_caido"):
         await _put_proxy(conn, fields)
+    if typed is not None:
+        envfile.set_var(config.env_file(), upstream.PROVIDER_ENV, models_via.url if models_via else "")
+        registry._instances.clear()      # adapters pick the new way out up on next use
+        providers_api.clear_cache()
+    if fields.get("upstream_proxy_kb") is not None:
+        await settings.put(conn, "upstream_proxy_kb", bool(fields["upstream_proxy_kb"]))
+    fields.pop("upstream_proxy_kb", None)
     if "permissions" in fields:
         try:
             policy = permissions.Policy(**(fields.pop("permissions") or {}))
@@ -174,6 +201,36 @@ async def put_settings(body: SettingsIn, conn=Depends(get_conn)):
         if value:
             await settings.put(conn, key, value)
     return await _view(conn)
+
+
+class ProxyTestIn(BaseModel):
+    address: str | None = None       # as it stands in a form, saved or not; left out: the proxy that is in effect
+    target_id: str | None = None     # the target whose own proxy is meant
+    providers: bool = False          # the proxy for the model providers is meant
+
+
+@router.post("/proxy/test")
+async def test_proxy(body: ProxyTestIn, conn=Depends(get_conn)):
+    """Send one request through a proxy to a page that says where it came from: whether the proxy answers, and
+    the address and country that sites see. An address shown without its password is tested with the stored one."""
+    from dataclasses import replace
+
+    from .. import hop
+    default = await upstream.get(conn)
+    if body.providers:
+        was = stored = _provider_proxy()
+    else:
+        own = await upstream.of_target(conn, body.target_id) if body.target_id else None
+        was, stored = (own if body.target_id else default), (own or default)
+    try:
+        up = upstream.typed(body.address, was) if (body.address or "").strip() else stored
+    except upstream.ProxyError as e:
+        raise HTTPException(400, f"proxy: {e}") from None
+    if up is None:
+        raise HTTPException(400, "No proxy is set. Type an address to test it.")
+    if not body.providers and default and default.intercepts and (up.scheme, up.host, up.port) == (default.scheme, default.host, default.port):
+        up = replace(up, intercepts=True)        # the same proxy as the one in Settings: its switch goes with it
+    return await hop.probe(up)
 
 
 @router.put("/keys/{name}", status_code=204)

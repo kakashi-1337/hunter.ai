@@ -55,6 +55,7 @@ class Session:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     _ips: dict[str, bool] = field(default_factory=dict)
     via_caido: bool = False                               # its traffic goes through Caido and is recorded there
+    way: tuple | None = None                              # what `_way_out` said when it was launched; None: never asked
 
 
 _sessions: dict[str, Session] = {}
@@ -114,7 +115,7 @@ async def _launch(chat_id: str) -> Session:
     except ImportError:
         raise ToolError("the browser is not installed (the camoufox package is missing)") from None
     proxy = browser_proxy.Proxy()
-    via, recorded, own_certificates = await _way_out()      # before anything is started: a Caido that cannot be reached is an error here
+    via, recorded, own_certificates = await _way_out(chat_id)      # before anything is started: a Caido that cannot be reached is an error here
     proxy.via = via
     port = await proxy.start()
     cm = None
@@ -133,7 +134,7 @@ async def _launch(chat_id: str) -> Session:
                 pass
         raise ToolError(f"the browser could not start: {type(e).__name__}: {str(e)[:200]}. "
                         "Run `camoufox fetch` once if its browser was never downloaded.") from None
-    s = Session(chat_id, cm, browser, page, proxy=proxy, via_caido=recorded)
+    s = Session(chat_id, cm, browser, page, proxy=proxy, via_caido=recorded, way=(via, recorded, own_certificates))
     proxy.local_ok = s.local_ok                       # one set: what allow() adds, the proxy honours
     proxy.on_block = lambda why: _log(s.console, {"type": "blocked", "text": why})
     page.set_default_timeout(ACTION_TIMEOUT_MS)
@@ -174,17 +175,35 @@ async def _launch(chat_id: str) -> Session:
     return s
 
 
-async def _way_out() -> tuple[tuple[str, int] | None, bool, bool]:
+CRAWL = "kb-crawl"          # the knowledge crawler's own session: it belongs to no chat
+
+
+async def _way_out(chat_id: str = ""):
     """(the proxy the browser's checked connections are handed to, whether that is Caido, whether its
-    certificates are accepted). Caido when its switch is on, else the owner's own proxy, else none."""
+    certificates are accepted). Caido when its switch is on, else the proxy in effect for the chat's
+    target (its own, or the default from Settings), else none. A target with a proxy of its own is never
+    carried by Caido instead: the program asked for that proxy."""
+    from . import db, upstream
+    from .repo import chats
+    conn = await db.connect()
+    try:
+        if chat_id == CRAWL:
+            own, up = None, await upstream.of_crawls(conn)
+        else:
+            chat = await chats.get(conn, chat_id) if chat_id else None
+            own = await upstream.of_target(conn, chat.target_id if chat else None)
+            up = own or await upstream.get(conn)
+    finally:
+        await conn.close()
     via = await _caido_proxy()
     if via is not None:
-        return via, True, True
-    from . import upstream
-    up = await upstream.load()
+        if own is not None:
+            raise ToolError("this target has a proxy of its own, and recording in Caido is switched on. The two are not "
+                            "combined: switch Caido's recording off in Settings for this work, or clear the target's proxy.")
+        return upstream.Upstream(*via), True, True
     if up is None:
         return None, False, False
-    return (up.host, up.port), False, up.presents_its_own_certificates
+    return up, False, up.presents_its_own_certificates
 
 
 async def _caido_proxy() -> tuple[str, int] | None:
@@ -213,9 +232,17 @@ async def get(chat_id: str, *, create: bool = False) -> Session:
     """The chat's session. ToolError when there is none and `create` is off."""
     global _reaper
     s = _sessions.get(chat_id)
+    moved = False
+    if s is not None and s.way is not None and await _way_out(chat_id) != s.way:
+        # The owner changed the proxy, or the chat its target. The session ends with the way out it had: its
+        # open connections were made through the old one, and its cookies were given to it there.
+        await close(chat_id)
+        s, moved = None, True
     if s is None:
         if not create:
-            raise ToolError("no page is open in this chat's browser; open one with browser_navigate first")
+            raise ToolError("the proxy for this chat changed, so its browser session was closed: a session does not "
+                            "carry on through another way out. Open the page again with browser_navigate." if moved else
+                            "no page is open in this chat's browser; open one with browser_navigate first")
         if len(_sessions) >= MAX_SESSIONS:
             idle = [x for x in _sessions.values() if not x.lock.locked()]
             if not idle:

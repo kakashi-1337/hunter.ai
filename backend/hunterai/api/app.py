@@ -32,6 +32,8 @@ async def lifespan(app: FastAPI):
     conn = await db.connect()
     try:
         await db.migrate(conn)
+        from .. import upstream
+        await upstream.remember(conn)       # proxy passwords are scrubbed from tool output from the first call on
         await engine.recover(conn)
         await procs.recover(conn)
     finally:
@@ -56,8 +58,11 @@ async def lifespan(app: FastAPI):
                 await procs.shutdown()
             finally:
                 try:
-                    from .. import browser
-                    await browser.shutdown()
+                    from .. import browser, hop
+                    try:
+                        await browser.shutdown()
+                    finally:
+                        await hop.shutdown()      # after the commands and the browser that used a hop are gone
                 finally:
                     try:
                         from .. import caido

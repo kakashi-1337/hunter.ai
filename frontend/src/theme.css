@@ -90,6 +90,7 @@ a { color: var(--info); }
 .chat-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
 .chat-head .title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 34ch; }
 .chat-head select { padding: 3px 6px; max-width: 30ch; }
+.chat-head .via-proxy { font-size: 12px; padding: 2px 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--accent); white-space: nowrap; max-width: 36ch; overflow: hidden; text-overflow: ellipsis; }
 .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
 .seg button { border-radius: 0; border: 0; padding: 3px 10px; color: var(--muted); }
 .seg button.on { background: var(--accent); color: var(--accent-ink); font-weight: 600; }

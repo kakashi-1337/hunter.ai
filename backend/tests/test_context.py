@@ -162,5 +162,5 @@ async def test_claude_models_with_a_small_window_are_not_listed(monkeypatch):
                     yield Listed(i)
 
     provider = a.AnthropicProvider()
-    monkeypatch.setattr(provider, "_get_client", lambda: Client)
+    monkeypatch.setattr(provider, "_get_client", lambda via=None: Client)
     assert [m.id for m in await provider.models()] == ["claude-opus-5-5", "claude-sonnet-5"]

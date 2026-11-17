@@ -2,6 +2,7 @@ import asyncio
 
 import pytest
 
+from hunterai.upstream import Upstream
 from hunterai import browser_proxy
 from hunterai.tools.base import ToolError
 
@@ -100,7 +101,7 @@ async def test_with_a_carrying_proxy_checked_connections_are_handed_to_it_by_nam
         await w.drain(); w.close()
     server = await asyncio.start_server(carrier, "127.0.0.1", 0)
     p = browser_proxy.Proxy()
-    p.via = ("127.0.0.1", server.sockets[0].getsockname()[1])
+    p.via = Upstream("127.0.0.1", server.sockets[0].getsockname()[1])
     port = await p.start()
     try:
         r, w = await asyncio.open_connection("127.0.0.1", port)
@@ -119,3 +120,56 @@ async def test_with_a_carrying_proxy_checked_connections_are_handed_to_it_by_nam
     finally:
         await p.stop()
         server.close(); await server.wait_closed()
+
+
+async def _through(proxy, request: bytes) -> str:
+    reader, writer = await asyncio.open_connection("127.0.0.1", proxy.port)
+    writer.write(request)
+    await writer.drain()
+    answer = (await reader.read()).decode("latin-1")
+    writer.close()
+    return answer
+
+
+@pytest.mark.parametrize("kind", ["http", "socks5"])
+async def test_a_carrying_proxy_with_a_login_is_given_it_for_plain_requests_and_for_tunnels(kind, dns):
+    from tests.proxies import HttpProxy, Site, Socks5Proxy, running
+    dns[0]["shop.acme.test"] = ["203.0.113.5"]
+    site = Site()
+    carrier = (HttpProxy if kind == "http" else Socks5Proxy)(site, "hunter", "s3cret")
+    p = browser_proxy.Proxy()
+    async with running(site, carrier):
+        p.via = Upstream("127.0.0.1", carrier.port, scheme=kind, user="hunter", password="s3cret")
+        await p.start()
+        try:
+            plain = await _through(p, b"GET http://shop.acme.test/cart?x=1 HTTP/1.1\r\nHost: shop.acme.test\r\n\r\n")
+            assert "site says: shop.acme.test/cart?x=1" in plain
+            reader, writer = await asyncio.open_connection("127.0.0.1", p.port)
+            writer.write(b"CONNECT shop.acme.test:443 HTTP/1.1\r\nHost: shop.acme.test:443\r\n\r\n")
+            assert b" 200 " in await reader.readuntil(b"\r\n\r\n")
+            writer.write(b"GET /inside HTTP/1.1\r\nHost: shop.acme.test\r\nConnection: close\r\n\r\n")
+            assert "site says: shop.acme.test/inside" in (await reader.read()).decode()
+            writer.close()
+        finally:
+            await p.stop()
+    named = [a for a in carrier.asked]
+    assert named == ([("GET", "http://shop.acme.test/cart?x=1"), ("CONNECT", "shop.acme.test:443")] if kind == "http"
+                     else [("shop.acme.test", 80), ("shop.acme.test", 443)])
+    assert "Proxy-Authorization" not in str(site.requests) and len(site.requests) == 2      # the login stays with the proxy
+
+
+async def test_a_carrying_proxy_that_refuses_the_login_is_named_in_the_refusal(dns):
+    from tests.proxies import Site, Socks5Proxy, running
+    dns[0]["shop.acme.test"] = ["203.0.113.5"]
+    site, blocked = Site(), []
+    carrier = Socks5Proxy(site, "hunter", "s3cret")
+    p = browser_proxy.Proxy(on_block=blocked.append)
+    async with running(site, carrier):
+        p.via = Upstream("127.0.0.1", carrier.port, scheme="socks5", user="hunter", password="wrong")
+        await p.start()
+        try:
+            answer = await _through(p, b"GET http://shop.acme.test/ HTTP/1.1\r\nHost: shop.acme.test\r\n\r\n")
+        finally:
+            await p.stop()
+    assert answer.startswith("HTTP/1.1 502") and "refused the user name or the password" in answer
+    assert site.requests == [] and "wrong" not in answer and blocked and "wrong" not in blocked[0]

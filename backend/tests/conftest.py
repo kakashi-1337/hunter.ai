@@ -108,6 +108,9 @@ async def clean_procs():
     yield
     await procs.shutdown()
     procs.reset()
+    from hunterai import hop, upstream
+    await hop.shutdown()           # a hop to the owner's proxy belongs to the test that asked for it
+    upstream._logins.clear()       # and so does a login it read
     from hunterai.tools import search
     search.set_provider(None)      # a fake provider never leaks into another test
 

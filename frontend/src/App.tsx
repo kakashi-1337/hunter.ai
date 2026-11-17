@@ -14,6 +14,7 @@ import { Sidebar } from './components/Sidebar'
 import { TrajectoryPanel } from './components/TrajectoryPanel'
 import * as api from './api'
 import { confirmBox } from './dialog'
+import { proxyInEffect } from './proxy'
 import { useChatView, useStore } from './store'
 import { AUTO_APPROVE_WARNING, withAuto } from './tree'
 import type { Mode } from './types'
@@ -23,6 +24,7 @@ const MODES: Mode[] = ['plan', 'pentesting', 'coding']
 function ChatHeader({ trajectoryOpen, onToggleTrajectory }: { trajectoryOpen: boolean; onToggleTrajectory: () => void }) {
   const chat = useChatView()
   const targets = useStore((s) => s.targets)
+  const settings = useStore((s) => s.settings)
   const newChat = useStore((s) => s.newChat)
   const busy = useStore((s) => s.live !== null)
   const patchChat = useStore((s) => s.patchChat)
@@ -52,6 +54,7 @@ function ChatHeader({ trajectoryOpen, onToggleTrajectory }: { trajectoryOpen: bo
     return () => { stop = true }
   }, [chatId, steps, busy, panel])
   if (!chat) return null
+  const via = proxyInEffect(targets.find((t) => t.id === chat.target_id), settings)
   return (
     <header className="chat-head">
       <span className="title grow" title={chat.title}>{chat.title}</span>
@@ -59,6 +62,8 @@ function ChatHeader({ trajectoryOpen, onToggleTrajectory }: { trajectoryOpen: bo
         <option value="">No target</option>
         {targets.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
       </select>
+      {via && <span className="via-proxy mono" role="status" aria-label={`Traffic of this chat goes through the proxy at ${via.address}`}
+        title={`${via.own ? "This target's own proxy" : 'The proxy from Settings'}: web_fetch, web_download, the browser and commands of this chat go out through it. When it does not carry a connection, nothing is sent directly.`}>via {via.address}</span>}
       <select aria-label="Persona" title="Who the assistant is for this chat" value={chat.persona_id ?? ''} disabled={busy} onChange={(e) => void choosePersona(e.target.value || null)}>
         <option value="">No persona</option>
         {personas.map((p) => <option key={p.id} value={p.id} title={p.description}>{p.name}</option>)}

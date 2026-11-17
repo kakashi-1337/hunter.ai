@@ -12,7 +12,7 @@ import httpx
 from .. import config
 from .base import (IMAGE_OMITTED, ModelInfo, Options, ProviderError, Stop, TextDelta,
                    ThinkingDelta, ToolCall, ToolSpec, Usage, WireMessage, error_from_status,
-                   flatten_text, parse_arguments, render_file_block, rounds, safe_call_id)
+                   flatten_text, parse_arguments, render_file_block, rounds, safe_call_id, through_proxy, way_out)
 
 BASIC = ["temperature", "top_p", "max_tokens"]
 TIMEOUT = httpx.Timeout(120.0, connect=30.0)   # a busy provider can take more than ten seconds to accept a connection
@@ -92,7 +92,7 @@ class OpenAICompatProvider:
 
     async def models(self) -> list[ModelInfo]:
         try:
-            async with httpx.AsyncClient(timeout=10.0) as c:
+            async with httpx.AsyncClient(timeout=10.0, proxy=await way_out()) as c:
                 r = await c.get(f"{self.base_url}/models", headers=self._headers())
                 r.raise_for_status()
                 ids = [m["id"] for m in r.json().get("data", []) if m.get("id")]
@@ -178,9 +178,15 @@ class OpenAICompatProvider:
         usage, reason = Usage(0, 0), "end"
         pending: dict[int, dict] = {}   # tool-call fragments by index
         try:
-            async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+            via = await way_out()
+            async with httpx.AsyncClient(timeout=TIMEOUT, proxy=via) as client:
                 async with client.stream("POST", f"{self.base_url}/chat/completions",
                                          headers=headers, json=payload) as r:
+                    if via:                  # an answer the proxy made itself is not the provider's
+                        from .. import hop
+                        if hop.answered_itself(r):
+                            raise ProviderError("unavailable", f"{self.name} was not reached: the proxy for the model "
+                                                               f"providers did not carry the request ({hop.answered_itself(r)})")
                     if r.status_code >= 400:
                         body = (await r.aread()).decode("utf-8", "replace")
                         raise error_from_status(r.status_code, self._scrub(body),
@@ -226,7 +232,7 @@ class OpenAICompatProvider:
             raise ProviderError("timeout", f"{self.name} timed out") from e
         except httpx.HTTPError as e:
             raise ProviderError("unavailable",
-                                f"{self.name} unreachable: {type(e).__name__}") from e
+                                f"{self.name} unreachable: {type(e).__name__}{through_proxy(e)}") from e
         taken: set[str] = set()
         for index in sorted(pending):
             slot = pending[index]
