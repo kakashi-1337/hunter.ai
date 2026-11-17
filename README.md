@@ -892,6 +892,19 @@ target, with filters, and exports what is shown as Markdown (evidence included: 
 before you send it anywhere). A `swarm` call shows one line per subagent in the chat: its
 brief, whether it waits, works, or is finished, and whether its answer was verified.
 
+## Update
+
+Stop HunterAI (Ctrl+C where it runs), bring this folder up to date (`git pull`), and start it
+again with `scripts/start.sh`, which installs what changed and builds the interface again.
+
+A server that is left running goes on with the code it started with, while the interface is
+built from the new files and asks it for things it does not know. HunterAI notices this: the
+server compares its own code on disk with what it loaded at its start, and the bottom of the
+sidebar then says **Restart HunterAI** until you do. The same notice appears after you edit
+one of its files, and goes away when the edit is undone. A part of the page that cannot be
+drawn (a dialog that needs something the old server does not send) shows what went wrong in
+its own place, with a way to draw it again; the rest of the page stays as it is.
+
 ## Configuration
 
 API keys are read from `.env` in this folder (mode 600, git-ignored). They can be set in

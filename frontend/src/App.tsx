@@ -2,8 +2,10 @@ import { useEffect, useState } from 'react'
 import { AdvancedOptions } from './components/AdvancedOptions'
 import { ChatView } from './components/ChatView'
 import { DialogHost } from './components/DialogHost'
+import { ErrorBoundary } from './components/ErrorBoundary'
 import { GoalPanel } from './components/GoalPanel'
 import { KnowledgeView } from './components/KnowledgeView'
+import { DialogGuard } from './components/Modal'
 import { ModelPicker } from './components/ModelPicker'
 import { PermissionsPanel } from './components/PermissionsPanel'
 import { ProcessPanel } from './components/ProcessPanel'
@@ -101,6 +103,7 @@ export default function App() {
   })
   const [setupOpen, setSetupOpen] = useState(false)
   const skillsOpen = useStore((s) => s.skillsOpen)
+  const shown = useStore((s) => s.activeChatId) ?? ''      // a part that failed to draw is drawn again for another chat
   useEffect(() => { void load() }, [load])
   // A first start with no model to talk to opens the setup check by itself; later it is under Settings.
   useEffect(() => { api.systemCheckup().then((c) => { if (!c.ready) setSetupOpen(true) }).catch(() => {}) }, [])
@@ -118,7 +121,8 @@ export default function App() {
 
   return (
     <div className="app">
-      <Sidebar onSettings={() => setSettingsOpen(true)} />
+      <ErrorBoundary><Sidebar onSettings={() => setSettingsOpen(true)} /></ErrorBoundary>
+      <ErrorBoundary resetKey={`${view}:${shown}`}>
       {view === 'knowledge' ? <KnowledgeView onClose={() => setView('chat')} /> : <ChatView header={
         <>
           <ChatHeader trajectoryOpen={trajectoryOpen} onToggleTrajectory={() => setTrajectoryOpen((o) => !o)} />
@@ -130,11 +134,12 @@ export default function App() {
           )}
         </>
       } />}
-      {trajectoryOpen && view === 'chat' && <TrajectoryPanel onClose={() => setTrajectoryOpen(false)} />}
+      </ErrorBoundary>
+      {trajectoryOpen && view === 'chat' && <ErrorBoundary resetKey={shown}><TrajectoryPanel onClose={() => setTrajectoryOpen(false)} /></ErrorBoundary>}
       <DialogHost />
-      {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} onSetup={() => { setSettingsOpen(false); setSetupOpen(true) }} />}
-      {skillsOpen && <SkillsManager onClose={() => useStore.getState().setSkillsOpen(false)} />}
-      {setupOpen && <SetupChecklist onClose={() => setSetupOpen(false)} onSettings={() => { setSetupOpen(false); setSettingsOpen(true) }} />}
+      {settingsOpen && <DialogGuard title="Settings" onClose={() => setSettingsOpen(false)}><SettingsDialog onClose={() => setSettingsOpen(false)} onSetup={() => { setSettingsOpen(false); setSetupOpen(true) }} /></DialogGuard>}
+      {skillsOpen && <DialogGuard title="Skills" onClose={() => useStore.getState().setSkillsOpen(false)}><SkillsManager onClose={() => useStore.getState().setSkillsOpen(false)} /></DialogGuard>}
+      {setupOpen && <DialogGuard title="Setup check" onClose={() => setSetupOpen(false)}><SetupChecklist onClose={() => setSetupOpen(false)} onSettings={() => { setSetupOpen(false); setSettingsOpen(true) }} /></DialogGuard>}
     </div>
   )
 }

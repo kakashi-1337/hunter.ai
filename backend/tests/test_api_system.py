@@ -19,10 +19,11 @@ async def test_the_machine_state_names_the_temperature_and_the_loaded_local_mode
     monkeypatch.delenv("HUNTERAI_MAX_CPU_TEMP", raising=False)
     answers(monkeypatch, {"http://127.0.0.1:11434/api/ps": {"models": [{"name": "mimo:9b", "size_vram": 9 * 2**30}]}})
     assert (await client.get("/api/system/status")).json() == {
-        "cpu_temp": 71.0, "cpu_limit": 90.0, "local_models": [{"name": "mimo:9b", "vram_mb": 9216}]}
+        "cpu_temp": 71.0, "cpu_limit": 90.0, "local_models": [{"name": "mimo:9b", "vram_mb": 9216}], "restart_needed": False}
     answers(monkeypatch, {})                      # Ollama does not answer: unknown, which is not "none loaded"
     monkeypatch.setattr(thermal, "cpu_temp", lambda: None)
-    assert (await client.get("/api/system/status")).json() == {"cpu_temp": None, "cpu_limit": 90.0, "local_models": None}
+    assert (await client.get("/api/system/status")).json() == {
+        "cpu_temp": None, "cpu_limit": 90.0, "local_models": None, "restart_needed": False}
 
 
 async def test_the_checkup_says_what_is_missing_and_how_to_get_it(client, monkeypatch):

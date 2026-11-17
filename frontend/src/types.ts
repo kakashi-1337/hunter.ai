@@ -536,6 +536,8 @@ export interface SystemStatus {
   cpu_limit: number | null
   /** null: Ollama does not answer. */
   local_models: { name: string; vram_mb: number }[] | null
+  /** The server's code changed on disk after it started. Absent: a server from before it could tell. */
+  restart_needed?: boolean
 }
 
 export interface CheckupItem { id: string; label: string; ok: boolean; required: boolean; detail: string; fix: string }

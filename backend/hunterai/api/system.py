@@ -10,7 +10,7 @@ import os
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from .. import activity, caido, config, rea_tools, thermal, toolbox
+from .. import activity, caido, config, rea_tools, stale, thermal, toolbox
 from .deps import get_conn
 from ..kb import embed
 from ..providers import ollama, registry
@@ -45,7 +45,8 @@ async def status():
     models = None if ps is None else [
         {"name": str(m.get("name") or m.get("model") or "?"), "vram_mb": round((m.get("size_vram") or 0) / 2**20)}
         for m in ps.get("models") or [] if isinstance(m, dict)]
-    return {"cpu_temp": thermal.cpu_temp(), "cpu_limit": thermal.limit(), "local_models": models}
+    return {"cpu_temp": thermal.cpu_temp(), "cpu_limit": thermal.limit(), "local_models": models,
+            "restart_needed": stale.restart_needed()}
 
 
 def _browser_installed() -> bool:

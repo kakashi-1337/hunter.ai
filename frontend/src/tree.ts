@@ -410,6 +410,17 @@ export function machineLine(s: SystemStatus): { text: string; level: '' | 'warn'
   return { text: parts.join(' · '), level }
 }
 
+const HOW_TO_RESTART = 'Press Ctrl+C where it runs, then start it again (scripts/start.sh).'
+
+/** What the owner is told when the server that answers is not the code on disk. A server that does not say (no
+ * `restart_needed` in its status) is from before this page was built: it was updated and not restarted. */
+export function restartNotice(status: SystemStatus | null): string | null {
+  if (!status || status.restart_needed === false) return null
+  return status.restart_needed
+    ? `Restart HunterAI: its code on this machine changed after the server was started (an update, or an edit). Until then it runs the old code. ${HOW_TO_RESTART}`
+    : `Restart HunterAI: the server that answers is older than this page, so parts of the page will not work. ${HOW_TO_RESTART}`
+}
+
 export interface FindingFilter { severity?: string; status?: string; target_id?: string; text?: string }
 
 export function filterFindings(list: FindingRow[], f: FindingFilter): FindingRow[] {
