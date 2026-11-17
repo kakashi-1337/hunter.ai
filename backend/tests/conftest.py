@@ -112,6 +112,16 @@ async def clean_procs():
     search.set_provider(None)      # a fake provider never leaks into another test
 
 
+@pytest_asyncio.fixture(autouse=True)
+async def runs_end_with_their_test():
+    """A test may stop looking at a run once it announced its end. The run is waited for all the same: it
+    is still closing its database connection, and a loop that closed under it would fail a later test
+    with "Event loop is closed"."""
+    yield
+    from tests.toolkit import runs_have_ended
+    await runs_have_ended()
+
+
 @pytest.fixture(autouse=True)
 def gate_off(monkeypatch):
     """The risk gate asks a model; only the tests about it turn it on."""

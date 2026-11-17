@@ -171,6 +171,18 @@ def still_open(connections) -> list:
     return [c for c in connections if c._thread.is_alive()]
 
 
+async def runs_have_ended(timeout=5.0) -> None:
+    """Wait until every run this test started is done with its last step, closing its database connection
+    included. One that would never end by itself (it waits for an answer nobody gives) is stopped."""
+    from hunterai import engine
+    here = asyncio.get_running_loop()
+    alive = [t for t in engine._tasks.values() if not t.done() and t.get_loop() is here]
+    if alive:
+        _, still = await asyncio.wait(alive, timeout=timeout)
+        if still:
+            await engine.shutdown()
+
+
 async def eventually(pred, timeout=5.0):
     """Wait until pred() is true."""
     for _ in range(int(timeout / 0.02)):
