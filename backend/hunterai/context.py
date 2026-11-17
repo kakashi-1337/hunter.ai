@@ -50,7 +50,7 @@ SUMMARY_SYSTEM = (
 TOO_LONG = (" HunterAI made the request smaller and the model still refused its size. Continue in a new chat, or "
             "choose a model with a larger context window.")
 _OVERFLOW = re.compile(
-    r"(?i)prompt is too long|context[ _]length|context window|maximum context|too many (input )?tokens|"
+    r"(?i)prompt is too long|context[ _]length|context window|context size|maximum context|too many (input )?tokens|"
     r"input token count|input is too long|request too large|exceeds? the (maximum )?(number of )?(input )?tokens")
 _windows: dict[str, tuple[object, float, dict[str, int | None]]] = {}
 
@@ -76,7 +76,14 @@ def size(system: str, wire: list[WireMessage], specs: list[ToolSpec] | None = No
 
 
 async def window(provider_name: str, model: str, options: Options) -> int | None:
-    """The model's context window in tokens, or None when nobody says."""
+    """The model's context window in tokens, or None when nobody says. A provider that sets the
+    window of each call itself (a local model) is the one that knows it."""
+    try:
+        own = getattr(registry.get(provider_name), "window_for", None)
+        if own is not None:
+            return await own(model, options)
+    except Exception:       # it could not say: what the chat sets is the best that is known
+        return options.context_window or None
     if options.context_window:
         return options.context_window
     try:
@@ -217,18 +224,23 @@ async def fit(conn, run_id: str, provider_name: str, model: str, system: str, wi
         out = await _stored(conn, run_id, wire)
         return (out, {"summary_used": True}) if out is not wire else (wire, None)
     room = None if tokens is None else int((tokens - min(options.max_tokens or OUTPUT_RESERVE, tokens // 4)) * CHARS_PER_TOKEN)
-    if not hard and before <= room * HEADROOM:
+    # The system prompt and the tool definitions cannot be made smaller. The chat is measured against what they
+    # leave: with a local model's window they fill most of it, and against the whole of it the chat was cut down
+    # to its last message while a third of the window stayed empty.
+    fixed = size(system, [], specs)
+    free = None if room is None else max(0, room - fixed)
+    if not hard and before - fixed <= free * HEADROOM:
         return wire, None
     out = await _stored(conn, run_id, wire)
     used = out is not wire
     now = size(system, out, specs)
-    if used and not hard and now <= room * HEADROOM:
+    if used and not hard and now - fixed <= free * HEADROOM:
         # The summary this chat already has is enough. It is used again until the chat outgrows the room once
         # more: making the request smaller each time it passed the target would write a new summary, with a
         # model call of its own, for nearly every message.
         return out, {"tokens_before": int(before / CHARS_PER_TOKEN), "tokens_after": int(now / CHARS_PER_TOKEN),
                      "results_cut": 0, "messages_summarized": 0, "summary_used": True}
-    budget = now // 2 if hard else int(room * TARGET)
+    budget = now // 2 if hard else fixed + int(free * TARGET)
     cut = summarized = 0
     for keep in (KEEP_RESULTS, 1):          # the latest results stay whole while there is room for them; the last one always does
         if now > budget:

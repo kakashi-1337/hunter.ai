@@ -215,6 +215,8 @@ export interface Settings {
   default_provider: string
   default_model: string
   fallback_model: string
+  /** Tokens of context every call to a local (Ollama) model gets, unless the chat sets its own. */
+  local_window: number
   keys: Record<string, boolean>
   permissions: Policy
   max_turns: number

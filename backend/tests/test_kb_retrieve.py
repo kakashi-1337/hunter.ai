@@ -121,6 +121,14 @@ def test_budget_chars(provider, ctx, used, want):
     assert retrieve.budget_chars(chat, used) == want
 
 
+def test_the_budget_of_a_local_chat_follows_the_window_the_owner_set_for_local_models(monkeypatch):
+    chat = Chat(id="c", target_id=None, title="t", mode="pentesting", provider="ollama", model="m", options={},
+                active_leaf_id=None, created_at="t", updated_at="t")
+    assert retrieve.budget_chars(chat, 40_000) == 6000          # the default window: room for the sources
+    monkeypatch.setenv("HUNTERAI_OLLAMA_NUM_CTX", "4096")
+    assert retrieve.budget_chars(chat, 0) == 3072
+
+
 async def test_sources_blocks_are_never_sent_back_to_a_model(conn, kb_chat):
     p = Scripted("abliteration"); use(abliteration=p)
     chat, user, _ = await kb_chat({"notes.md": "waf bypass notes"}, text="waf bypass notes")

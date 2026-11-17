@@ -29,7 +29,7 @@ def budget_chars(chat: Chat, used_chars: int) -> int:
     """How many characters of numbered sources may be added to this chat's next request."""
     if chat.provider != "ollama":
         return DEFAULT_BUDGET_CHARS
-    window = ((chat.options or {}).get("context_window") or ollama.DEFAULT_NUM_CTX) * CHARS_PER_TOKEN
+    window = ((chat.options or {}).get("context_window") or ollama.default_num_ctx()) * CHARS_PER_TOKEN
     return max(0, min(DEFAULT_BUDGET_CHARS, window // 4,
                       window - used_chars - ANSWER_RESERVE_TOKENS * CHARS_PER_TOKEN))
 

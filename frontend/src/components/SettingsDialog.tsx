@@ -106,6 +106,23 @@ function ProxyRow({ settings, onSaved }: { settings: Settings; onSaved: (s: Sett
   )
 }
 
+/** The context window of local models. Emptied, it goes back to the size HunterAI uses by itself. `save` answers
+ * with the size in use after the attempt, so a size the server refused does not stay in the field. */
+function LocalWindow({ value, save }: { value: number; save(size: number | null): Promise<number> }) {
+  const [text, setText] = useState(String(value))
+  const leave = async () => {
+    const typed = text.trim()
+    if (typed !== String(value)) setText(String(await save(typed ? Number(typed) : null)))
+  }
+  return (
+    <label className="field"><span>Context window for local models (tokens)</span>
+      <input type="number" min={2048} step={1024} value={text} onChange={(e) => setText(e.target.value)} onBlur={() => void leave()}
+        onKeyDown={(e) => e.key === 'Enter' && void leave()} />
+      <span className="hint">What every call to an Ollama model gets, the fallback included. A chat can set its own, and a model never gets more than it takes. HunterAI's rules and tool list alone take 6,000 tokens or more; a chat that does not fit is shortened for the call to a summary of its early part and its latest messages, and a request that still does not fit is refused with the reason. A larger window keeps more of the chat and needs more memory: about 1 GB for every 8,000 tokens with an 8B model. Empty: 16,384.</span>
+    </label>
+  )
+}
+
 function KeyRow({ name, isSet, onSaved }: { name: string; isSet: boolean; onSaved: () => Promise<void> }) {
   const [value, setValue] = useState('')
   const [saving, setSaving] = useState(false)
@@ -198,6 +215,8 @@ export function SettingsDialog({ onClose, onSetup }: { onClose: () => void; onSe
             </select>
             {ollamaModels.length === 0 && <span className="hint">Ollama is not reachable, so the fallback cannot answer right now.</span>}
           </label>
+          <LocalWindow key={settings.local_window} value={settings.local_window}
+            save={async (size) => { await update({ local_window: size }); return useStore.getState().settings?.local_window ?? settings.local_window }} />
           <div className="row"><span className="hint grow">Personas: prompt profiles for kinds of work (web, mobile, reverse engineering, internal, coding, personal).</span>
             <button className="btn" onClick={() => setPersonasOpen(true)}>Manage personas</button></div>
           {personasOpen && <PersonaManager onClose={() => setPersonasOpen(false)} />}

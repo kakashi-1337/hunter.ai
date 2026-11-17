@@ -126,6 +126,32 @@ async def test_slow_or_broken_provider_does_not_break_the_list(client, monkeypat
     assert ps["ollama"]["models"] == [] and ps["mock"]["models"]
 
 
+async def test_the_window_for_local_models_is_16384_tokens_until_the_owner_sets_another(client):
+    from hunterai.api import providers as providers_api
+    from hunterai.providers import ollama
+    assert (await client.get("/api/settings")).json()["local_window"] == 16384
+    providers_api._cache["ollama"] = (1e18, {"name": "ollama", "models": [{"id": "m", "context_window": 16384}]})
+    saved = await client.put("/api/settings", json={"local_window": 32768})
+    assert saved.status_code == 200 and saved.json()["local_window"] == 32768
+    assert ollama.default_num_ctx() == 32768
+    assert "HUNTERAI_OLLAMA_NUM_CTX=32768" in config.env_file().read_text().splitlines()
+    assert "ollama" not in providers_api._cache                # the model list names each model's window: asked again
+    for bad in (100, 2047, 2_000_000, -1):
+        r = await client.put("/api/settings", json={"local_window": bad})
+        assert r.status_code == 400 and "2,048 to 1,048,576" in r.json()["detail"]
+    for not_a_number in ("many", 1.5):
+        assert (await client.put("/api/settings", json={"local_window": not_a_number})).status_code == 422
+    assert (await client.get("/api/settings")).json()["local_window"] == 32768
+    cleared = await client.put("/api/settings", json={"local_window": None})          # back to HunterAI's own
+    assert cleared.json()["local_window"] == 16384 and ollama.default_num_ctx() == 16384
+
+
+async def test_a_window_written_into_the_env_file_by_hand_is_what_settings_shows(client):
+    config.env_file().write_text("HUNTERAI_OLLAMA_NUM_CTX=24576\n")
+    assert (await client.get("/api/settings")).json()["local_window"] == 24576
+    assert (await client.put("/api/settings", json={"max_turns": 10})).json()["local_window"] == 24576    # another save leaves it
+
+
 async def test_kb_redact_is_on_by_default_and_can_be_switched(client):
     assert (await client.get("/api/settings")).json()["kb_redact"] is True
     assert (await client.put("/api/settings", json={"kb_redact": False})).json()["kb_redact"] is False

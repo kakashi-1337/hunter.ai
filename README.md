@@ -40,6 +40,8 @@ what is missing.
   be used by a program like this is for you to check in Anthropic's terms.
 - Fallback: if abliteration.ai is unreachable, times out, or keeps rate-limiting before
   it has produced any output, the answer comes from a local Ollama model and is labelled.
+  The chat is shortened to fit that model's window first, so it still knows what the chat
+  was about (see "The context window of local models").
   Bad key, no credits, and policy errors are shown as errors, never papered over.
 - Tools: the model can read, write, edit, run commands, fetch, download, and search.
   Every call passes the permission engine first; "ask" shows you the exact call and
@@ -359,6 +361,31 @@ summary is a model's account of the earlier part, so it can leave something out;
 result says how long it was, and the tool can be run again. Subagents are not covered (they
 stop after 12 turns). The Anthropic list no longer offers the models before Claude 4.6,
 whose window is 200K tokens; a chat that already uses one keeps it.
+
+The system prompt and the tool definitions cannot be made smaller, so the chat is measured
+against the room they leave. With a small window that is most of it: see the next section.
+
+### The context window of local models
+
+A model behind Ollama has the window HunterAI gives it with each call: 16,384 tokens unless
+you set another size under Settings ("Context window for local models"; written to `.env`
+as `HUNTERAI_OLLAMA_NUM_CTX`) or in the chat's own options, and never more than the model
+takes (its `context_length`, read from Ollama). The size is always sent, because Ollama's
+own default follows the machine's memory, from 4,096 tokens to 256,000.
+
+HunterAI's rules and tool definitions alone are 6,000 tokens or more. A chat that does not
+fit beside them is shortened for the call as described above: a summary of its early part,
+and its latest turns as they were said. This is what a local model gets when it answers in
+place of the chat's own model (the fallback) after a long chat with a model whose window is
+far larger. A larger window keeps more of the chat and costs memory: about 1 GB for every
+8,000 tokens with an 8B model; `ollama ps` shows whether the model still runs on the GPU.
+
+Left to itself, Ollama removes the oldest messages of a request that is larger than the
+window, then tokens from its middle, and answers as if nothing had happened: the model has
+then lost the chat, and can lose part of its rules. So HunterAI asks it not to (`truncate`
+and `shift` are sent as false; Ollama then refuses instead), does not send a request that
+is larger than the window by its own count, and says so: "The request does not fit the
+context window of the local model ...", with the two sizes and where to change the window.
 
 ### Answer check
 
@@ -917,6 +944,7 @@ shows a key again.
 | `ANTHROPIC_API_KEY` | Claude models |
 | `OPENAI_API_KEY`, `XAI_API_KEY`, `GEMINI_API_KEY` | OpenAI, xAI, Google |
 | `OLLAMA_HOST` | Ollama address (default `http://127.0.0.1:11434`) |
+| `HUNTERAI_OLLAMA_NUM_CTX` | Context window of local models in tokens (default 16384; Settings writes it) |
 | `HUNTERAI_PORT` | Port (default 8790) |
 | `HUNTERAI_HOME` | Data folder (default `~/.hunterai`) |
 | `HUNTERAI_PROVIDER_PROXY` | Proxy the model providers are reached through (see "Your own proxy") |

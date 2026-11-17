@@ -4,8 +4,9 @@ import httpx
 import pytest
 import respx
 
+from hunterai import context
 from hunterai.providers import ollama
-from hunterai.providers.base import (Options, ProviderError, Stop, TextDelta, ThinkingDelta,
+from hunterai.providers.base import (Options, ProviderError, Stop, TextDelta, ThinkingDelta, ToolSpec,
                                      Usage, WireMessage)
 from hunterai.types import ImageBlock, TextBlock
 
@@ -25,9 +26,16 @@ BODY = ndjson(
 )
 
 
-async def run(options=None, msgs=None, model="qwen3:8b", system="sys"):
+def a_plain_model():
+    """Before a call the provider asks Ollama what the model is: a plain one, unless the test said what it answers."""
+    if not any("/api/show" in repr(r.pattern) for r in respx.routes):
+        respx.post(HOST + "/api/show").mock(return_value=show())
+
+
+async def run(options=None, msgs=None, model="qwen3:8b", system="sys", tools=None):
+    a_plain_model()
     msgs = msgs or [WireMessage("user", [TextBlock(text="hi")])]
-    return [e async for e in ollama.make().stream(model, system, msgs, options or Options())]
+    return [e async for e in ollama.make().stream(model, system, msgs, options or Options(), tools=tools)]
 
 
 def sent(route):
@@ -40,9 +48,12 @@ async def test_ndjson_parsed_to_events():
     assert await run() == [ThinkingDelta("hm"), TextDelta("Hi"), Usage(9, 2), Stop("stop")]
 
 
-def show(thinking=None, capabilities=("completion",)):
-    """What /api/show answers: `thinking` is the object newer Ollama versions report, None for an older one."""
-    return httpx.Response(200, json={"capabilities": list(capabilities), **({} if thinking is None else {"thinking": thinking})})
+def show(thinking=None, capabilities=("completion",), context_length=None):
+    """What /api/show answers: `thinking` is the object newer Ollama versions report, None for an older one;
+    `context_length` is the most tokens the model takes, as its file says."""
+    info = {} if context_length is None else {"model_info": {"general.architecture": "qwen3", "qwen3.context_length": context_length,
+                                                            "qwen3.embedding_length": 4096}}
+    return httpx.Response(200, json={"capabilities": list(capabilities), **info, **({} if thinking is None else {"thinking": thinking})})
 
 
 LEVELS = {"values": ["low", "medium", "high"], "default": "medium"}
@@ -67,7 +78,7 @@ async def test_options_mapped():
 async def test_think_absent_when_unset():
     route = respx.post(URL).mock(return_value=httpx.Response(200, text=BODY))
     await run()
-    assert "think" not in sent(route) and sent(route)["options"] == {"num_ctx": 8192}
+    assert "think" not in sent(route) and sent(route)["options"] == {"num_ctx": ollama.DEFAULT_NUM_CTX}
 
 
 @respx.mock
@@ -121,6 +132,7 @@ async def test_error_line_mid_stream_raises():
     respx.post(URL).mock(return_value=httpx.Response(200, text=ndjson(
         {"message": {"content": "a"}, "done": False}, {"error": "out of memory"})))
     got = []
+    a_plain_model()
     with pytest.raises(ProviderError) as ei:
         async for e in ollama.make().stream("m", "", [WireMessage("user", [TextBlock(text="x")])],
                                             Options()):
@@ -133,8 +145,9 @@ async def test_host_from_env_normalized(monkeypatch):
     monkeypatch.setenv("OLLAMA_HOST", "0.0.0.0:11500/")
     route = respx.post("http://127.0.0.1:11500/api/chat").mock(
         return_value=httpx.Response(200, text=BODY))
+    asked = respx.post("http://127.0.0.1:11500/api/show").mock(return_value=show())
     await run()
-    assert route.called
+    assert route.called and asked.called
 
 
 def test_always_configured():
@@ -179,11 +192,12 @@ async def test_models_survive_a_failing_capability_lookup():
 
 
 @respx.mock
-async def test_context_window_defaults_to_8192_when_not_set():
-    # Never rely on the Ollama server default: a huge server-side context overloads the host.
+async def test_a_call_gets_the_window_for_local_models_when_the_chat_sets_none():
+    # Never left to the Ollama server: its own default follows the machine's memory, from 4,096 to 256,000 tokens.
+    # 8,192, the default before, is filled by HunterAI's rules and tool list alone.
     route = respx.post(URL).mock(return_value=httpx.Response(200, text=BODY))
     await run(Options())
-    assert sent(route)["options"]["num_ctx"] == 8192
+    assert sent(route)["options"]["num_ctx"] == 16384 == ollama.DEFAULT_NUM_CTX
 
 
 @respx.mock
@@ -191,6 +205,113 @@ async def test_explicit_context_window_overrides_the_default():
     route = respx.post(URL).mock(return_value=httpx.Response(200, text=BODY))
     await run(Options(context_window=32768))
     assert sent(route)["options"]["num_ctx"] == 32768
+
+
+@respx.mock
+async def test_the_owner_sets_the_window_for_every_local_model(monkeypatch):
+    monkeypatch.setenv("HUNTERAI_OLLAMA_NUM_CTX", "32768")
+    route = respx.post(URL).mock(return_value=httpx.Response(200, text=BODY))
+    await run(Options())
+    assert sent(route)["options"]["num_ctx"] == 32768 == ollama.default_num_ctx()
+    await run(Options(context_window=4096))             # a chat's own setting still comes first
+    assert sent(route)["options"]["num_ctx"] == 4096
+
+
+@pytest.mark.parametrize("written", ["", "many", "-5", "0", "1000", "16k", "3e4"])
+def test_a_window_setting_that_names_no_usable_size_is_not_used(monkeypatch, written):
+    monkeypatch.setenv("HUNTERAI_OLLAMA_NUM_CTX", written)
+    assert ollama.default_num_ctx() == ollama.DEFAULT_NUM_CTX
+
+
+@respx.mock
+async def test_a_model_is_never_given_a_larger_window_than_it_takes():
+    """Ollama would lower it by itself and say nothing, and HunterAI would fit the chat to the wrong size."""
+    respx.post(HOST + "/api/show").mock(return_value=show(context_length=8192))
+    route = respx.post(URL).mock(return_value=httpx.Response(200, text=BODY))
+    await run(Options())
+    assert sent(route)["options"]["num_ctx"] == 8192
+    await run(Options(context_window=65536))
+    assert sent(route)["options"]["num_ctx"] == 8192
+    await run(Options(context_window=4096))             # a smaller one is the owner's choice
+    assert sent(route)["options"]["num_ctx"] == 4096
+
+
+@respx.mock
+async def test_the_window_of_a_call_is_what_the_call_will_send(monkeypatch):
+    respx.post(HOST + "/api/show").mock(side_effect=lambda req: show(context_length=8192 if b"small" in req.content else 131072))
+    p = ollama.make()
+    assert await p.window_for("small:1b", Options()) == 8192
+    assert await p.window_for("large:8b", Options()) == 16384
+    assert await p.window_for("large:8b", Options(context_window=40000)) == 40000
+    monkeypatch.setenv("HUNTERAI_OLLAMA_NUM_CTX", "24576")
+    assert await p.window_for("large:8b", Options()) == 24576
+
+
+@respx.mock
+async def test_the_window_is_the_wanted_one_while_ollama_cannot_say_what_the_model_takes():
+    asked = respx.post(HOST + "/api/show").mock(side_effect=httpx.ConnectError("x"))
+    p = ollama.make()
+    assert await p.window_for("qwen3:8b", Options()) == 16384
+    assert await p.window_for("qwen3:8b", Options()) == 16384 and asked.call_count == 2      # asked again: not known yet
+
+
+@respx.mock
+async def test_each_model_is_listed_with_the_window_a_call_to_it_gets():
+    respx.get(HOST + "/api/tags").mock(return_value=httpx.Response(200, json={"models": [{"name": "small:1b"}, {"name": "large:8b"}]}))
+    respx.post(HOST + "/api/show").mock(side_effect=lambda req: show(context_length=8192 if b"small" in req.content else 131072))
+    assert [(m.id, m.context_window) for m in await ollama.make().models()] == [("small:1b", 8192), ("large:8b", 16384)]
+
+
+@respx.mock
+async def test_ollama_is_told_not_to_drop_or_cut_anything_itself():
+    """By default it removes the oldest messages, then tokens from the middle, and reports neither."""
+    route = respx.post(URL).mock(return_value=httpx.Response(200, text=BODY))
+    await run()
+    assert sent(route)["truncate"] is False and sent(route)["shift"] is False
+
+
+@respx.mock
+async def test_a_request_larger_than_the_window_is_not_sent():
+    route = respx.post(URL).mock(return_value=httpx.Response(200, text=BODY))
+    history = [WireMessage("user" if i % 2 == 0 else "assistant", [TextBlock(text="word " * 500)]) for i in range(21)]
+    with pytest.raises(ProviderError) as ei:              # 52,500 characters for a window of 8,192 tokens
+        await run(Options(context_window=8192), msgs=history)
+    assert not route.called
+    assert context.is_overflow(ei.value)                  # the engine makes the request smaller and asks once more
+    assert "8,192" in ei.value.message and "Context window for local models" in ei.value.message
+
+
+@respx.mock
+async def test_the_tool_definitions_count_towards_what_has_to_fit():
+    route = respx.post(URL).mock(return_value=httpx.Response(200, text=BODY))
+    tools = [ToolSpec(f"tool_{i}", "does one thing " * 20, {"type": "object", "properties": {"x": {"type": "string", "description": "y" * 300}}})
+             for i in range(40)]
+    with pytest.raises(ProviderError) as ei:
+        await run(Options(context_window=8192), tools=tools)
+    assert not route.called and context.is_overflow(ei.value)
+    await run(Options(context_window=16384), tools=tools)
+    assert route.called and len(sent(route)["tools"]) == 40
+
+
+@respx.mock
+async def test_a_request_that_fits_the_window_is_sent_as_it_is():
+    route = respx.post(URL).mock(return_value=httpx.Response(200, text=BODY))
+    history = [WireMessage("user" if i % 2 == 0 else "assistant", [TextBlock(text="word " * 500)]) for i in range(9)]
+    await run(Options(context_window=8192), msgs=history)      # 22,500 characters
+    assert [m["role"] for m in sent(route)["messages"]] == ["system"] + ["user", "assistant"] * 4 + ["user"]
+
+
+@pytest.mark.parametrize("refusal", [
+    "request (9000 tokens) exceeds the available context size (8192 tokens), try increasing it",
+    "the prompt is longer than the context length currently available to the model; shorten the prompt, adjust the context "
+    "length in settings, or use a model with a longer context length",
+])
+@respx.mock
+async def test_a_refusal_by_ollama_for_size_is_one_the_engine_knows(refusal):
+    respx.post(URL).mock(return_value=httpx.Response(400, json={"error": refusal}))
+    with pytest.raises(ProviderError) as ei:
+        await run()
+    assert context.is_overflow(ei.value) and refusal[:40] in ei.value.message
 
 
 @respx.mock

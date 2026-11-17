@@ -5,11 +5,11 @@ import os
 from fastapi import APIRouter, Depends, HTTPException, Response
 from typing import Literal
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, StrictInt, ValidationError
 
 from .. import answer_check, caido, config, engine, envfile, notify, permissions, subagents
 from ..tools import on_demand
-from ..providers import registry
+from ..providers import ollama, registry
 from . import providers as providers_api
 from ..repo import settings
 from ..tools import runner
@@ -31,6 +31,7 @@ class SettingsIn(BaseModel):
     default_provider: str | None = None
     default_model: str | None = None
     fallback_model: str | None = None
+    local_window: StrictInt | None = None   # tokens of context a call to a local model gets; null: HunterAI's own
     permissions: dict | None = None
     max_turns: int | None = None
     swarm_width: int | None = None          # subagents of one swarm that work at the same time
@@ -77,6 +78,7 @@ async def _view(conn) -> dict:
         "default_model": model,
         "fallback_model": await settings.get(conn, "fallback_model",
                                              engine.DEFAULT_FALLBACK_MODEL),
+        "local_window": ollama.default_num_ctx(),
         "keys": {name: bool(config.env(name)) for name in KEY_NAMES},
         "permissions": await settings.get(conn, "permissions", {}) or {},
         "max_turns": await settings.get(conn, "max_turns", engine.DEFAULT_MAX_TURNS),
@@ -162,6 +164,13 @@ async def put_settings(body: SettingsIn, conn=Depends(get_conn)):
         except (ValidationError, TypeError) as e:
             raise HTTPException(400, f"invalid permissions: {str(e).splitlines()[0]}")
         await settings.put(conn, "permissions", policy.model_dump(exclude_defaults=True))
+    if "local_window" in fields:
+        size = fields.pop("local_window")
+        if size is not None and ollama.usable_num_ctx(size) is None:
+            raise HTTPException(400, "The context window for local models must be "
+                                     f"{ollama.MIN_NUM_CTX:,} to {ollama.MAX_NUM_CTX:,} tokens")
+        envfile.set_var(config.env_file(), ollama.NUM_CTX_ENV, "" if size is None else str(size))
+        providers_api.clear_cache()      # the model list names the window of each local model
     if "max_turns" in fields:
         turns = fields.pop("max_turns")
         if not isinstance(turns, int) or not 1 <= turns <= engine.MAX_TURNS_LIMIT:

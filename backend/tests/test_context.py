@@ -5,12 +5,12 @@ import json
 import pytest
 
 from hunterai import context
-from hunterai.providers import registry
-from hunterai.providers.base import ModelInfo, ProviderError, Stop, TextDelta, ToolCall, Usage, WireMessage
+from hunterai.providers import ollama, registry
+from hunterai.providers.base import ModelInfo, Options, ProviderError, Stop, TextDelta, ToolCall, ToolSpec, Usage, WireMessage
 from hunterai.tools import registry as tools
 from hunterai.types import TextBlock
 from tests.test_api import BASE, client, new_chat, send  # noqa: F401 (client is a fixture)
-from tests.toolkit import call, fake_tool, result
+from tests.toolkit import call, fake_tool, result, seeded_run
 
 
 def one_run(n, size=5000):
@@ -50,6 +50,9 @@ def test_the_latest_results_and_the_short_ones_are_never_cut():
     "HTTP 400: context_length_exceeded",
     "HTTP 400: The input token count (1200000) exceeds the maximum number of tokens allowed (1048576).",
     "HTTP 413: Request too large",
+    "HTTP 400: request (9000 tokens) exceeds the available context size (8192 tokens), try increasing it",      # Ollama
+    "HTTP 400: the prompt is longer than the context length currently available to the model; shorten the prompt",
+    ollama.TOO_LARGE.format(model="qwen3:8b", need=9000, window=8192),         # HunterAI's own, before it sends
 ])
 def test_a_provider_that_refuses_the_size_of_a_request_is_recognised(message):
     assert context.is_overflow(ProviderError("bad_request", message, 400))
@@ -62,6 +65,84 @@ def test_a_provider_that_refuses_the_size_of_a_request_is_recognised(message):
 ])
 def test_another_refusal_is_not_taken_for_one_about_size(message):
     assert not context.is_overflow(ProviderError("bad_request", message, 400))
+
+
+async def test_a_provider_that_sets_the_window_of_each_call_is_the_one_asked_for_it():
+    """A local model has the window HunterAI gives it, which is not what a model list says."""
+    class Local:
+        name = "ollama"
+
+        async def window_for(self, model, options):
+            return min(options.context_window or 16384, 8192 if model == "small" else 131072)
+
+        async def models(self):
+            raise AssertionError("the model list does not say what a call gets")
+    registry.override("ollama", Local())
+    assert await context.window("ollama", "small", Options()) == 8192
+    assert await context.window("ollama", "small", Options(context_window=65536)) == 8192
+    assert await context.window("ollama", "large", Options()) == 16384
+    assert await context.window("ollama", "large", Options(context_window=4096)) == 4096
+
+
+async def test_a_window_that_cannot_be_asked_for_falls_back_on_the_chats_own():
+    class Broken:
+        name = "ollama"
+
+        async def window_for(self, model, options):
+            raise RuntimeError("no answer")
+    registry.override("ollama", Broken())
+    assert await context.window("ollama", "m", Options()) is None
+    assert await context.window("ollama", "m", Options(context_window=4096)) == 4096
+
+
+async def test_the_room_for_the_chat_is_what_the_rules_and_the_tools_leave(conn):
+    """A local model's window is small, and HunterAI's rules and tool definitions fill most of it. What they leave
+    is for the chat: the latest turns stay word for word while they fit there. Measured against the whole window,
+    a long chat was cut down to its last message while a third of the window stayed empty."""
+    registry.override("mock", Small(10_000))                                 # room: (10,000 - 2,500) x 3 = 22,500 characters
+    _, run_id = await seeded_run(conn, provider="mock")
+    specs = [ToolSpec(f"tool_{i:02}", "d" * 660, {"type": "object"}) for i in range(20)]      # 13,700 of them
+    wire = []
+    for n in range(1, 7):
+        wire += [WireMessage("user", [TextBlock(text=f"question {n}: " + "q" * 1000)]),
+                 WireMessage("assistant", [TextBlock(text=f"answer {n}: " + "a" * 1000)])]
+    wire.append(WireMessage("user", [TextBlock(text="and now?")]))
+    out, note = await context.fit(conn, run_id, "mock", "mock-1", "rules", wire, Options(), specs)
+    kept = "\n".join(b.text for m in out for b in m.blocks if b.type == "text")
+    assert context.SUMMARY_MARK in kept and kept.endswith("and now?")
+    assert "question 6:" in kept and "answer 6:" in kept and "answer 5:" not in kept
+    assert context.size("rules", out, specs) <= 22_500 * context.HEADROOM
+    assert note["messages_summarized"] == 10
+
+
+async def test_a_summary_the_chat_already_has_is_enough_while_the_rest_fits_what_is_left(conn):
+    """No second summary, with a model call of its own, for a chat that fits beside the rules and tools once its
+    stored summary stands in for the early part."""
+    from hunterai.repo import messages, summaries
+    p = Small(10_000); registry.override("mock", p)
+    chat, run_id = await seeded_run(conn, provider="mock")
+    specs = [ToolSpec(f"tool_{i:02}", "d" * 660, {"type": "object"}) for i in range(20)]      # 13,700 characters; 8,800 are left
+    wire, parent = [], None
+    for role, size in [("user", 1000), ("assistant", 1000), ("user", 1000), ("assistant", 1000),
+                       ("user", 2500), ("assistant", 2500), ("user", 1000)]:
+        m = await messages.add(conn, chat.id, parent, role, [TextBlock(text=role[0] * size)])
+        wire.append(WireMessage(role, list(m.blocks), id=m.id))
+        parent = m.id
+    await summaries.put(conn, chat.id, wire[3].id, "They mapped the login and found /admin.")
+    out, note = await context.fit(conn, run_id, "mock", "mock-1", "rules", wire, Options(), specs)
+    assert p.summaries == 0 and (note["summary_used"], note["messages_summarized"]) == (True, 0)
+    assert len(out) == 3 and "They mapped the login and found /admin." in out[0].blocks[0].text
+    assert 22_500 * context.HEADROOM < context.size("rules", out, specs) <= 22_500      # over 85% of the room, and within it
+
+
+async def test_a_chat_that_fits_what_the_rules_and_the_tools_leave_is_sent_whole(conn):
+    registry.override("mock", Small(10_000))
+    _, run_id = await seeded_run(conn, provider="mock")
+    specs = [ToolSpec(f"tool_{i:02}", "d" * 660, {"type": "object"}) for i in range(20)]
+    wire = [WireMessage("user", [TextBlock(text="q" * 3000)]), WireMessage("assistant", [TextBlock(text="a" * 3000)]),
+            WireMessage("user", [TextBlock(text="and now?")])]                 # 6,000 characters where 8,800 are left
+    out, note = await context.fit(conn, run_id, "mock", "mock-1", "rules", wire, Options(), specs)
+    assert out is wire and note is None
 
 
 # ---- whole runs, against a model with a small window
