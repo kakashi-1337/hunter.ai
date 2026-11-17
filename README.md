@@ -1028,6 +1028,36 @@ Codex needs no key: it is used when the `codex` CLI is installed and logged in.
 
 Chats, uploads, and settings live in `~/.hunterai/` (`hunterai.db` and `uploads/`).
 
+## Smoke check
+
+```sh
+scripts/smoke.sh                  # every check that costs nothing
+scripts/smoke.sh --deep           # and a long chat answered by the local model
+scripts/smoke.sh --calls          # and one short request to each cloud provider that is ready
+scripts/smoke.sh --only local,proxy
+```
+
+The tests of HunterAI run against stand-ins. This asks the real services of your install,
+after an update or when something does not work. Nothing is sent to a target and nothing of
+yours is changed. One line per thing found: `ok`, `FAIL` with what to do, `skip` for what
+is not in use here, `note` for what you may want to know. The exit code is 1 when a check
+failed.
+
+| Check | What it asks |
+| --- | --- |
+| `server` | Does a running HunterAI run the code that is on disk? What does it say is not working? |
+| `ollama` | Does Ollama answer? Its version and models. |
+| `local` | The fallback model is told a word and asked for it two messages later, through HunterAI's own code. Also: the window it gets, and where Ollama runs it (CPU, GPU, both). |
+| `window` | How many tokens of rules and tool definitions a new chat sends before the conversation, against the window for local models. With a running HunterAI the tools of your MCP servers are counted too. |
+| `embeddings` | Does the embedding model answer with numbers? |
+| `qdrant`, `searxng` | Do they answer? SearXNG is asked a real search in the format the tool needs. |
+| `proxy` | Your proxy carries a request: the address sites see through it, the one they see without it, and whether a command started with the proxy variables comes out at the same place. |
+| `providers` | Which cloud providers are ready. With `--calls`, each is sent "Reply with the word OK" (a few tokens). |
+| `chat` (`--deep`) | A chat of 27 messages whose own model cannot be reached: the local model answers in its place and has to know a word from two turns before and what was found in the first message. It runs in a database of its own that is thrown away. Minutes on a slow machine. |
+
+A service that does not answer is a `FAIL` only when it answered here within the last
+seven days; otherwise it is skipped.
+
 ## Tests
 
 ```bash

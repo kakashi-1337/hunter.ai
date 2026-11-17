@@ -12,7 +12,7 @@ import time
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from .. import activity, caido, config, diagnostics, mcp_manager, rea_tools, stale, thermal, toolbox
+from .. import activity, caido, config, diagnostics, engine, mcp_manager, rea_tools, stale, thermal, toolbox
 from . import settings as settings_api
 from .deps import get_conn
 from ..kb import embed
@@ -230,6 +230,36 @@ async def checkup(request: Request, conn=Depends(get_conn)):
     request.app.state.looked = time.time()
     request.app.state.stopped, request.app.state.stopped_now = await _announced(conn, items, dead)
     return {"ready": all(i["ok"] for i in items if i["required"]), "items": items}
+
+
+async def overhead(conn) -> dict:
+    """What a new chat sends to a local model before a word of the conversation: HunterAI's rules and every tool
+    definition, in tokens as they are counted for a local window. With many MCP tools this alone can be more than
+    the window. {"tokens", "tools": listed for the model, "on_demand": reached through mcp_find, "window"}"""
+    from .. import context, skills
+    from ..modes import build_system
+    from ..providers.base import ToolSpec
+    from ..tools import on_demand, runner
+    from ..types import Chat
+    model = await store.get(conn, "fallback_model", engine.DEFAULT_FALLBACK_MODEL)
+    chat = Chat(id="0" * 32, target_id=None, title="", mode="pentesting", provider=LOCAL, model=model, options={},
+                active_leaf_id=None, created_at="", updated_at="")
+    shown, later = await runner.for_model(conn, await runner.offered_tools(conn, chat))
+    specs = [ToolSpec(t.name, t.description, t.parameters) for t in shown]
+    system = build_system("pentesting", None, [s.name for s in specs], config.home() / "work" / chat.id)
+    if later:
+        system += "\n\n" + on_demand.index(later)
+    try:
+        system += "\n\n" + (await skills.system_block(conn, [], [s.name for s in specs]) or "")
+    except Exception:  # noqa: BLE001 - the list of skills is a small part: the count goes on without it
+        pass
+    return {"tokens": int(context.size(system, [], specs) / ollama.CHARS_PER_TOKEN), "tools": len(specs),
+            "on_demand": len(later), "window": ollama.default_num_ctx()}
+
+
+@router.get("/system/overhead")
+async def overhead_view(conn=Depends(get_conn)):
+    return await overhead(conn)
 
 
 @router.post("/system/stopped/hide")
