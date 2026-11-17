@@ -9,7 +9,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field, ValidationError
 
-from .. import config, engine, problems, procs, stale, uploads
+from .. import checks, config, engine, problems, procs, stale, uploads
 from ..permissions import Policy
 from ..repo import chats, grants, messages, runs, targets
 from ..repo import personas
@@ -166,6 +166,36 @@ async def get_chat(cid: str, conn=Depends(get_conn)):
         d["siblings"] = await messages.siblings(conn, m.id)
         out.append(d)
     return {"chat": chat, "messages": out, "workdir": _workdir_of(chat)}
+
+
+class CheckBody(BaseModel):
+    command: str = Field(max_length=20_000)
+
+
+async def _check_of(conn, cid: str) -> dict:
+    chat = await chats.get(conn, cid)
+    if not chat:
+        raise not_found("chat")
+    folder = str(Path(_workdir_of(chat)).resolve())
+    return {"folder": folder, "command": await checks.command(conn, folder)}
+
+
+@router.get("/chats/{cid}/check")
+async def get_check(cid: str, conn=Depends(get_conn)):
+    """The check of this chat's working folder: the command HunterAI runs there before and after a coding run."""
+    return await _check_of(conn, cid)
+
+
+@router.put("/chats/{cid}/check")
+async def put_check(cid: str, body: CheckBody, conn=Depends(get_conn)):
+    """Set the check of this chat's working folder, for every chat that works there; an empty command removes it.
+    The owner's own decision, made here: HunterAI then runs the command in that folder without a question."""
+    found = await _check_of(conn, cid)
+    try:
+        await checks.set_command(conn, found["folder"], body.command)
+    except checks.Refused as e:
+        raise HTTPException(400, f"The check was not saved: {e}.") from None
+    return await _check_of(conn, cid)
 
 
 @router.patch("/chats/{cid}")

@@ -55,11 +55,15 @@ def _finished(p: procs.Proc, seconds: float, timeout: float | None) -> ToolResul
 
 
 async def _way_out(ctx: ToolContext):
-    """(the proxy in effect for this chat or None, the variables that send a command's traffic to it).
-    The variables name a hop on loopback, which holds the login: a command, and the model that wrote it,
-    never see it."""
+    return await way_out(ctx.target)
+
+
+async def way_out(target):
+    """(the proxy in effect for a chat with this target or None, the variables that send a command's traffic
+    to it). The variables name a hop on loopback, which holds the login: a command, and the model that wrote
+    it, never see it."""
     from .. import hop, upstream
-    up = await upstream.load(ctx.target.id if ctx.target is not None else None)
+    up = await upstream.load(target.id if target is not None else None)
     if up is None:
         return None, {}
     try:

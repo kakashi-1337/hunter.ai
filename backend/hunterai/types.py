@@ -117,6 +117,7 @@ class ChangesBlock(BaseModel):
     before: str = ""
     after: str = ""
     reason: str = ""             # why there is no list although the run may have changed files, in words for the owner
+    check: dict | None = None    # the folder's check before and after the run, when the owner set one (see checks.py)
     undone: bool = False         # every file is as it was before the run again: nothing is left to undo
     left: list[str] = []         # after an undo: files the owner changed since the run, left as they are
 
@@ -193,7 +194,8 @@ class Step(BaseModel):
     id: str
     run_id: str
     seq: int
-    kind: Literal["model_call", "tool_call", "subagent", "permission", "fallback", "decision", "retrieval", "user_note", "context"]
+    kind: Literal["model_call", "tool_call", "subagent", "permission", "fallback", "decision", "retrieval", "user_note", "context",
+                  "check"]
     name: str
     status: str
     started_at: str

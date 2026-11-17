@@ -350,6 +350,12 @@ button.link:hover:not(:disabled) { background: none; color: var(--text); }
 .run-changes ul { list-style: none; margin: 4px 0 0 0; padding: 0; max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
 .run-changes li .badge { margin-right: 6px; }
 .run-changes li .mono { overflow-wrap: anywhere; }
+/* what the check of the folder said before and after the run */
+.run-check { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--line); }
+.run-check.ok .verdict { color: var(--accent); }
+.run-check.warn .verdict { color: var(--warn); }
+.run-check.bad .verdict { color: var(--bad); font-weight: 600; }
+.run-check pre { margin: 4px 0 0 0; padding: 6px 8px; max-height: 240px; overflow: auto; background: var(--panel); border-radius: 4px; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); }
 .answer-check.bad { border-left-color: var(--bad); color: var(--text); }
 .answer-claim .badge { margin-right: 6px; }
 

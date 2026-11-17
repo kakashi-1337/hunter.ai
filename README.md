@@ -49,6 +49,9 @@ what is missing.
 - Undo for coding runs: the files a run changed in the working folder are listed under
   its answer and can be put back with one button, without touching what you changed since
   (see "Undo what a run changed").
+- A check for a working folder (the project's tests): run before and after each coding
+  run, with both outcomes under the answer (see "A check before and after each coding
+  run").
 - Trajectory per run: duration, turns, calls, tokens, and every model call, permission
   decision, and tool call. Survives restarts.
 - Modes (plan, pentesting, coding) and targets with scope. Scope is enforced on tool
@@ -588,6 +591,44 @@ What a save point holds, and what it does not:
   at any time; the undo of earlier runs goes with it.
 
 Other modes keep no save point.
+
+### A check before and after each coding run
+
+A working folder can have a **check**: one command that ends with exit code 0 when all
+is well, usually the project's tests (`pytest -q`, `npm test`, `cargo test`). Set it in
+the chat's Permissions panel, under the working folder. It is kept for the folder, so
+every chat that works there uses it.
+
+In coding mode HunterAI then runs it by itself:
+
+- before the first call of a run that can change anything, on the folder as it is;
+- after the run, when the run ended by itself and changed a file.
+
+The line under the answer, beside the list of changes, says what the check said both
+times. "passed before the run, fails after it (exit code 1)" is a run that broke
+something: what the check wrote is shown with it, and the Undo button is next to it.
+You do not have to take the model's word for "all tests pass".
+
+To know before you set one:
+
+- **Setting a check means this command runs in that folder without a question**, files
+  the model has just written included (a test file is code). That is the point of it,
+  and it differs from the rest of coding mode, where a command asks first. Set it for a
+  folder where that is what you want. Only you can set it; no tool can.
+- The first change of a run waits until the check before it has ended. A folder that is
+  as the last check saw it is not checked again, so from the second run on, the check
+  before a run is usually the one from after the run before it. Files the folder
+  ignores do not count for that.
+- A check that runs longer than 5 minutes is stopped and counts as failed: for a long
+  suite, set a quick part of it. Stopping the run stops the check; the answer stays.
+- No check follows a run that failed or was stopped, or one that changed nothing.
+- It needs the save point: a folder that cannot have one (see above) is not checked.
+- What the check writes is shown to you (the end of it, at most 4,000 characters, with
+  HunterAI's keys taken out) and is never sent to the model. What the check writes into
+  the folder is not counted as the run's change.
+- The command runs like a command of the chat: in the working folder, without
+  HunterAI's keys in its environment, through the target's proxy when the chat has one.
+  A command that addresses HunterAI's own API, or holds one of its keys, is not taken.
 
 ### Known limits
 

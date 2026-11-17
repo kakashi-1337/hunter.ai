@@ -1,14 +1,33 @@
 import { useState } from 'react'
 import { confirmBox } from '../dialog'
 import { useStore } from '../store'
-import { changesView, undoQuestion, visible } from '../tree'
-import type { ChangesBlock } from '../types'
+import { changesView, checkView, undoQuestion, visible } from '../tree'
+import type { ChangesBlock, CheckResult, FolderCheck } from '../types'
 
 /** A list this long is open from the start; a longer one is folded away. */
 const OPEN_UP_TO = 12
 /** No more rows than this are drawn; the rest are counted. */
 const ROWS = 200
 const BADGE: Record<ChangesBlock['files'][number]['change'], string> = { new: 'ok', changed: 'warn', deleted: 'bad' }
+
+/** What the check of the folder said before the run and after it, with what it wrote. What a failed check wrote
+ * after the run is open from the start: it is what the owner wants to read. */
+function RunCheck({ check }: { check: FolderCheck }) {
+  const view = checkView(check)
+  const wrote = (when: string, r: CheckResult | null, open: boolean) => (r && r.output ? (
+    <details open={open}>
+      <summary>What the check wrote {when} ({r.seconds} s)</summary>
+      <pre>{visible(r.output)}</pre>
+    </details>
+  ) : null)
+  return (
+    <div className={`run-check ${view.level}`}>
+      <div className="verdict">Check <code className="mono">{visible(check.command)}</code>: {visible(view.text)}</div>
+      {wrote('after the run', check.after, !check.after?.passed)}
+      {wrote('before the run', check.before, false)}
+    </div>
+  )
+}
 
 /** Under the answer of a run in coding mode: the files it changed in the work folder, and the button that puts
  * them back as they were before it. When no save point could be kept, the reason stands here instead. */
@@ -49,6 +68,7 @@ export function RunChanges({ block }: { block: ChangesBlock }) {
           </ul>
         </details>
       )}
+      {block.check && <RunCheck check={block.check} />}
     </div>
   )
 }

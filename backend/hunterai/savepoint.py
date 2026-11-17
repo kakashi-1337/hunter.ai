@@ -337,11 +337,32 @@ async def before_run(run_id: str, workdir) -> None:
     _runs.setdefault(run_id, kept)
 
 
+def of_run(run_id: str) -> tuple[Path, str, str] | None:
+    """(the work folder, its save point from before the run's first change or "", why there is none), once a run
+    came to the point of changing something."""
+    return _runs.get(run_id)
+
+
+async def again(run_id: str) -> str | None:
+    """Take the save point of a run anew, before the run has changed anything: what was written to the folder
+    since the first one (by the folder's check) is then not counted as the run's. The new id, or None when it
+    could not be taken; the first one stands then."""
+    kept = _runs.get(run_id)
+    if kept is None or not kept[1]:
+        return None
+    try:
+        tree = await _take(kept[0])
+    except NoSavePoint:
+        return None
+    _runs[run_id] = (kept[0], tree, "")
+    return tree
+
+
 async def after_run(run_id: str) -> dict | None:
     """At the end of a run that was about to change something: {"folder", "before", "after", "files", "reason"}.
     `files` is what differs now; `reason` says, for the owner, why there is no list (no save point at the
     start, or none at the end). None for a run that never came to that point."""
-    kept = _runs.pop(run_id, None)
+    kept = _runs.get(run_id)
     if kept is None:
         return None
     folder, before, reason = kept
@@ -353,4 +374,5 @@ async def after_run(run_id: str) -> dict | None:
         except Exception as e:  # noqa: BLE001  NoSavePoint and SavePointError say why in words; anything else by its name
             said = str(e) if isinstance(e, (NoSavePoint, SavePointError)) else f"{type(e).__name__}: {e}"[:300]
             found.update(after="", files=[], reason=NOT_AT_END.format(said.rstrip(".")))
+    _runs.pop(run_id, None)             # only now: a run that is stopped while this is read is asked again when it is closed
     return found

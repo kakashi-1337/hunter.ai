@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useStore } from '../store'
-import { decisionSummary, formatDuration, stepSummary, visible } from '../tree'
+import { checkStepLine, decisionSummary, formatDuration, stepSummary, visible } from '../tree'
 import type { Step } from '../types'
 
 const ms = (a: string, b: string | null, now: number) => Math.max(0, (b ? Date.parse(b) : now) - Date.parse(a))
@@ -50,6 +50,7 @@ function StepRow({ step, now }: { step: Step; now: number }) {
       )}
       {step.kind === 'user_note' && <div className="meta">Read by the agent here, with its next model call:<pre>{visible(String(d.text ?? ''))}</pre></div>}
       {step.kind === 'fallback' && <div className="meta">{d.from} → {d.to}<br />Reason: {d.reason}</div>}
+      {step.kind === 'check' && <div className="meta">{checkStepLine(step)}</div>}
       {step.kind === 'model_call' && (
         <div className="meta">
           {step.status}{step.input_tokens || step.output_tokens ? ` · ${step.input_tokens} in / ${step.output_tokens} out tokens` : ''}

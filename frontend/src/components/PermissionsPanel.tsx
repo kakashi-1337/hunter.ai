@@ -3,6 +3,7 @@ import * as api from '../api'
 import { useStore } from '../store'
 import { parseLines } from '../tree'
 import type { Decision, Grant, Policy, Risk, ToolInfo } from '../types'
+import { FolderCheck } from './FolderCheck'
 import { Modal } from './Modal'
 
 const RISKS: Risk[] = ['read', 'write', 'execute', 'network']
@@ -136,6 +137,7 @@ export function PermissionsPanel({ onClose }: { onClose: () => void }) {
           <button className="btn" onClick={() => { setFolder(''); void save({ workdir: null }) }}>Reset to default</button>
         </div>
       </label>
+      <FolderCheck key={inUse ?? ''} chatId={chat.id} folder={inUse} />
       <PolicyEditor policy={chat.permissions ?? {}} tools={tools} locked={chat.mode === 'plan' ? ['write', 'execute'] : []}
         inherit={(risk) => `Mode default (${global.risk?.[risk] ?? preset?.[risk] ?? 'ask'})`}
         onChange={(permissions) => save({ permissions })} />

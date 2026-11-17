@@ -23,11 +23,18 @@ export interface ChangesBlock {
   before: string
   after: string
   reason: string
+  /** The check of the folder before and after the run, when the owner set one for the folder. */
+  check?: FolderCheck | null
   /** Every file is as it was before the run again: nothing is left to undo. */
   undone: boolean
   /** After an undo: the files that changed after the run and were left as they are. The undo can be asked again. */
   left: string[]
 }
+
+/** One run of a folder's check: the command the owner set for the folder (the project's tests). */
+export interface CheckResult { passed: boolean; exit_code: number | null; seconds: number; timed_out: boolean; output: string }
+/** `after` is null when no check followed the run; `note` then says why. */
+export interface FolderCheck { command: string; before: CheckResult | null; after: CheckResult | null; note: string }
 
 export type MessageStatus = 'complete' | 'streaming' | 'error' | 'interrupted' | 'cancelled'
 export type Mode = 'plan' | 'pentesting' | 'coding'
@@ -180,7 +187,7 @@ export interface Step {
   id: string
   run_id: string
   seq: number
-  kind: 'model_call' | 'tool_call' | 'subagent' | 'permission' | 'fallback' | 'decision' | 'retrieval' | 'user_note' | 'context'
+  kind: 'model_call' | 'tool_call' | 'subagent' | 'permission' | 'fallback' | 'decision' | 'retrieval' | 'user_note' | 'context' | 'check'
   parent_step_id?: string | null
   name: string
   status: string

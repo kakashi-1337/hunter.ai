@@ -63,6 +63,10 @@ export const listChats = (targetId?: string) => request<Chat[]>('GET', `/api/cha
 export const createChat = (body: { target_id?: string | null; mode?: Mode; provider?: string; model?: string; options?: Options; persona_id?: string | null }) =>
   request<Chat>('POST', '/api/chats', body)
 export const getChat = (id: string) => request<{ chat: Chat; messages: Message[]; workdir?: string }>('GET', `/api/chats/${id}`)
+/** The check of the chat's working folder: the command HunterAI runs there before and after a coding run. */
+export const getCheck = (chatId: string) => request<{ folder: string; command: string }>('GET', `/api/chats/${chatId}/check`)
+/** Set it for the folder (every chat that works there uses it); an empty command removes it. */
+export const putCheck = (chatId: string, command: string) => request<{ folder: string; command: string }>('PUT', `/api/chats/${chatId}/check`, { command })
 export const updateChat = (
   id: string, patch: Partial<Pick<Chat, 'title' | 'mode' | 'provider' | 'model' | 'options' | 'target_id' | 'workdir' | 'permissions' | 'persona_id'>>,
 ) => request<Chat>('PATCH', `/api/chats/${id}`, patch)

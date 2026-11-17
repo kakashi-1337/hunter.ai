@@ -12,7 +12,7 @@ import dataclasses
 import time
 from typing import Awaitable, Callable
 
-from . import context, hub, permissions, problems, savepoint, secrets
+from . import checks, context, hub, permissions, problems, savepoint, secrets
 from .modes import build_system
 from .providers import registry
 from .providers.base import (Options, ProviderError, Stop, TextDelta, ThinkingDelta,
@@ -524,6 +524,7 @@ async def _execute(conn_factory, run_id: str, chat_id: str, user_message_id: str
             first = await skills.title_text(conn, first)        # "/plan map the login" is titled by the task
             if _title_from(first):
                 await chats.update(conn, chat_id, title=_title_from(first))
+        await _folder_check(conn, run_id, chat, acc)        # last: stopping it stops nothing else of the run
     except ProviderError as e:
         error = problems.model_call(e)
     except _Stopped as e:
@@ -583,6 +584,18 @@ async def _check_answer(conn, run_id: str, acc: _Attempt) -> None:
         pass
 
 
+async def _folder_check(conn, run_id: str, chat, acc: _Attempt) -> None:
+    """For a run that ended by itself: the list of what it changed, and the check of its folder after it, when
+    the owner set one. The run is done and stays done, whatever happens here; stopping the run ends the check."""
+    try:
+        acc.changes = await _changes(run_id)
+        acc.changes = await checks.after(conn, run_id, chat, acc.changes)
+    except asyncio.CancelledError:
+        pass
+    except Exception:  # noqa: BLE001
+        pass
+
+
 async def _changes(run_id: str) -> ChangesBlock | None:
     """What this run changed in its work folder, when a save point was taken for it (coding mode): the list the
     owner sees under the answer and can undo. Runs for every outcome, a failed or stopped run included, and never
@@ -601,7 +614,12 @@ async def _finalize(conn_factory, conn, run_id, mid, acc, status, error, provide
     """Record the outcome and tell subscribers. The database writes are best effort;
     run_finished is published whatever happens, or the chat's viewers would wait for ever."""
     msg, totals = None, {}
-    acc.changes = await _changes(run_id)
+    if acc.changes is None:                 # a run that did not end by itself: its list is made here, and no check follows it
+        acc.changes = await _changes(run_id)
+    try:
+        acc.changes = checks.unfinished(run_id, acc.changes)
+    except Exception:  # noqa: BLE001
+        pass
     try:
         try:
             if conn is None:

@@ -1,4 +1,4 @@
-import type { AnswerCheckBlock, Block, ChangesBlock, Goal, Helper, FindingRow, LocalModel, Message, Options, PermissionRequest, Policy, RunEvent, SourcesBlock, Step, SwarmMember, SystemStatus } from './types'
+import type { AnswerCheckBlock, Block, ChangesBlock, CheckResult, FolderCheck, Goal, Helper, FindingRow, LocalModel, Message, Options, PermissionRequest, Policy, RunEvent, SourcesBlock, Step, SwarmMember, SystemStatus } from './types'
 
 export function messageText(m: Message): string {
   return m.blocks.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('\n')
@@ -304,6 +304,47 @@ export function changesView(b: ChangesBlock): { text: string; level: '' | 'warn'
       : `${head} ${b.left.length} of them changed after the run and ${left}: ${b.left.join(', ')}. `
         + (rest === 1 ? 'The other is as it was before it.' : 'The others are as they were before it.')
   return { text, level: 'warn', canUndo: true }
+}
+
+/** How a run of the check ended when it did not pass. */
+const ended = (r: CheckResult) => (r.timed_out ? `it did not end within ${Math.round(r.seconds)} seconds and was stopped`
+  : r.exit_code === null ? 'it could not be started' : `exit code ${r.exit_code}`)
+
+/** What a folder's check said before a run and after it, for the line beside the list of what the run changed
+ * (the line names the command first). Red when the run broke it, green when the run made it pass. */
+export function checkView(c: FolderCheck): { text: string; level: '' | 'ok' | 'warn' | 'bad' } {
+  const { before, after } = c
+  if (!after) {
+    const was = !before ? 'was not run before the run' : before.passed ? 'passed before the run' : `failed before the run (${ended(before)})`
+    return { text: `${was}. ${c.note}`.trim(), level: 'warn' }
+  }
+  if (!before) {
+    return after.passed ? { text: 'passes after the run. It was not run before it.', level: '' }
+      : { text: `fails after the run (${ended(after)}). It was not run before it.`, level: 'warn' }
+  }
+  if (after.passed) {
+    return before.passed ? { text: 'passed before the run and after it.', level: '' } : { text: 'failed before the run, passes after it.', level: 'ok' }
+  }
+  return before.passed ? { text: `passed before the run, fails after it (${ended(after)}).`, level: 'bad' }
+    : { text: `failed before the run and still fails after it (${ended(after)}).`, level: 'warn' }
+}
+
+const whenOf = (s: Step) => (s.detail?.when === 'before' ? 'before the first change' : 'after the run')
+
+/** The check of the folder that is going right now, from the steps of the run that is live. */
+export function runningCheck(steps: Step[]): { command: string; text: string } | null {
+  const going = [...steps].reverse().find((s) => s.kind === 'check' && !s.ended_at)
+  return going ? { command: going.name, text: `Running the check of this folder ${whenOf(going)}: ${going.name}` } : null
+}
+
+/** One run of the check in the list of a run's steps. */
+export function checkStepLine(step: Step): string {
+  const d = step.detail as { passed?: boolean; exit_code?: number | null; seconds?: number; timed_out?: boolean }
+  if (!step.ended_at) return `${whenOf(step)} · running`
+  if (step.status === 'cancelled') return `${whenOf(step)} · stopped with the run`
+  if (d.timed_out) return `${whenOf(step)} · stopped: it did not end within ${Math.round(d.seconds ?? 0)} seconds`
+  const how = d.passed ? 'passed' : d.exit_code == null ? 'could not be started' : `failed (exit code ${d.exit_code})`
+  return `${whenOf(step)} · ${how} · ${d.seconds ?? 0} s`
 }
 
 /** What the owner is asked before anything is put back. */

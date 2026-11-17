@@ -506,6 +506,26 @@ async def test_a_run_with_a_save_point_gets_what_it_changed(work):
     assert await savepoint.after_run("r1") is None and await savepoint.after_run("never") is None
 
 
+async def test_a_run_stopped_while_its_changes_are_listed_still_gets_its_list(work, monkeypatch):
+    """Stop arrives while the folder is read at the end of the run: the list is made when the run is closed."""
+    await savepoint.before_run("r1", work)
+    write(work, "app.py", "changed\n")
+    real, reading = savepoint._take, asyncio.Event()
+
+    async def slow(folder):
+        reading.set()
+        await asyncio.sleep(30)
+    monkeypatch.setattr(savepoint, "_take", slow)
+    listing = asyncio.create_task(savepoint.after_run("r1"))
+    await reading.wait()
+    listing.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await listing
+    monkeypatch.setattr(savepoint, "_take", real)
+    got = await savepoint.after_run("r1")
+    assert got["files"] == [{"path": "app.py", "change": "changed"}] and await savepoint.after_run("r1") is None
+
+
 async def test_the_folder_is_read_once_for_a_run_not_before_each_of_its_calls(work, monkeypatch):
     taken, real = [], savepoint._take
 
@@ -564,7 +584,7 @@ from hunterai.repo import chats, messages, runs, settings  # noqa: E402
 from hunterai.tools import native  # noqa: E402
 from hunterai.types import TextBlock  # noqa: E402
 from tests.test_api import client  # noqa: E402,F401 (client is a fixture)
-from tests.test_engine import go, use  # noqa: E402
+from tests.test_engine import go, no_bytes, use  # noqa: E402
 from tests.toolkit import Turns  # noqa: E402
 
 
@@ -674,6 +694,28 @@ async def test_a_call_that_was_denied_takes_no_save_point(conn, work):
     user = await messages.add(conn, chat.id, None, "user", [TextBlock(text="write it")])
     run, msg = await go(conn, chat, user)
     assert block(msg) is None and not savepoint.shadow(work).exists() and not (work / "a.py").exists()
+
+
+async def test_stopping_a_run_while_its_changes_are_listed_keeps_the_answer_and_the_list(conn, work, monkeypatch):
+    use(abliteration=Turns("abliteration", [ToolCall("c1", "edit", {"path": "app.py", "old_string": "return 1", "new_string": "return 2"})],
+                           [TextDelta("Fixed.")]))
+    chat, user = await coding_chat(conn, work)
+    real, readings, reading = savepoint._take, [], asyncio.Event()
+
+    async def slow_at_the_end(folder):
+        readings.append(folder)
+        if len(readings) == 2:                                          # the reading at the end of the run
+            reading.set()
+            await asyncio.sleep(30)
+        return await real(folder)
+    monkeypatch.setattr(savepoint, "_take", slow_at_the_end)
+    run_id, mid = await engine.start_run(db.connect, chat.id, user.id, no_bytes)
+    await asyncio.wait_for(reading.wait(), 20)
+    await engine.cancel(run_id)
+    await asyncio.wait_for(engine.wait(run_id), 20)
+    run, msg = await runs.get(conn, run_id), await messages.get(conn, mid)
+    assert run.status == "done" and [b.text for b in msg.blocks if b.type == "text"] == ["Fixed."]
+    assert block(msg).files == [{"path": "app.py", "change": "changed"}]
 
 
 # ---- undo

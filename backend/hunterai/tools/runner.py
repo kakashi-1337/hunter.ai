@@ -15,7 +15,7 @@ import unicodedata
 from collections.abc import Awaitable, Callable, Collection
 from dataclasses import dataclass
 
-from .. import config, permissions, savepoint, secrets
+from .. import checks, config, permissions, savepoint, secrets
 from ..db import new_id, now
 from ..permissions import Answer, PermissionRequest, Policy, Verdict
 from ..providers.base import ToolCall
@@ -419,6 +419,10 @@ async def call(conn, *, chat_id: str, run_id: str, tc: ToolCall, offered: Collec
     if chat.mode == "coding" and (tool.risk in ("write", "execute") or tool.writes_files):
         # The first call of a run that can change the work folder: keep the folder as it is, so the run can be undone.
         await savepoint.before_run(run_id, ctx.workdir)
+        try:        # the folder's check, when the owner set one, on the folder as it is before anything changes
+            await checks.before(conn, run_id, chat, parent_step_id)
+        except Exception:  # noqa: BLE001  the check is an extra: a fault in it must not stop the call it stands before
+            pass
     try:
         result = await tool.handler(ctx, args)
         text, is_error, meta = result.text, result.is_error, dict(result.meta or {})
