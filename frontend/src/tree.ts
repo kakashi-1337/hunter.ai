@@ -135,6 +135,7 @@ export type RenderItem =
   | { kind: 'thinking'; text: string }
   | { kind: 'tool'; card: ToolCard }
   | { kind: 'note'; text: string }
+  | { kind: 'notice'; text: string; level: 'warn' }
 
 /** The message's blocks in order, each tool result folded into its call's card. */
 export function renderItems(m: Message): RenderItem[] {
@@ -146,6 +147,7 @@ export function renderItems(m: Message): RenderItem[] {
     else if (b.type === 'thinking') { if (b.text) out.push({ kind: 'thinking', text: b.text }) }
     else if (b.type === 'tool_call') out.push({ kind: 'tool', card: { call: b, result: results.get(b.id) ?? null } })
     else if (b.type === 'owner_note') { if (b.text) out.push({ kind: 'note', text: b.text }) }
+    else if (b.type === 'notice') { if (b.text) out.push({ kind: 'notice', text: b.text, level: 'warn' }) }
   }
   return out
 }
@@ -419,6 +421,13 @@ export function restartNotice(status: SystemStatus | null): string | null {
   return status.restart_needed
     ? `Restart HunterAI: its code on this machine changed after the server was started (an update, or an edit). Until then it runs the old code. ${HOW_TO_RESTART}`
     : `Restart HunterAI: the server that answers is older than this page, so parts of the page will not work. ${HOW_TO_RESTART}`
+}
+
+/** The page runs an interface older than the one that is built now: an update, and this tab was open through it.
+ * `own` is the script this page runs. Null: nothing to say, or one side cannot tell. */
+export function reloadNotice(status: SystemStatus | null, own: string | null): string | null {
+  if (!status?.page || !own?.startsWith('/assets/') || status.page === own) return null
+  return 'Reload this page: HunterAI was updated after it was opened, and it still shows the interface from before.'
 }
 
 /** The parts that were in use and do not run now, for the line above the machine state. Null: nothing to say

@@ -9,7 +9,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field, ValidationError
 
-from .. import config, engine, procs, uploads
+from .. import config, engine, problems, procs, stale, uploads
 from ..permissions import Policy
 from ..repo import chats, grants, messages, runs, targets
 from ..repo import personas
@@ -191,7 +191,8 @@ async def patch_chat(cid: str, body: ChatPatch, conn=Depends(get_conn)):
             fields["permissions"] = Policy(**(fields["permissions"] or {})).model_dump(
                 exclude_defaults=True)
         except (ValidationError, TypeError) as e:
-            raise HTTPException(400, f"invalid permissions: {str(e).splitlines()[0]}")
+            raise HTTPException(400, "Permissions: " + (problems.invalid(e.errors(), stale.restart_needed())
+                                                        if isinstance(e, ValidationError) else "they must be an object.")) from None
     if "workdir" in fields:
         fields["workdir"] = _checked_workdir(fields["workdir"]) if fields["workdir"] else None
     changed = any(k in fields and fields[k] != getattr(chat, k) for k in ("mode", "target_id"))

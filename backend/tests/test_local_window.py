@@ -40,14 +40,14 @@ def line(obj):
     return json.dumps(obj) + "\n"
 
 
-def local_model(context_length=40960):
+def local_model(context_length=40960, ended="stop"):
     """A stand-in Ollama: it writes SUMMARY when it is asked for a summary and ANSWER otherwise.
-    Returns the route of /api/chat, which holds every request it got."""
+    Returns the route of /api/chat, which holds every request it got. `ended`: why it says it stopped writing."""
     def reply(request):
         first = json.loads(request.content)["messages"][0]
         says = SUMMARY if first["role"] == "system" and first["content"] == context.SUMMARY_SYSTEM else ANSWER
         return httpx.Response(200, text=line({"message": {"role": "assistant", "content": says}, "done": False})
-                              + line({"message": {"role": "assistant", "content": ""}, "done": True, "done_reason": "stop",
+                              + line({"message": {"role": "assistant", "content": ""}, "done": True, "done_reason": ended,
                                       "prompt_eval_count": 900, "eval_count": 12}))
     respx.post(HOST + "/api/show").mock(return_value=httpx.Response(200, json={
         "capabilities": ["completion", "tools"],
@@ -180,3 +180,19 @@ async def test_a_refusal_by_ollama_for_size_is_answered_by_a_smaller_request(con
     _, answers = bodies(route)
     assert len(answers) == 2 and ollama._chars(answers[1]) < refused[0] / 1.5
     assert said(answers[1]).rstrip().endswith(LATEST)
+
+
+@respx.mock
+async def test_a_local_answer_cut_by_its_full_window_says_so_under_it(conn):
+    """The request and the answer share the window. Ollama writes until it is full and then stops in the middle of a
+    sentence, with nothing on the page to say why."""
+    registry.override("abliteration", Down())
+    local_model(ended="length")
+    chat = await chats.create(conn, None, "pentesting", "abliteration", "big", {})
+    user = await messages.add(conn, chat.id, None, "user", [TextBlock(text=LATEST)])
+    run, msg = await go(conn, chat, user)
+    assert (run.status, run.error, msg.provider) == ("done", None, "ollama")
+    assert [b.type for b in msg.blocks] == ["text", "notice"]
+    assert msg.blocks[-1].kind == "cut_off"
+    assert msg.blocks[-1].text.startswith("The answer was cut off: the context window of the local model (16,384 tokens) was full.")
+    assert 'Raise "Context window for local models" in Settings' in msg.blocks[-1].text

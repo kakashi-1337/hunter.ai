@@ -99,10 +99,19 @@ class OwnerNoteBlock(BaseModel):
     text: str
 
 
-NOT_FOR_MODELS = ("sources", "answer_check", "owner_note")     # block types that are the owner's to read only
+class NoticeBlock(BaseModel):
+    """Something about the answer that the owner has to know and the text does not show: it was cut off at a
+    limit, or the provider's filter ended it. Shown under the answer; never sent to a model."""
+    type: Literal["notice"] = "notice"
+    kind: str                    # "cut_off" | "filtered"
+    text: str
+
+
+NOT_FOR_MODELS = ("sources", "answer_check", "owner_note", "notice")     # block types that are the owner's to read only
 
 Block = Annotated[
-    Union[TextBlock, ThinkingBlock, ImageBlock, FileBlock, ToolCallBlock, ToolResultBlock, SourcesBlock, AnswerCheckBlock, OwnerNoteBlock],
+    Union[TextBlock, ThinkingBlock, ImageBlock, FileBlock, ToolCallBlock, ToolResultBlock, SourcesBlock, AnswerCheckBlock,
+          OwnerNoteBlock, NoticeBlock],
     Field(discriminator="type"),
 ]
 BlockList = TypeAdapter(list[Block])

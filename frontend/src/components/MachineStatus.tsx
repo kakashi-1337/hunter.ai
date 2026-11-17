@@ -1,13 +1,15 @@
 import { useEffect, useState } from 'react'
 import * as api from '../api'
-import { machineLine, restartNotice, stoppedNotice } from '../tree'
+import * as build from '../build'
+import { machineLine, reloadNotice, restartNotice, stoppedNotice } from '../tree'
 import type { SystemStatus } from '../types'
 
 const EVERY_MS = 10_000
 
 /** How hot the processor is and which local models are loaded, asked again every ten seconds while the page is in view.
- * Above it, when the server is not the code on disk, the notice to restart it; and the parts that were in use and do
- * not run now, with the way to the setup check, which says how to start each again. */
+ * Above it, when the server is not the code on disk, the notice to restart it; when this page is older than the
+ * interface that is built now, the notice to reload it; and the parts that were in use and do not run now, with the
+ * way to the setup check, which says how to start each again. */
 export function MachineStatus({ onSetup }: { onSetup?: () => void }) {
   const [status, setStatus] = useState<SystemStatus | null>(null)
   useEffect(() => {
@@ -23,12 +25,18 @@ export function MachineStatus({ onSetup }: { onSetup?: () => void }) {
   const title = level === 'bad' ? `At or over the limit of ${status.cpu_limit}°C: look_at_image waits for the processor to cool before it loads its model.`
     : level === 'warn' ? `Close to the limit of ${status.cpu_limit}°C.` : 'The processor temperature and the local models that hold memory now.'
   const restart = restartNotice(status)
+  const stale = reloadNotice(status, build.ownScript())
   const down = stoppedNotice(status)
   // The owner stopped it himself: the server stops naming these parts until they have run again.
   const hide = () => { api.hideStopped().then(({ stopped }) => setStatus((s) => s && { ...s, stopped })).catch(() => {}) }
   return (
     <>
       {restart && <div className="restart-notice" role="alert">{restart}</div>}
+      {stale && (
+        <div className="restart-notice down-notice" role="alert">
+          <span>{stale}</span>
+          <button className="btn small" onClick={build.reload}>Reload</button>
+        </div>)}
       {down && (
         <div className="restart-notice down-notice" role="alert">
           <span>{down}</span>

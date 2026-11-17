@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 import os
+import re
 import time
 
 import httpx
@@ -35,6 +36,26 @@ REASON = 160                # characters of an MCP server's error that the setup
 HIDDEN = "stopped:hidden"   # settings key: the stopped parts the owner asked not to be told about again
 
 
+_ENTRY = re.compile(r"""<script\b[^>]*\bsrc=["'](/assets/[^"']+)["']""")
+_page: tuple[tuple | None, str | None] = (None, None)       # (what the file was when it was read, the script it names)
+
+
+def page_script() -> str | None:
+    """The script the built interface starts with, as its index.html names it; None while there is no build. A page
+    that runs another one was opened before the interface was built again, and says to reload itself."""
+    global _page
+    try:
+        index = config.dist_dir() / "index.html"
+        seen = index.stat()
+        mark = (str(index), seen.st_mtime_ns, seen.st_size)
+        if _page[0] != mark:
+            found = _ENTRY.search(index.read_text(encoding="utf-8", errors="replace"))
+            _page = (mark, found.group(1) if found else None)
+        return _page[1]
+    except OSError:
+        return None
+
+
 def forget(app) -> None:
     """Nothing is held about the services: the next status looks again."""
     app.state.looked, app.state.stopped, app.state.stopped_now = None, [], []
@@ -59,7 +80,8 @@ async def _fetch(url: str) -> dict | None:
 @router.get("/system/status")
 async def status(request: Request, conn=Depends(get_conn)):
     """Cheap enough to ask every few seconds. `local_models` is null when Ollama does not answer. `stopped`
-    names the services that answered before and do not now; they are looked at once a minute."""
+    names the services that answered before and do not now; they are looked at once a minute. `page` is the
+    script the built interface starts with: a page that runs another one is older than this server."""
     ps = await _fetch(ollama.host() + "/api/ps")
     models = None if ps is None else [
         {"name": str(m.get("name") or m.get("model") or "?"), "vram_mb": round((m.get("size_vram") or 0) / 2**20)}
@@ -68,7 +90,7 @@ async def status(request: Request, conn=Depends(get_conn)):
     if looked is None or time.time() - looked >= LOOK_EVERY:
         await checkup(request, conn)
     return {"cpu_temp": thermal.cpu_temp(), "cpu_limit": thermal.limit(), "local_models": models,
-            "restart_needed": stale.restart_needed(), "stopped": request.app.state.stopped}
+            "restart_needed": stale.restart_needed(), "stopped": request.app.state.stopped, "page": page_script()}
 
 
 def _browser_installed() -> bool:

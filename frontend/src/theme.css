@@ -340,6 +340,7 @@ button.link:hover:not(:disabled) { background: none; color: var(--text); }
 
 /* answer check under an assistant message */
 .answer-check { border: 1px solid var(--line); border-left: 3px solid var(--faint); border-radius: 6px; padding: 6px 10px; margin-top: 8px; font-size: 12.5px; color: var(--muted); display: flex; flex-direction: column; gap: 4px; }
+.answer-notice { border: 1px solid var(--line); border-left: 3px solid var(--warn); border-radius: 6px; padding: 6px 10px; margin-top: 8px; font-size: 12.5px; color: var(--text); }
 .answer-check.warn { border-left-color: var(--warn); color: var(--text); }
 .answer-check.bad { border-left-color: var(--bad); color: var(--text); }
 .answer-claim .badge { margin-right: 6px; }

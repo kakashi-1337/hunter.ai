@@ -7,7 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, StrictInt, ValidationError
 
-from .. import answer_check, caido, config, engine, envfile, notify, permissions, subagents
+from .. import answer_check, caido, config, engine, envfile, notify, permissions, problems, stale, subagents
 from ..tools import on_demand
 from ..providers import ollama, registry
 from . import providers as providers_api
@@ -162,7 +162,8 @@ async def put_settings(body: SettingsIn, conn=Depends(get_conn)):
         try:
             policy = permissions.Policy(**(fields.pop("permissions") or {}))
         except (ValidationError, TypeError) as e:
-            raise HTTPException(400, f"invalid permissions: {str(e).splitlines()[0]}")
+            raise HTTPException(400, "Permissions: " + (problems.invalid(e.errors(), stale.restart_needed())
+                                                        if isinstance(e, ValidationError) else "they must be an object.")) from None
         await settings.put(conn, "permissions", policy.model_dump(exclude_defaults=True))
     if "local_window" in fields:
         size = fields.pop("local_window")

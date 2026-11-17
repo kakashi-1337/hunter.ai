@@ -90,10 +90,16 @@ _FALLBACK = {"unavailable", "timeout", "rate_limit"}
 
 
 class ProviderError(Exception):
+    """`complete`: the message says what to do about it itself, so nothing is added for the owner (see problems.py).
+    `provider` and `model` are filled in by the engine: which call failed."""
+
     def __init__(self, kind: ErrorKind, message: str, status: int | None = None,
-                 retry_after: float | None = None):
+                 retry_after: float | None = None, *, complete: bool = False):
         super().__init__(message)
         self.kind, self.message, self.status, self.retry_after = kind, message, status, retry_after
+        self.complete = complete
+        self.provider: str | None = None
+        self.model: str | None = None
 
     @property
     def fallback_eligible(self) -> bool:

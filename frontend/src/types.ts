@@ -8,6 +8,9 @@ export type Block =
   | SourcesBlock
   | AnswerCheckBlock
   | { type: 'owner_note'; text: string }
+  /** Something about the answer the owner has to know and its text does not show: it was cut off at a limit, or the
+   * provider's filter ended it. Never sent to a model. */
+  | { type: 'notice'; kind: string; text: string }
 
 export type MessageStatus = 'complete' | 'streaming' | 'error' | 'interrupted' | 'cancelled'
 export type Mode = 'plan' | 'pentesting' | 'coding'
@@ -543,6 +546,8 @@ export interface SystemStatus {
   /** The parts that were in use and do not run now: a service beside HunterAI that answered within the last week,
    * an MCP server that is switched on and gave up. Absent: a server from before it could tell. */
   stopped?: { id: string; label: string }[]
+  /** The script the built interface starts with now. Null: nothing is built. Absent: a server from before it could tell. */
+  page?: string | null
 }
 
 export interface CheckupItem {

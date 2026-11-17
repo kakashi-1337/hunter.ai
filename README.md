@@ -937,6 +937,30 @@ number of tools. It holds no key (only whether one is set), no proxy address, no
 no message; the home folder is written `~`, and an address loses its login and what follows
 its `?`. When the browser refuses to copy, the text is shown to copy by hand.
 
+### When something goes wrong
+
+An error says what is wrong and what to do about it.
+
+- **A model call that failed** keeps the provider's own words and adds the next step for
+  its kind: a key that is not set or was refused (Settings), no credit, a rate limit (with
+  the wait the provider named), no answer in time, a provider that cannot be reached (the
+  connection, the proxy for model providers), Ollama that does not answer (`ollama serve`,
+  `ollama ps`), a request the provider did not accept (the model list, Options).
+- **An answer that did not end by itself** has a line under it: cut off at the "Max output
+  tokens" of the chat, at the model's own limit for one answer, by the full context window
+  of a local model (which holds the request and the answer together), or ended by the
+  provider's content filter. The line stays with the answer and is never sent to a model.
+- **A value the server refuses** is named with what is wrong with it, for example
+  `"risk.read": input should be 'allow', 'ask' or 'deny'`. A setting the server does not
+  know, on a server that still runs the code from before an update, says to restart it.
+- **A page that is older than the server** (a tab left open through an update) says
+  **Reload this page** above the machine line, with a button.
+- **A fault of HunterAI itself** is said as one ("This is a fault in HunterAI, not in what
+  you sent"), in a run and in any request. Its traceback goes to
+  `~/.hunterai/logs/errors.log` (keys scrubbed; started anew at 2 MB, the file before it
+  kept as `errors.log.1`). Send that part of the file with the diagnostics when you report
+  it.
+
 The bottom of the sidebar shows the processor temperature and the local models Ollama holds
 in memory, asked again every ten seconds. The line turns yellow within ten degrees of
 `HUNTERAI_MAX_CPU_TEMP` and red at it. **Findings** next to it lists every finding of every

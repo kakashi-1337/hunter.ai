@@ -136,6 +136,8 @@ export function MessageItem({ message }: { message: Message }) {
               <Markdown key={i} text={item.text} />
             ) : item.kind === 'note' ? (
               <div key={i} className="owner-note"><div className="k">You, while the agent worked (read here)</div><div className="bubble">{item.text}</div></div>
+            ) : item.kind === 'notice' ? (
+              <div key={i} className={`answer-notice ${item.level}`} role="note">{item.text}</div>
             ) : (
               <ToolCard key={item.card.call.id} card={item.card} status={cardStatus(item.card, asks, running, !streaming)}
                 durationMs={durations[item.card.call.id]} steps={item.card.call.name === 'swarm' ? steps : undefined} />

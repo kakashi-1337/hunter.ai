@@ -212,7 +212,7 @@ class OllamaProvider:
         # An older Ollama does not know those two switches and cuts all the same, so what cannot fit is not sent.
         need = int(_chars(body) / CHARS_PER_TOKEN)
         if need > num_ctx:
-            raise ProviderError("bad_request", TOO_LARGE.format(model=model, need=need, window=num_ctx))
+            raise ProviderError("bad_request", TOO_LARGE.format(model=model, need=need, window=num_ctx), complete=True)
         taken: set[str] = set()
         usage, reason = Usage(0, 0), "end"
         try:
@@ -221,7 +221,7 @@ class OllamaProvider:
                     if r.status_code == 404:
                         raise ProviderError(
                             "bad_request",
-                            f"Ollama does not have model {model}. Run: ollama pull {model}", 404)
+                            f"Ollama does not have model {model}. Run: ollama pull {model}", 404, complete=True)
                     if r.status_code >= 400:
                         text = (await r.aread()).decode("utf-8", "replace")
                         if r.status_code == 400 and "does not support tools" in text:

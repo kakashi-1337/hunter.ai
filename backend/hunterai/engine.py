@@ -12,14 +12,14 @@ import dataclasses
 import time
 from typing import Awaitable, Callable
 
-from . import context, hub, permissions, secrets
+from . import context, hub, permissions, problems, secrets
 from .modes import build_system
 from .providers import registry
 from .providers.base import (Options, ProviderError, Stop, TextDelta, ThinkingDelta,
                              ThinkingSeal, ToolCall, ToolSpec, Usage, WireMessage, safe_call_id)
 from .repo import chats, goals, messages, runs, settings, targets
 from .tools import loopguard, runner
-from .types import NOT_FOR_MODELS, Block, OwnerNoteBlock, TextBlock, ThinkingBlock, ToolCallBlock, ToolResultBlock
+from .types import NOT_FOR_MODELS, Block, NoticeBlock, OwnerNoteBlock, TextBlock, ThinkingBlock, ToolCallBlock, ToolResultBlock
 
 DEFAULT_PROVIDER = "abliteration"
 FALLBACK_PROVIDER = "ollama"
@@ -57,14 +57,18 @@ class _Attempt:
         self.sources = None               # what the knowledge base gave this run, if anything
         self.check = None                 # the answer check of this run, once it is made
         self.callable: list[str] = []     # every tool this run may call: the listed ones and the ones loaded on demand
+        self.stop: str | None = None      # why the last model call ended, in the provider's word
+        self.produced = 0                 # output tokens of the last model call
+        self.notice: NoticeBlock | None = None    # what the owner has to know about how the answer ended
 
     @property
     def started(self) -> bool:
         return bool(self.items)
 
     def blocks(self) -> list[Block]:
-        """What is stored: the run's blocks, then the knowledge-base sources when there are any."""
-        return [*self.items, *(b for b in (self.sources, self.check) if b is not None)]
+        """What is stored: the run's blocks, then the word about how the answer ended, the knowledge-base sources
+        and the answer check, when there are any."""
+        return [*self.items, *(b for b in (self.notice, self.sources, self.check) if b is not None)]
 
     def wire_blocks(self) -> list[Block]:
         """What goes back to the model: never a block that is only the owner's to read."""
@@ -215,14 +219,14 @@ async def _fitted(conn, run_id: str, provider, provider_name: str, model: str, s
         refused = e
     smaller = await fit(hard=True)
     if smaller is fitted or smaller is wire:
-        raise ProviderError(refused.kind, refused.message + context.TOO_LONG, refused.status)
+        raise ProviderError(refused.kind, refused.message + context.TOO_LONG, refused.status, complete=True)
     try:
         async with contextlib.aclosing(events(smaller)) as stream:
             async for ev in stream:
                 yield ev
     except ProviderError as e:
         if context.is_overflow(e):
-            raise ProviderError(e.kind, e.message + context.TOO_LONG, e.status) from None
+            raise ProviderError(e.kind, e.message + context.TOO_LONG, e.status, complete=True) from None
         raise
 
 
@@ -236,7 +240,7 @@ async def _attempt(conn, run_id: str, mid: str, provider_name: str, model: str, 
     await hub.publish(run_id, {"type": "step_started", "step": step.model_dump()})
     usage = Usage(0, 0)
     status, detail, fit = "error", {}, {}
-    acc.output, acc.calls = False, []
+    acc.output, acc.calls, acc.stop, acc.produced = False, [], None, 0
     try:
         provider = registry.get(provider_name)
         async for ev in _fitted(conn, run_id, provider, provider_name, model, system, wire, options, specs, fit):
@@ -266,24 +270,28 @@ async def _attempt(conn, run_id: str, mid: str, provider_name: str, model: str, 
                 flush = True
             elif isinstance(ev, Usage):
                 usage = ev
+                acc.produced = ev.output_tokens
             elif isinstance(ev, Stop):
                 detail = {"stop_reason": ev.reason}
+                acc.stop = ev.reason
             if acc.started and (flush or time.monotonic() - acc.last_flush >= FLUSH_SECONDS):
                 await messages.update(conn, mid, blocks=acc.blocks())
                 acc.last_flush = time.monotonic()
         status = "done"
     except ProviderError as e:
         detail = {"error": e.message, "kind": e.kind}
+        e.provider, e.model = provider_name, model      # which call it was: the fallback's error is not the first model's
         raise
     except asyncio.CancelledError:
         status = "cancelled"
         raise
     except KeyError as e:
         detail = {"error": f"unknown provider {provider_name}"}
-        raise ProviderError("bad_request", f"Unknown provider: {provider_name}") from e
+        raise ProviderError("bad_request", f"This chat is set to the provider \"{provider_name}\", which this HunterAI does "
+                            "not have. Pick a model from the list for this chat.", complete=True) from e
     except Exception as e:  # an adapter bug must not leave the run hanging
         detail = {"error": f"{type(e).__name__}: {e}"}
-        raise ProviderError("bad_request", f"{type(e).__name__}: {e}") from e
+        raise ProviderError("bad_request", problems.own_failure(e, f"calling {provider_name}/{model}"), complete=True) from e
     finally:
         done = await asyncio.shield(runs.finish_step(
             conn, step.id, status, usage.input_tokens, usage.output_tokens, {**detail, **fit}))
@@ -505,6 +513,7 @@ async def _execute(conn_factory, run_id: str, chat_id: str, user_message_id: str
                                                          wire_out, acc, specs)
         await _tool_loop(conn, run_id, mid, chat, provider, model, system_out, wire_out, acc, specs)
         status = "done"
+        acc.notice = await _ending(chat, provider, model, acc)
         if specs:                 # a chat with tools: its answer can claim things the tool results do not show
             await _check_answer(conn, run_id, acc)
         if chat.title == "New chat":
@@ -514,7 +523,7 @@ async def _execute(conn_factory, run_id: str, chat_id: str, user_message_id: str
             if _title_from(first):
                 await chats.update(conn, chat_id, title=_title_from(first))
     except ProviderError as e:
-        error = e.message
+        error = problems.model_call(e)
     except _Stopped as e:
         error = str(e)
     except permissions.Interrupted:
@@ -522,11 +531,27 @@ async def _execute(conn_factory, run_id: str, chat_id: str, user_message_id: str
     except asyncio.CancelledError:
         status = "cancelled"
     except Exception as e:
-        error = f"{type(e).__name__}: {e}"
+        error = problems.own_failure(e, "working on this message")
     finally:
         _finalizing.add(run_id)
         await asyncio.shield(_finalize(conn_factory, conn, run_id, mid, acc, status, error,
                                        provider, model, fallback_from))
+
+
+async def _ending(chat, provider_name: str, model: str, acc: _Attempt) -> NoticeBlock | None:
+    """The word for the owner when the last model call did not end by itself: cut off at a limit, or ended by the
+    provider's filter. The answer looks finished otherwise, and stops in the middle of a sentence."""
+    try:
+        options = Options(**(chat.options or {}))
+        window = None
+        window_for = getattr(registry.get(provider_name), "window_for", None)
+        if window_for is not None and problems.at_limit(acc.stop):
+            window = await window_for(model, options)
+        said = problems.cut_off(acc.stop, provider=provider_name, max_tokens=options.max_tokens,
+                                output_tokens=acc.produced, window=window)
+        return NoticeBlock(kind=said[0], text=said[1]) if said else None
+    except Exception:  # noqa: BLE001 - the run is done; a word that cannot be made is left out
+        return None
 
 
 async def _check_answer(conn, run_id: str, acc: _Attempt) -> None:

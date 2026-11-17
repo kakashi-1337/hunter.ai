@@ -42,7 +42,8 @@ _LIMIT = ("usage limit", "rate limit", "limit reached", "overloaded")
 def _failure(text: str) -> ProviderError:
     low = text.lower()
     if any(s in low for s in _LOGIN):
-        return ProviderError("auth", "the claude CLI is not logged in: run `claude` in a terminal and log in, then try again")
+        return ProviderError("auth", "the claude CLI is not logged in: run `claude` in a terminal and log in, then try again",
+                             complete=True)
     if any(s in low for s in _LIMIT):
         return ProviderError("rate_limit", f"claude: {text[:300]}")
     return ProviderError("unavailable", f"claude failed: {text[:300]}")

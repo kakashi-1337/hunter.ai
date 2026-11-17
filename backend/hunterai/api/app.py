@@ -6,9 +6,10 @@ from contextlib import asynccontextmanager
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 
-from .. import config, db, engine, mcp_manager, procs
+from .. import config, db, engine, mcp_manager, problems, procs, stale
 from ..tools import native
 from . import chats, findings, processes, providers, runs, search, settings, system, targets, tools, uploads
 from . import kb as kb_api
@@ -92,6 +93,17 @@ def create_app() -> FastAPI:
                 request.headers.get("sec-fetch-site") in ("cross-site", "same-site"):
             return JSONResponse({"detail": "forbidden origin"}, status_code=403)
         return await call_next(request)
+
+    @app.exception_handler(RequestValidationError)
+    async def refused_input(request, exc):
+        # FastAPI's own answer is a list the page shows the first message of, without the name of the field.
+        return JSONResponse({"detail": problems.invalid(exc.errors(), stale.restart_needed())}, status_code=422)
+
+    @app.exception_handler(Exception)
+    async def own_fault(request, exc):
+        # Without this the page gets the words "Internal Server Error" and nothing to go on.
+        return JSONResponse({"detail": problems.own_failure(exc, f"answering {request.method} {request.url.path}")},
+                            status_code=500)
 
     for module in (targets, chats, runs, uploads, search, settings, providers, tools,
                    processes, findings, kb_api, mcp_admin, personas_api, skills_api, memory_api, system):
