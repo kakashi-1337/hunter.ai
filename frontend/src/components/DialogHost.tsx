@@ -7,8 +7,10 @@ export function DialogHost() {
   const [value, setValue] = useState('')
   const ok = useRef<HTMLButtonElement>(null)
   const field = useRef<HTMLInputElement>(null)
+  const typed = useRef(false)      // a press on the page behind does not throw away an answer that was started
   useEffect(() => {
     if (!current) return
+    typed.current = false
     setValue(current.initial)
     // Focus after paint: Enter then answers, and Escape cancels, without reaching the dialog underneath.
     const t = setTimeout(() => (current.kind === 'prompt' ? field.current : ok.current)?.focus(), 0)
@@ -20,8 +22,9 @@ export function DialogHost() {
   const cancel = () => answer(current.kind === 'prompt' ? null : false)
   const accept = () => answer(current.kind === 'prompt' ? value : true)
   return (
-    <div className="overlay dialog-host" onMouseDown={(e) => e.target === e.currentTarget && cancel()}>
-      <form className="modal dialog" role="alertdialog" aria-modal="true" aria-label={current.message} onSubmit={(e) => { e.preventDefault(); accept() }}>
+    <div className="overlay dialog-host" onMouseDown={(e) => e.target === e.currentTarget && !typed.current && cancel()}>
+      <form className="modal dialog" role="alertdialog" aria-modal="true" aria-label={current.message} onInput={() => { typed.current = true }}
+        onSubmit={(e) => { e.preventDefault(); accept() }}>
         <div className="body">
           <div className="dialog-message">{current.message}</div>
           {current.kind === 'prompt' && <input ref={field} value={value} aria-label={current.message} onChange={(e) => setValue(e.target.value)} />}
