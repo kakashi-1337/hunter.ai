@@ -77,6 +77,8 @@ export const setActiveLeaf = (chatId: string, messageId: string) =>
   request<{ ok: boolean }>('POST', `/api/chats/${chatId}/active-leaf`, { message_id: messageId })
 
 export const cancelRun = (id: string) => request<{ cancelled: boolean }>('POST', `/api/runs/${id}/cancel`)
+/** Put the files a run changed back as they were before it. A file that changed after the run is left and named. */
+export const undoRun = (id: string) => request<{ message: Message; restored: string[]; left: string[] }>('POST', `/api/runs/${id}/undo`)
 export const getRun = (id: string) => request<RunDetail>('GET', `/api/runs/${id}`)
 export const listRuns = (chatId: string) => request<RunSummary[]>('GET', `/api/chats/${chatId}/runs`)
 

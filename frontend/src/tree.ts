@@ -1,4 +1,4 @@
-import type { AnswerCheckBlock, Block, Goal, Helper, FindingRow, LocalModel, Message, Options, PermissionRequest, Policy, RunEvent, SourcesBlock, Step, SwarmMember, SystemStatus } from './types'
+import type { AnswerCheckBlock, Block, ChangesBlock, Goal, Helper, FindingRow, LocalModel, Message, Options, PermissionRequest, Policy, RunEvent, SourcesBlock, Step, SwarmMember, SystemStatus } from './types'
 
 export function messageText(m: Message): string {
   return m.blocks.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('\n')
@@ -280,6 +280,37 @@ export function triageFacts(triage: Record<string, unknown>): string[] {
 
 export function sourcesOf(m: Message): SourcesBlock | null {
   return (m.blocks.find((b) => b.type === 'sources') as SourcesBlock | undefined) ?? null
+}
+
+/** What the run of this answer changed in its work folder (coding mode), when anything is to be said about it. */
+export function changesOf(m: Message): ChangesBlock | null {
+  return (m.blocks.find((b) => b.type === 'changes') as ChangesBlock | undefined) ?? null
+}
+
+const filesOf = (n: number) => (n === 1 ? '1 file' : `${n} files`)
+
+/** The line over the list of what a run changed: how much, where, and what became of it. */
+export function changesView(b: ChangesBlock): { text: string; level: '' | 'warn'; canUndo: boolean } {
+  if (!b.files.length) return { text: b.reason, level: 'warn', canUndo: false }
+  const head = `This run changed ${filesOf(b.files.length)} in ${b.folder}.`
+  const one = b.files.length === 1
+  if (b.undone) return { text: `${head} ${one ? 'It was put back as it was' : 'They were put back as they were'} before it.`, level: '', canUndo: false }
+  if (!b.left.length) return { text: head, level: '', canUndo: true }
+  // An undo was asked and files were left: the owner's later work is in them. It can be asked again.
+  const rest = b.files.length - b.left.length
+  const left = b.left.length === 1 ? 'was left as it is' : 'were left as they are'
+  const text = one ? `${head} It changed after the run and was left as it is.`
+    : rest <= 0 ? `${head} All of them changed after the run and were left as they are.`
+      : `${head} ${b.left.length} of them changed after the run and ${left}: ${b.left.join(', ')}. `
+        + (rest === 1 ? 'The other is as it was before it.' : 'The others are as they were before it.')
+  return { text, level: 'warn', canUndo: true }
+}
+
+/** What the owner is asked before anything is put back. */
+export function undoQuestion(b: ChangesBlock): string {
+  const one = b.files.length === 1
+  return `Put the ${filesOf(b.files.length)} this run changed in ${b.folder} back as ${one ? 'it was' : 'they were'} before it? `
+    + 'A file that changed after the run is left as it is.'
 }
 
 export function answerCheckOf(m: Message): AnswerCheckBlock | null {

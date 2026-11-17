@@ -12,14 +12,15 @@ import dataclasses
 import time
 from typing import Awaitable, Callable
 
-from . import context, hub, permissions, problems, secrets
+from . import context, hub, permissions, problems, savepoint, secrets
 from .modes import build_system
 from .providers import registry
 from .providers.base import (Options, ProviderError, Stop, TextDelta, ThinkingDelta,
                              ThinkingSeal, ToolCall, ToolSpec, Usage, WireMessage, safe_call_id)
 from .repo import chats, goals, messages, runs, settings, targets
 from .tools import loopguard, runner
-from .types import NOT_FOR_MODELS, Block, NoticeBlock, OwnerNoteBlock, TextBlock, ThinkingBlock, ToolCallBlock, ToolResultBlock
+from .types import (NOT_FOR_MODELS, Block, ChangesBlock, NoticeBlock, OwnerNoteBlock, TextBlock, ThinkingBlock, ToolCallBlock,
+                    ToolResultBlock)
 
 DEFAULT_PROVIDER = "abliteration"
 FALLBACK_PROVIDER = "ollama"
@@ -60,15 +61,16 @@ class _Attempt:
         self.stop: str | None = None      # why the last model call ended, in the provider's word
         self.produced = 0                 # output tokens of the last model call
         self.notice: NoticeBlock | None = None    # what the owner has to know about how the answer ended
+        self.changes: ChangesBlock | None = None  # what the run changed in the work folder (coding mode)
 
     @property
     def started(self) -> bool:
         return bool(self.items)
 
     def blocks(self) -> list[Block]:
-        """What is stored: the run's blocks, then the word about how the answer ended, the knowledge-base sources
-        and the answer check, when there are any."""
-        return [*self.items, *(b for b in (self.notice, self.sources, self.check) if b is not None)]
+        """What is stored: the run's blocks, then the word about how the answer ended, what the run changed in the
+        work folder, the knowledge-base sources and the answer check, when there are any."""
+        return [*self.items, *(b for b in (self.notice, self.changes, self.sources, self.check) if b is not None)]
 
     def wire_blocks(self) -> list[Block]:
         """What goes back to the model: never a block that is only the owner's to read."""
@@ -581,11 +583,25 @@ async def _check_answer(conn, run_id: str, acc: _Attempt) -> None:
         pass
 
 
+async def _changes(run_id: str) -> ChangesBlock | None:
+    """What this run changed in its work folder, when a save point was taken for it (coding mode): the list the
+    owner sees under the answer and can undo. Runs for every outcome, a failed or stopped run included, and never
+    raises: a fault here must not cost the run its recorded outcome."""
+    try:
+        found = await savepoint.after_run(run_id)
+        if found and (found["files"] or found["reason"]):
+            return ChangesBlock(run_id=run_id, **found)
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
 async def _finalize(conn_factory, conn, run_id, mid, acc, status, error, provider, model,
                     fallback_from):
     """Record the outcome and tell subscribers. The database writes are best effort;
     run_finished is published whatever happens, or the chat's viewers would wait for ever."""
     msg, totals = None, {}
+    acc.changes = await _changes(run_id)
     try:
         try:
             if conn is None:

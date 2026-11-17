@@ -5,7 +5,8 @@ import { branchLabel, callDurations, cardStatus, messageText, renderItems, sibli
 import type { AnswerCheckBlock, Block, Message } from '../types'
 import { copyText, Markdown } from './Markdown'
 import { SourcesList } from './SourcesList'
-import { answerCheckLine, answerCheckOf, sourcesOf, visible } from '../tree'
+import { answerCheckLine, answerCheckOf, changesOf, sourcesOf, visible } from '../tree'
+import { RunChanges } from './RunChanges'
 import { confirmBox } from '../dialog'
 import { ToolCard } from './ToolCard'
 
@@ -144,6 +145,7 @@ export function MessageItem({ message }: { message: Message }) {
             ))}
           {items.length === 0 && (streaming ? <span className="muted cursor">Waiting for the model</span> : <span className="muted">No output.</span>)}
           {streaming && items.length > 0 && items[items.length - 1].kind === 'text' && <span className="cursor" />}
+          {changesOf(message) && <RunChanges block={changesOf(message)!} />}
           {sourcesOf(message) && <SourcesList block={sourcesOf(message)!} answer={text} />}
           {answerCheckOf(message) && <AnswerCheck block={answerCheckOf(message)!} />}
         </>

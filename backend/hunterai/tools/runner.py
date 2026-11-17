@@ -15,14 +15,14 @@ import unicodedata
 from collections.abc import Awaitable, Callable, Collection
 from dataclasses import dataclass
 
-from .. import config, permissions, secrets
+from .. import config, permissions, savepoint, secrets
 from ..db import new_id, now
 from ..permissions import Answer, PermissionRequest, Policy, Verdict
 from ..providers.base import ToolCall
 from ..repo import chats, grants, runs, settings, targets
 from ..types import Chat, ToolResultBlock
 from ..decision import engine as decision_engine
-from . import decide_tools, on_demand, registry, resolve
+from . import decide_tools, files, on_demand, registry, resolve
 from .base import Prepared, Tool, ToolContext, ToolError
 
 RESULT_HEAD = 22_000
@@ -268,6 +268,12 @@ async def call(conn, *, chat_id: str, run_id: str, tc: ToolCall, offered: Collec
         if v.decision != "deny" and has_hidden(args):
             v = dataclasses.replace(v, decision="ask", warnings=(*v.warnings, HIDDEN_WARNING),
                                     can_allow_chat=False)
+        # A change that takes away a large part of a file is the owner's to see first: no setting, grant or
+        # auto-approve answers for him, and his answer covers this one call.
+        large = files.large_removal(p.state)
+        if v.decision != "deny" and large:
+            v = dataclasses.replace(v, decision="ask", reasons=(*v.reasons, files.LARGE_REASON),
+                                    warnings=(*v.warnings, large), can_allow_chat=False)
         return v
 
     async def with_addresses(p: Prepared) -> Prepared:
@@ -410,6 +416,9 @@ async def call(conn, *, chat_id: str, run_id: str, tc: ToolCall, offered: Collec
     await publish({"type": "step_started", "step": step.model_dump()})
     await publish({"type": "tool_started", "tool_call_id": tc.id, "step_id": step.id})
     meta: dict = {}
+    if chat.mode == "coding" and (tool.risk in ("write", "execute") or tool.writes_files):
+        # The first call of a run that can change the work folder: keep the folder as it is, so the run can be undone.
+        await savepoint.before_run(run_id, ctx.workdir)
     try:
         result = await tool.handler(ctx, args)
         text, is_error, meta = result.text, result.is_error, dict(result.meta or {})

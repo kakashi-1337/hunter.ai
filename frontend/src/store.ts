@@ -80,6 +80,8 @@ interface State {
   remove(messageId: string): Promise<void>
   switchBranch(messageId: string): Promise<void>
   cancel(): Promise<void>
+  /** Put the files a run changed back as they were before it; the list under its answer then says so. */
+  undoRun(runId: string): Promise<void>
   answer(requestId: string, decision: PermissionDecision, note: string): Promise<void>
   patchChat(patch: Parameters<typeof api.updateChat>[1]): Promise<void>
   removeChat(id: string): Promise<void>
@@ -330,6 +332,13 @@ export const useStore = create<State>((set, get) => {
       guard(async () => {
         const live = get().live
         if (live) await api.cancelRun(live.runId)
+      }),
+
+    undoRun: (runId) =>
+      guard(async () => {
+        const done = await api.undoRun(runId)
+        // Only the blocks changed (the list now says what was put back); the rest of the message stays as the page has it.
+        set({ messages: get().messages.map((m) => (m.id === done.message.id ? { ...m, blocks: done.message.blocks } : m)) })
       }),
 
     answer: (requestId, decision, note) =>

@@ -46,6 +46,9 @@ what is missing.
 - Tools: the model can read, write, edit, run commands, fetch, download, and search.
   Every call passes the permission engine first; "ask" shows you the exact call and
   waits for your answer. Codex chats have no tools.
+- Undo for coding runs: the files a run changed in the working folder are listed under
+  its answer and can be put back with one button, without touching what you changed since
+  (see "Undo what a run changed").
 - Trajectory per run: duration, turns, calls, tokens, and every model call, permission
   decision, and tool call. Survives restarts.
 - Modes (plan, pentesting, coding) and targets with scope. Scope is enforced on tool
@@ -514,6 +517,12 @@ Whatever the setting, these always apply:
   on this machine or the local network, a path that usually holds credentials, and
   arguments with invisible characters each force an ask with a warning.
 - A tool can never call HunterAI's own API. A shell command that names it always asks.
+- A `write` or `edit` that takes away a large part of a file asks first: 30 lines or more,
+  or half or more of a file of 10 lines or more, or a file that is not text written over
+  whole. The prompt says how many lines go and shows them. No setting, grant, or
+  auto-approve answers it, and "Allow for this chat" is not offered: the answer covers
+  that one call. Lines removed by a command (`sed -i`, `rm`) are not counted; in coding
+  mode the save point below still covers them.
 
 "Allow for this chat" covers one tool and one target: `execute` the exact command in
 the same folder; `web_fetch` and `web_download` one method, scheme, host, and port;
@@ -535,6 +544,50 @@ hosts it does not name, so this is for work you are authorised to do and are wat
 The **working folder** of a chat is where relative paths, commands, and downloads go:
 `~/.hunterai/work/<chat id>` unless you set another absolute folder in the chat's
 Permissions panel. Deleting a chat removes the default folder, never a custom one.
+
+### Undo what a run changed (coding mode)
+
+In coding mode the model may change files in the working folder without asking. Before
+the first call of a run that can change anything (a file tool, a command), HunterAI keeps
+the folder as it is: a **save point**. When the run ends, however it ends, the files that
+differ are listed under its answer, each as new, changed, or deleted, with **Undo these
+changes**.
+
+Undo puts those files back as they were before the run, file by file:
+
+- A file you changed after the run is left as it is and named. So is a file where your
+  later work is in the way (a folder you put files into where a file used to be).
+- A file that is already as it was needs nothing. Files the run did not change are never
+  touched, whatever happened to them since.
+- While files were left, the button stays: asking again goes on with whatever is as the
+  run left it by then. Once every file is as it was, the undo is done.
+- It does not work while a run of the same chat is going.
+
+What a save point holds, and what it does not:
+
+- It is kept in a git folder of HunterAI's own under `~/.hunterai/save/` (readable by you
+  alone), one per working folder. Your own repository is never touched: no commit, no
+  stash, no staged file. It needs `git` on the machine.
+- Files the folder ignores (`.gitignore`) are neither kept nor put back, so a `.env` and
+  build output stay out of it. `node_modules`, `.venv`, `venv`, `__pycache__`, `target`
+  and the caches of Python tools are left out as well, ignored or not.
+- A repository inside the working folder (a project you cloned into it) is kept file by
+  file like any other folder; its own `.git` is not read and not written.
+- Changes made by commands count like changes made by the file tools. What a command
+  does outside the working folder is not covered: installed packages, a database, a file
+  written elsewhere, anything sent over the network. Nor is what a background process
+  writes after the run has ended.
+- The whole folder is compared, so the list of a run holds whatever changed in it while
+  the run was going: also what you changed by hand in that time, and what a run of
+  another chat did in the same folder.
+- A folder with more than 50,000 files that are not ignored, or more than 1 GB in them,
+  gets no save point; neither does your home folder or a folder above it. The run goes on
+  either way, and the line under its answer says that there was no save point and why.
+- Nothing is removed from `~/.hunterai/save/` by HunterAI. It grows by what runs change
+  (the first save point of a folder holds a compressed copy of it). Deleting it is safe
+  at any time; the undo of earlier runs goes with it.
+
+Other modes keep no save point.
 
 ### Known limits
 

@@ -11,6 +11,23 @@ export type Block =
   /** Something about the answer the owner has to know and its text does not show: it was cut off at a limit, or the
    * provider's filter ended it. Never sent to a model. */
   | { type: 'notice'; kind: string; text: string }
+  | ChangesBlock
+
+/** What a run in coding mode changed in its work folder, with the save points that let the owner put it back.
+ * `reason` says why there is no list (no save point could be kept). Never sent to a model. */
+export interface ChangesBlock {
+  type: 'changes'
+  run_id: string
+  folder: string
+  files: { path: string; change: 'new' | 'changed' | 'deleted' }[]
+  before: string
+  after: string
+  reason: string
+  /** Every file is as it was before the run again: nothing is left to undo. */
+  undone: boolean
+  /** After an undo: the files that changed after the run and were left as they are. The undo can be asked again. */
+  left: string[]
+}
 
 export type MessageStatus = 'complete' | 'streaming' | 'error' | 'interrupted' | 'cancelled'
 export type Mode = 'plan' | 'pentesting' | 'coding'
