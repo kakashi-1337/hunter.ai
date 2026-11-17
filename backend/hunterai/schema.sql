@@ -267,6 +267,22 @@ create table if not exists personas (
   updated_at text not null
 );
 
+-- Skills: instructions for a kind of work, started with a slash command or loaded by the model
+create table if not exists skills (
+  id text primary key,
+  name text not null unique collate nocase,   -- also the slash command: lower-case letters, digits, hyphens
+  description text not null default '',       -- when to use it; the model reads this line
+  body text not null,                         -- the instructions
+  mode text,                                  -- plan | pentesting | coding | null: the mode its slash command switches to
+  source text not null default '',            -- where it came from: an address, a folder, "pasted text", "built in"
+  folder text,                                -- where its other files are kept, or null
+  enabled integer not null default 1,
+  auto integer not null default 1,            -- the model may load it by itself
+  builtin integer not null default 0,
+  created_at text not null,
+  updated_at text not null
+);
+
 -- Phase 5: memory
 create table if not exists memories (
   id text primary key,

@@ -14,6 +14,7 @@ from . import chats, findings, processes, providers, runs, search, settings, sys
 from . import kb as kb_api
 from . import mcp_admin
 from . import personas as personas_api
+from . import skills as skills_api
 from . import memory as memory_api
 
 LOCAL_HOSTS = {"127.0.0.1", "localhost"}
@@ -88,7 +89,7 @@ def create_app() -> FastAPI:
         return await call_next(request)
 
     for module in (targets, chats, runs, uploads, search, settings, providers, tools,
-                   processes, findings, kb_api, mcp_admin, personas_api, memory_api, system):
+                   processes, findings, kb_api, mcp_admin, personas_api, skills_api, memory_api, system):
         app.include_router(module.router)
 
     @app.get("/{path:path}", include_in_schema=False)

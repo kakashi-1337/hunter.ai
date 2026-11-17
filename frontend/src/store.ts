@@ -3,7 +3,7 @@ import { create } from 'zustand'
 import * as api from './api'
 import { streamRun } from './sse'
 import { applyEvent, pendingAsks, runningCalls, stepsFromEvents } from './tree'
-import type { QueuedMessage, Persona,
+import type { QueuedMessage, Persona, Skill,
   Chat, Message, Mode, Options, PermissionDecision, PermissionRequest, ProviderInfo, RunDetail, RunEvent, RunSummary, SearchHit, Settings, StartedRun, Step, Target,
 } from './types'
 
@@ -50,6 +50,13 @@ interface State {
   view: 'chat' | 'knowledge'
   personas: Persona[]
   refreshPersonas(): Promise<void>
+  skills: Skill[]
+  refreshSkills(): Promise<void>
+  skillsOpen: boolean
+  setSkillsOpen(open: boolean): void
+  /** The mode a chat was in before a skill's slash command moved it (to plan, say): where /go takes it back. */
+  modeBefore: Record<string, Mode>
+  rememberMode(chatId: string, mode: Mode): void
   choosePersona(id: string | null): Promise<void>
   setView(view: 'chat' | 'knowledge'): void
   loaded: boolean
@@ -207,6 +214,7 @@ export const useStore = create<State>((set, get) => {
         await get().refreshLists()
         set({ settings: await api.getSettings(), loaded: true })
         await get().refreshPersonas()
+        await get().refreshSkills()
         await get().refreshProviders()
       }),
 
@@ -217,6 +225,10 @@ export const useStore = create<State>((set, get) => {
 
     refreshProviders: async () => set({ providers: await api.listProviders() }),
     refreshPersonas: async () => { try { set({ personas: await api.listPersonas() }) } catch { /* the picker stays as it was */ } },
+    skills: [], skillsOpen: false, modeBefore: {},
+    refreshSkills: async () => { try { set({ skills: await api.listSkills() }) } catch { /* the slash list stays as it was */ } },
+    setSkillsOpen: (skillsOpen) => set({ skillsOpen }),
+    rememberMode: (chatId, mode) => set({ modeBefore: { ...get().modeBefore, [chatId]: mode } }),
 
     choosePersona: async (id) => {
       const persona = get().personas.find((p) => p.id === id) ?? null

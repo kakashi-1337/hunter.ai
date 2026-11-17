@@ -9,6 +9,7 @@ import { PermissionsPanel } from './components/PermissionsPanel'
 import { ProcessPanel } from './components/ProcessPanel'
 import { SettingsDialog } from './components/SettingsDialog'
 import { SetupChecklist } from './components/SetupChecklist'
+import { SkillsManager } from './components/SkillsManager'
 import { Sidebar } from './components/Sidebar'
 import { TrajectoryPanel } from './components/TrajectoryPanel'
 import * as api from './api'
@@ -94,6 +95,7 @@ export default function App() {
     try { return localStorage.getItem('trajectory') !== 'closed' } catch { return true }
   })
   const [setupOpen, setSetupOpen] = useState(false)
+  const skillsOpen = useStore((s) => s.skillsOpen)
   useEffect(() => { void load() }, [load])
   // A first start with no model to talk to opens the setup check by itself; later it is under Settings.
   useEffect(() => { api.systemCheckup().then((c) => { if (!c.ready) setSetupOpen(true) }).catch(() => {}) }, [])
@@ -126,6 +128,7 @@ export default function App() {
       {trajectoryOpen && view === 'chat' && <TrajectoryPanel onClose={() => setTrajectoryOpen(false)} />}
       <DialogHost />
       {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} onSetup={() => { setSettingsOpen(false); setSetupOpen(true) }} />}
+      {skillsOpen && <SkillsManager onClose={() => useStore.getState().setSkillsOpen(false)} />}
       {setupOpen && <SetupChecklist onClose={() => setSetupOpen(false)} onSettings={() => { setSetupOpen(false); setSettingsOpen(true) }} />}
     </div>
   )

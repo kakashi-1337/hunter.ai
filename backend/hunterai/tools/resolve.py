@@ -69,6 +69,8 @@ def protected(path: Path, mode: Mode) -> str | None:
             return "the record of approved MCP tool definitions is changed by the owner only"
         if is_inside(Path(real), config.home() / "mcp"):
             return "installed MCP server code and its inspection records are changed by the owner only"
+        if is_inside(Path(real), config.home() / "skills"):
+            return "the files of installed skills are changed by the owner only"
         if is_inside(Path(real), config.PROJECT_ROOT / "anbu-system-one"):
             return "anbu-system-one is kept untouched as the reference"
         if is_inside(Path(real), config.chunker_path().parent):

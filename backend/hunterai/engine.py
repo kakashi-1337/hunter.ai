@@ -483,6 +483,10 @@ async def _execute(conn_factory, run_id: str, chat_id: str, user_message_id: str
             system = build_system(chat.mode, target, persona=persona)
         wire = await _context(conn, chat, user_message_id, load_bytes)
         acc.taken = {b.id for m in wire for b in m.blocks if b.type == "tool_call"}
+        from . import skills
+        about_skills = await skills.system_block(conn, wire, [s.name for s in specs])
+        if about_skills:
+            system += "\n\n" + about_skills
         provider, model = chat.provider, chat.model
         # Knowledge-base reference goes into the outgoing request only: `system` and `wire`
         # keep their values (the chat title below is taken from the user's own words).
@@ -502,6 +506,7 @@ async def _execute(conn_factory, run_id: str, chat_id: str, user_message_id: str
         if chat.title == "New chat":
             first = next((b.text for m in wire if m.role == "user" for b in m.blocks
                           if b.type == "text" and b.text), "")
+            first = await skills.title_text(conn, first)        # "/plan map the login" is titled by the task
             if _title_from(first):
                 await chats.update(conn, chat_id, title=_title_from(first))
     except ProviderError as e:
