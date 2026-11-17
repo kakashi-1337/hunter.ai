@@ -121,7 +121,7 @@ def build_system(mode: str, target: Target | None, tool_names: Sequence[str] = (
         rules = orchestrator_block(tool_names)
         if rules:
             base += "\nHow to work:\n" + rules
-        if "shell" in tool_names:
+        if "execute" in tool_names:          # the tool that runs commands
             from . import toolbox
             programs = toolbox.prompt_line()
             if programs:
