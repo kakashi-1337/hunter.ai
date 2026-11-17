@@ -8,8 +8,9 @@ export const SCOPE_HINT = 'Scope is given to the model as context and checked on
 
 /** The fields of a target, and a box that reads a pasted program brief into them. The brief is read by rules on the
  * server; what it found lands in the fields for the owner to check, and nothing is saved from here. */
-export function TargetForm({ form, onChange, onUnread, onEnter, focusName }: {
+export function TargetForm({ form, problem, onChange, onUnread, onEnter, focusName }: {
   form: ScopeForm
+  problem?: string                    // what is wrong with the scope lists as they stand, in the words of the server
   onChange(update: (form: ScopeForm) => ScopeForm): void     // applied to the form as it is then: a brief can arrive late
   onUnread(unread: boolean): void     // the box holds text that was not read into the fields yet
   onEnter?(): void
@@ -72,6 +73,7 @@ export function TargetForm({ form, onChange, onUnread, onEnter, focusName }: {
       <label className="field"><span>Out of scope (one per line)</span>
         <textarea className="mono" rows={3} value={form.outScope} onChange={(e) => set({ outScope: e.target.value })} placeholder="payments.example.com" />
       </label>
+      {problem && <div className="warn-line scope-problem" role="alert">{problem}</div>}
       {form.unplaced.length > 0 && (
         <div className="unplaced" role="group" aria-label="Hosts with no side given">
           <div className="hint">The text names these without saying which side they are on. They are saved only if you place them.</div>

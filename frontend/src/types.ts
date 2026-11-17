@@ -121,11 +121,15 @@ export interface McpStatus {
   error: string | null
 }
 
+/** A line of a stored scope that the scope check cannot read: it is checked against nothing until it is rewritten. */
+export interface ScopeProblem { side: 'in' | 'out'; line: string; why: string }
+
 export interface Target {
   id: string
   name: string
   notes: string
   scope: { in: string[]; out: string[] }
+  scope_problems?: ScopeProblem[]
   created_at: string
 }
 

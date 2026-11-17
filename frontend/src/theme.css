@@ -380,3 +380,4 @@ button.link:hover:not(:disabled) { background: none; color: var(--text); }
 
 .unplaced { display: flex; flex-direction: column; gap: 4px; border: 1px dashed var(--line); border-radius: 6px; padding: 8px; }
 .unplaced .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scope-problem { white-space: pre-line; overflow-wrap: anywhere; }

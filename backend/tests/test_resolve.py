@@ -155,6 +155,39 @@ def test_a_host_named_in_scope_beats_a_wider_exclusion(ins, outs, host, path, ou
     v = resolve.scope_verdict(_scoped(ins, outs), [host], path)
     assert v.out == ((host.host,) if out else ())
 
+@pytest.mark.parametrize("line,same_as", [
+    ("example.com/*", "example.com"), ("https://*.example.com/*", "*.example.com"),
+    ("example.com/api/*", "example.com/api"), ("example.com:*", "example.com"),
+    ("*.example.com:*/*", "*.example.com"), ("example.com:8443/*", "example.com:8443"),
+])
+def test_a_star_for_any_port_or_for_everything_under_a_path_is_read(line, same_as):
+    assert resolve.parse_entry(line) is not None and resolve.parse_entry(line) == resolve.parse_entry(same_as)
+
+def test_an_exclusion_written_with_a_star_after_its_path_excludes():
+    t = Target(id="t", name="n", notes="", scope={"in": ["https://*.example.com/*"], "out": ["blog.example.com/*", "shop.example.com/admin/*"]}, created_at="x")
+    blog, shop = HostUse("blog.example.com", 443, ("203.0.113.5",)), HostUse("shop.example.com", 443, ("203.0.113.6",))
+    assert resolve.scope_verdict(t, (blog,), "/login") == resolve.ScopeVerdict(("blog.example.com",), ())
+    assert resolve.scope_verdict(t, (shop,), "/admin/users") == resolve.ScopeVerdict(("shop.example.com",), ())
+    assert resolve.scope_verdict(t, (shop,), "/cart") == resolve.ScopeVerdict((), ())
+
+@pytest.mark.parametrize("line", [
+    "*.example.*", "example.*", "*example.com", "*.*.example.com", "api-*.example.com", "10.0.0.*",
+    "10.0.0.1-10.0.0.50", "10.0.0.1 - 10.0.0.50", "999.1.1.1", "host.123", "example.com/a*b", "example.com/*/admin", "example.com/api*",
+    "example.com, example.org", "example.com (main site)", "old.example.com - legacy", "All subdomains of example.com",
+    "example.com:*8", "*", "", "   ",
+])
+def test_a_line_no_entry_can_say_is_not_read(line):
+    assert resolve.parse_entry(line) is None
+
+def test_unreadable_gives_each_such_line_once_with_what_is_wrong():
+    got = resolve.unreadable(["*.example.com", "*.example.*", " 10.0.0.1-10.0.0.50 ", "example.com, example.org", "exa mple",
+                              "*.example.*", "", "10.0.0.0/24", "example.com/api/*"])
+    assert [line for line, _ in got] == ["*.example.*", "10.0.0.1-10.0.0.50", "example.com, example.org", "exa mple"]
+    why = dict(got)
+    assert "*.example.com" in why["*.example.*"]                      # says where a star is read
+    assert "10.0.0.0/26" in why["10.0.0.1-10.0.0.50"]                 # says how a range is written
+    assert "one" in why["example.com, example.org"] and "one" in why["exa mple"]
+
 def test_only_the_out_list_decides_when_nothing_is_in_scope():
     assert resolve.scope_verdict(_scoped([], ["*.acme.test"]), [HostUse("shop.acme.test", 443)]).out == ("shop.acme.test",)
 

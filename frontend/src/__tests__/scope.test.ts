@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { addLines, briefSummary, emptyScopeForm, placeEntry, scopeLines, scopeOf, withBrief } from '../scope'
+import { addLines, briefSummary, emptyScopeForm, placeEntry, scopeLines, scopeOf, scopeProblemMark, scopeProblemText, withBrief } from '../scope'
 import type { BriefResult } from '../types'
 
 const brief = (over: Partial<BriefResult> = {}): BriefResult =>
@@ -49,5 +49,28 @@ describe('a brief that was read', () => {
     expect(briefSummary(brief({ in: ['a'] }))).toBe('Found 1 in scope. Check the lists before you save.')
     expect(briefSummary(brief({ unsupported: ['*.example.*'] }))).toBe('Found no host this text puts in or out of scope.')
     expect(briefSummary(brief())).toBe('Found no host this text puts in or out of scope.')
+  })
+})
+
+describe('lines of a stored scope that cannot be read', () => {
+  const problems = [
+    { side: 'in' as const, line: 'acme.*', why: 'a * is read as the first label (*.example.com)' },
+    { side: 'out' as const, line: '10.0.0.1-10.0.0.9', why: 'write a range of addresses as networks, like 10.0.0.0/26' },
+  ]
+  it('are listed for the owner, each with its side and what is wrong', () => {
+    expect(scopeProblemText(problems)).toBe(
+      'These scope lines cannot be read, so nothing is checked against them. Rewrite or remove them:\n'
+      + 'In scope: acme.* (a * is read as the first label (*.example.com))\n'
+      + 'Out of scope: 10.0.0.1-10.0.0.9 (write a range of addresses as networks, like 10.0.0.0/26)')
+  })
+  it('say nothing when every line is read, or when the server is an older one', () => {
+    expect(scopeProblemText([])).toBe('')
+    expect(scopeProblemText(undefined)).toBe('')
+    expect(scopeProblemMark({ name: 'acme', scope_problems: [] })).toBe('')
+    expect(scopeProblemMark({ name: 'acme' })).toBe('')
+  })
+  it('mark the target in the sidebar with how many there are', () => {
+    expect(scopeProblemMark({ name: 'acme', scope_problems: problems })).toBe('2 scope lines of acme cannot be read and are not checked. Edit the target to fix them.')
+    expect(scopeProblemMark({ name: 'acme', scope_problems: problems.slice(1) })).toBe('1 scope line of acme cannot be read and is not checked. Edit the target to fix it.')
   })
 })
