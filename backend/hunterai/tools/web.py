@@ -146,16 +146,18 @@ class _NotFollowed(Exception):
 async def _via_caido(ctx: ToolContext | None) -> tuple[tuple[str, int] | None, str]:
     """(Caido's proxy, "") when the owner switched on recording in Caido and it can be used;
     (None, why it is not recorded) when it is switched on and Caido cannot be used; else (None, "")."""
-    from .. import caido, db
-    from ..repo import settings
+    from .. import caido, db, upstream
     if not caido.available():
         return None, ""
     conn = await db.connect()
     try:
-        on = bool(await settings.get(conn, "browser_via_caido", False))
+        how = await caido.mode(conn)
+        target_id = ctx.target.id if ctx is not None and ctx.target is not None else None
+        if how == "default" and await upstream.of_target(conn, target_id) is not None:
+            how = "off"                  # nobody chose Caido, and this target has a proxy of its own: that one carries
     finally:
         await conn.close()
-    if not on:
+    if how == "off":
         return None, ""
     try:
         return await caido.proxy_address(), ""
@@ -216,7 +218,10 @@ async def _open(stack, client, ctx: ToolContext, method: str, url: str, headers:
         raise ToolError("the host was not resolved")
     followed: list[str] = []
     while True:
-        _, host = _origin(url)
+        scheme, host = _origin(url)
+        if via is not None and up is None and scheme == "https":
+            from .. import certs         # Caido is in between, and it passes a bad certificate on: HunterAI looks itself
+            await certs.check(host.host, ips[0], host.port)
         try:
             response = await stack.enter_async_context(client.stream(
                 **(_named(method, url, headers, body) if via else _pinned(method, url, host, ips[0], headers, body))))

@@ -245,8 +245,7 @@ def recording(monkeypatch):
 
 async def run(conn, command: str, on: bool = True, proxy: str | None = None):
     chat, run_id = await seeded_run(conn, scope={"in": ["*.acme.test"], "out": []}, permissions=ALLOW)
-    if on:
-        await settings.put(conn, "browser_via_caido", True)
+    await settings.put(conn, "browser_via_caido", bool(on))             # said either way: where nobody says, it is on
     if proxy:
         await upstream.put_target(conn, chat.target_id, proxy)
     out, _, steps = await called(conn, chat, run_id, "execute", {"command": command, "timeout": 15})

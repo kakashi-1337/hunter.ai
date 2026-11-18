@@ -348,6 +348,7 @@ async def test_the_caido_switch_decides_whether_a_fetch_is_recorded(conn, monkey
         return "127.0.0.1", 18791
     monkeypatch.setattr(caido, "proxy_address", address)
     monkeypatch.setattr(caido, "available", lambda: True)
+    await settings.put(conn, "browser_via_caido", False)
     assert await web._via_caido(None) == (None, "")                      # the switch is off
     await settings.put(conn, "browser_via_caido", True)
     assert await web._via_caido(None) == (("127.0.0.1", 18791), "")

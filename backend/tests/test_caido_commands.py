@@ -54,8 +54,7 @@ def a_caido(monkeypatch, port: int | None, why: str = "Caido does not answer at 
 async def a_chat(conn, recording=True, proxy=None):
     """A chat on a target, with recording in Caido switched on or off."""
     chat, run_id = await seeded_run(conn, scope={"in": ["*.acme.test"], "out": []}, permissions=ALLOW)
-    if recording:
-        await settings.put(conn, "browser_via_caido", True)
+    await settings.put(conn, "browser_via_caido", bool(recording))      # said either way: where nobody says, it is on
     if proxy:
         await upstream.put_target(conn, chat.target_id, proxy)
     return chat, run_id
@@ -191,6 +190,7 @@ async def test_an_ipv6_address_is_given_the_way_a_program_takes_it(conn, monkeyp
 async def test_a_caido_that_is_switched_off_is_not_started_for_a_command(conn, fake, monkeypatch):
     started = []
     monkeypatch.setattr(caido, "_spawn", lambda: started.append(1))
+    await settings.put(conn, "browser_via_caido", False)
     fake.up = False
     assert await caido.for_command() == ("", "") and started == [] and fake.calls == []
 
@@ -210,6 +210,7 @@ async def test_a_caido_that_something_else_reached_since_is_used_at_once(conn, f
 
 async def test_the_caido_tool_points_a_command_at_the_variable_while_recording_is_on(conn, fake):
     """Its status used to give the address for a command to use: a command that names it is held for the owner."""
+    await settings.put(conn, "browser_via_caido", False)
     off = (await caido_call(conn, "caido", {"action": "status"})).content
     assert "curl -x http://127.0.0.1:8791 -k <url>" in off and "CAIDO_PROXY" not in off
     await settings.put(conn, "browser_via_caido", True)

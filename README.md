@@ -812,8 +812,8 @@ power at the processor's critical temperature without a line in any log.
 
 HunterAI runs its own [Caido](https://caido.io) (the `caido-cli` program, found on the PATH,
 at `~/.hunterai/bin/caido-cli`, or where `HUNTERAI_CAIDO_BIN` says) on
-`http://127.0.0.1:8791` (`HUNTERAI_CAIDO_PORT`), started the first time a tool needs it and
-left running. Open that address in a browser and continue as a guest to watch the traffic.
+`http://127.0.0.1:8791` (`HUNTERAI_CAIDO_PORT`), started with HunterAI while recording is on
+(otherwise the first time a tool needs it) and left running. Open that address in a browser and continue as a guest to watch the traffic.
 Its data is in `~/.hunterai/caido`, its output in `~/.hunterai/caido.log`.
 
 - `caido` (a read): `status`; `requests`, the recorded requests, newest first, filtered
@@ -833,9 +833,30 @@ The same port is the proxy: `curl -x http://127.0.0.1:8791 -k <url>` in a comman
 recorded too. With "Send the browser and web_fetch through Caido" switched on in Settings,
 the browser tools and `web_fetch` go through it as well: every request a page makes and
 every page the agent fetches is in the history, and a `web_fetch` result says that it was
-recorded. Caido reads https by answering with its own certificates, so the browser and
-`web_fetch` stop checking a site's certificate while that is on. When Caido cannot be
-reached, `web_fetch` goes out directly as before and its result says it was not recorded.
+recorded. When Caido cannot be reached, `web_fetch` goes out directly as before and its
+result says it was not recorded.
+
+**Recording is on from the start** where there is a Caido on the machine and you have set
+no proxy of your own: what the agent sends to a target can then be seen in Caido without
+anything having been switched. Switch it off in Settings and it stays off. Where nobody
+chose it, a proxy goes before it: set one in Settings and recording is off, and a chat
+whose target has a proxy of its own uses that proxy, unrecorded. Only when you switched
+recording on yourself are the two said to clash (see below). By default the knowledge
+crawler is not recorded, and a Caido that does not come up does not stop the browser.
+
+**A site's certificate is checked by HunterAI, not by Caido.** Caido reads https by
+answering with its own certificates, so the tool that asks sees Caido's and not the
+site's, and Caido takes the site's much as it comes: against badssl.com a real Caido
+passed on a certificate no authority signed and one that had expired, and refused only
+one for another name. So before `web_fetch`, `web_download`, `caido_send` or the browser
+hand an https request to Caido, HunterAI makes a TLS handshake with the site itself, at
+the address it checked, and goes by that. Nothing is sent in it. A certificate that does
+not verify stops the call and says why, as it would without Caido, and so does a site
+whose certificate cannot be seen. One found good is not asked for again for ten minutes.
+In the browser the check is made on each TLS connection before Caido gets it; a
+connection with a bad certificate is closed, and the reason is in the session's log. A
+scanner in a command does not check certificates, with or without Caido; to work with a
+site whose certificate is not valid, use `curl -k` in a command.
 With the `caido` tool on offer, the model is told to read the history after it browsed or
 fetched pages of a target.
 

@@ -199,6 +199,8 @@ async def test_the_history_is_listed_and_one_exchange_read(conn, fake):
                       ({"action": "requests", "filter": "bad ("}, "Invalid HTTPQL query")):
         block = await call(conn, "caido", args)
         assert block.is_error and why in block.content
+    from hunterai.repo import settings
+    await settings.put(conn, "browser_via_caido", False)            # recording switched off: a command is then told the address itself
     status = (await call(conn, "caido", {"action": "status"})).content
     assert "Caido 0.59.0 is running at http://127.0.0.1:8791" in status and "temporary" in status and "curl -x http://127.0.0.1:8791 -k" in status
 

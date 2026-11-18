@@ -45,7 +45,8 @@ async def lifespan(app: FastAPI):
         # A server that cannot start does not stop the app; `read` then uses its fallback.
         await mcp_manager.start()
     from .. import caido
-    rerouting = asyncio.create_task(caido.refresh())     # a Caido left running gets this run's filter as its way out
+    # While recording is on, Caido is started with HunterAI; one that runs anyway gets this run's filter as its way out.
+    rerouting = asyncio.create_task(caido.at_start())
     try:
         yield
     finally:

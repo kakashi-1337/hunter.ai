@@ -117,6 +117,7 @@ async def _launch(chat_id: str) -> Session:
     proxy = browser_proxy.Proxy()
     via, recorded, own_certificates = await _way_out(chat_id)      # before anything is started: a Caido that cannot be reached is an error here
     proxy.via = via
+    proxy.verify_sites = recorded        # Caido passes a bad certificate on: the proxy looks before Caido gets a connection
     port = await proxy.start()
     cm = None
     try:
@@ -195,33 +196,26 @@ async def _way_out(chat_id: str = ""):
             up = own or await upstream.get(conn)
     finally:
         await conn.close()
-    via = await _caido_proxy()
-    if via is not None:
-        if own is not None:
-            raise ToolError("this target has a proxy of its own, and recording in Caido is switched on. The two are not "
-                            "combined: switch Caido's recording off in Settings for this work, or clear the target's proxy.")
-        return upstream.Upstream(*via), True, True
+    from . import caido
+    how = await caido.mode()
+    if how == "default" and (own is not None or chat_id == CRAWL):
+        how = "off"                  # nobody chose Caido: a target's own proxy goes before it, and a crawl is not work on a target
+    if how != "off":
+        try:
+            via = await caido.proxy_address()
+        except caido.CaidoError as e:
+            if how == "on":          # the owner asked for Caido by name: not browsing unrecorded behind their back
+                raise ToolError(f"the browser is set to go through Caido, and Caido is not usable: {e}. "
+                                'Switch "Send the browser and web_fetch through Caido" off in Settings to browse without it.') from None
+            via = None
+        if via is not None:
+            if own is not None:
+                raise ToolError("this target has a proxy of its own, and recording in Caido is switched on. The two are not "
+                                "combined: switch Caido's recording off in Settings for this work, or clear the target's proxy.")
+            return upstream.Upstream(*via), True, True
     if up is None:
         return None, False, False
     return up, False, up.presents_its_own_certificates
-
-
-async def _caido_proxy() -> tuple[str, int] | None:
-    """Where Caido's proxy is, when the owner switched on "browser through Caido"; else None."""
-    from . import caido, db
-    from .repo import settings
-    conn = await db.connect()
-    try:
-        on = bool(await settings.get(conn, "browser_via_caido", False))
-    finally:
-        await conn.close()
-    if not on:
-        return None
-    try:
-        return await caido.proxy_address()
-    except caido.CaidoError as e:
-        raise ToolError(f"the browser is set to go through Caido, and Caido is not usable: {e}. "
-                        'Switch "Send the browser and web_fetch through Caido" off in Settings to browse without it.') from None
 
 
 def sessions() -> list[Session]:

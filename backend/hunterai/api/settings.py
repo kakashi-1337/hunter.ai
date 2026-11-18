@@ -97,7 +97,7 @@ async def _view(conn) -> dict:
         "decision_engine": bool(await settings.get(conn, "decision_engine", runner.ENGINE_DEFAULT)),
         "kb_redact": bool(await settings.get(conn, "kb_redact", True)),
         "vision_model": await settings.get(conn, "vision_model") or None,
-        "browser_via_caido": bool(await settings.get(conn, "browser_via_caido", False)),
+        "browser_via_caido": await caido.recording(conn),      # what is in effect: on by default where nothing stands against it
         "caido_available": caido.available(),
         "upstream_proxy": up.shown if up else "",          # with its user name, never with its password
         "upstream_proxy_password": bool(up and up.password),
@@ -124,8 +124,9 @@ async def _put_proxy(conn, fields: dict) -> None:
         up = upstream.typed(typed, was) if typed is not None else was
     except upstream.ProxyError as e:
         raise HTTPException(400, f"proxy: {e}") from None
+    # Only a Caido the owner chose stands against a proxy: where it is merely on by default, a proxy goes before it.
     caido_on = fields["browser_via_caido"] if fields.get("browser_via_caido") is not None \
-        else bool(await settings.get(conn, "browser_via_caido", False))
+        else bool(await settings.get(conn, "browser_via_caido", None))
     if up and caido_on:
         raise HTTPException(400, "The browser and web_fetch already go through Caido. Switch that off to use another proxy."
                             if typed is not None else

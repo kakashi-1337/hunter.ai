@@ -64,6 +64,18 @@ def clean_tools():
 
 
 @pytest.fixture(autouse=True)
+def no_certificate_handshakes(monkeypatch):
+    """No test makes a TLS handshake with a site of its own accord: a certificate is found good unless a test
+    puts the real check back (hunterai.certs.HANDSHAKE) or says otherwise."""
+    from hunterai import certs
+
+    async def good(host, ip, port):
+        return None
+    monkeypatch.setattr(certs, "_handshake", good)
+    certs._good.clear()     # noqa: SLF001
+
+
+@pytest.fixture(autouse=True)
 def no_dns(monkeypatch):
     """A test that reaches the real resolver fails."""
     from hunterai.tools import resolve

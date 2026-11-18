@@ -289,6 +289,9 @@ async def _send(ctx: ToolContext, args: dict) -> ToolResult:
     if not checked.ips:
         raise ToolError("the host was not resolved")
     local = (checked.host, port) if any(resolve.is_local(ip) for ip in checked.ips) else None
+    if tls:
+        from .. import certs             # Caido passes a bad certificate on: HunterAI looks at it before Caido sends
+        await certs.check(checked.host, checked.ips[0], port)
     try:
         allowed = (await caido.egress()).local_ok.own
         if local:                 # the owner allowed this local address for this call: Caido's way out lets it through meanwhile

@@ -182,7 +182,10 @@ async def test_the_browser_takes_the_same_way_out(conn, monkeypatch):
 
     async def caido_proxy():
         return "127.0.0.1", 18791
-    monkeypatch.setattr(browser, "_caido_proxy", caido_proxy)
+    from hunterai import caido
+    monkeypatch.setattr(caido, "available", lambda: True)
+    monkeypatch.setattr(caido, "proxy_address", caido_proxy)
+    await settings.put(conn, "browser_via_caido", True)
     assert await browser._way_out(plain.id) == (upstream.Upstream("127.0.0.1", 18791), True, True)   # Caido, when it is switched on
     from hunterai.tools.base import ToolError
     with pytest.raises(ToolError, match="proxy of its own"):                              # never Caido in place of a proxy a program asked for

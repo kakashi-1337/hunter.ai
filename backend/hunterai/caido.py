@@ -332,21 +332,46 @@ async def proxy_address() -> tuple[str, int]:
     return parts.hostname or "127.0.0.1", parts.port or (443 if parts.scheme == "https" else 80)
 
 
-async def recording(conn=None) -> bool:
-    """Whether the owner switched recording on in Settings and there is a Caido to record in. Caido is not
-    started to answer this."""
+async def mode(conn=None) -> str:
+    """How recording stands. "on": the owner switched it on. "default": the owner never said, and it is on because
+    there is a Caido and no proxy of the owner's is set for the agent's traffic. "off": the owner switched it
+    off, or never said and a proxy is set, or there is no Caido on this machine. What the owner chose is never
+    second-guessed; only where nobody chose does a proxy, or a target's own proxy, go before Caido."""
     if not available():
-        return False
-    from . import db
+        return "off"
+    from . import db, upstream
     from .repo import settings
     own = conn is None
     if own:
         conn = await db.connect()
     try:
-        return bool(await settings.get(conn, "browser_via_caido", False))
+        said = await settings.get(conn, "browser_via_caido", None)
+        if said is not None:
+            return "on" if said else "off"
+        return "off" if await upstream.get(conn) is not None else "default"
     finally:
         if own:
             await conn.close()
+
+
+async def recording(conn=None) -> bool:
+    """Whether what the tools send to a target is recorded in Caido. Caido is not started to answer this."""
+    return await mode(conn) != "off"
+
+
+async def at_start() -> bool:
+    """At HunterAI's start. While recording is on, Caido is started, so that it is there before the first tool
+    asks for it and the owner finds it running. Otherwise none is started, and one that runs anyway gets this
+    run's filter as its way out (`refresh`). False when Caido is not up afterwards; never an error."""
+    if not available():
+        return False
+    if not await recording():
+        return await refresh()
+    try:
+        await proxy_address()
+        return True
+    except CaidoError:
+        return False
 
 
 async def for_command() -> tuple[str, str]:
