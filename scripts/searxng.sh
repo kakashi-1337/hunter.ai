@@ -30,14 +30,31 @@ YML
       chmod 0644 "$DIR/settings.yml"
     fi
     if docker container inspect "$NAME" >/dev/null 2>&1; then
+      # `docker start` leaves a container as it was made. One that publishes another address, or none (it then
+      # runs and nothing can reach it), or that is of another version, is made again: it holds nothing, its
+      # settings are in $DIR.
+      bound="$(docker inspect -f '{{with index .HostConfig.PortBindings "8080/tcp"}}{{range .}}{{.HostIp}}:{{.HostPort}}{{end}}{{end}}' "$NAME" 2>/dev/null || true)"
+      from="$(docker inspect -f '{{.Config.Image}}' "$NAME" 2>/dev/null || true)"
+      why=""
+      if [ "$bound" != "127.0.0.1:8888" ]; then
+        why="does not publish 127.0.0.1:8888, so nothing can reach it"
+      elif [ "$from" != "$IMAGE" ]; then
+        why="was made from $from, and this version of HunterAI uses $IMAGE"
+      fi
+      if [ -n "$why" ]; then
+        echo "searxng: the container $NAME $why. It is made again; its settings are kept in $DIR."
+        docker rm -f "$NAME" >/dev/null
+      fi
+    fi
+    if docker container inspect "$NAME" >/dev/null 2>&1; then
       docker start "$NAME" >/dev/null
     else
       docker run -d --name "$NAME" --memory 1g -p 127.0.0.1:8888:8080 \
         -v "$DIR:/etc/searxng" "$IMAGE" >/dev/null
     fi
-    port="$(docker port "$NAME" 8080/tcp)"
-    if [ "$port" != "127.0.0.1:8888" ]; then
-      echo "searxng: expected 127.0.0.1:8888, the container publishes: $port"
+    if [ "$(docker inspect -f '{{.State.Running}}' "$NAME" 2>/dev/null || true)" != "true" ]; then
+      echo "searxng: the container $NAME stopped right after it was started. Its last lines:"
+      docker logs --tail 20 "$NAME" 2>&1 || true
       exit 1
     fi
     for _ in $(seq 1 60); do

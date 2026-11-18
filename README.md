@@ -1044,7 +1044,10 @@ then told how to send each of them through Caido (see [Caido](#caido)).
 
 `scripts/start.sh` starts the container `hunterai-searxng` on `127.0.0.1:8888` with its
 settings in `~/.hunterai/searxng/settings.yml`. It is left running when HunterAI stops;
-`scripts/searxng.sh stop` stops it. `scripts/check-tools.sh` lists what the tools need.
+`scripts/searxng.sh stop` stops it. A container that cannot be reached (it publishes
+another address than `127.0.0.1:8888`, or none) or that was made from another version of
+the image is made again: it holds nothing, its settings are in that folder. One that does
+not stay up says why, with its last lines. `scripts/check-tools.sh` lists what the tools need.
 
 ### Variables
 
