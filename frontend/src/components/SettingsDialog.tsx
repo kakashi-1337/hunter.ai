@@ -161,22 +161,22 @@ function KeyRow({ name, isSet, onSaved }: { name: string; isSet: boolean; onSave
   )
 }
 
-/** The owner's colibri server: its address, what answers there, and the key it wants when it was started with one.
- * `save` answers with the address as the server keeps it and rejects with the server's reason; `keySaved` reloads
- * the settings after a key was stored. */
-function Colibri({ settings, save, keySaved }: { settings: Settings; save(address: string): Promise<string>; keySaved(): Promise<void> }) {
-  const [value, setValue] = useState(settings.colibri_url)
+/** The owner's colibri server: its address (`saved`: the one in use, "" for none), what answers there, and the key
+ * it wants when it was started with one (`keySet`: one is stored). `save` answers with the address as the server
+ * keeps it and rejects with the server's reason; `keySaved` reloads the settings after a key was stored. */
+function Colibri({ saved, keySet, save, keySaved }: { saved: string; keySet: boolean; save(address: string): Promise<string>; keySaved(): Promise<void> }) {
+  const [value, setValue] = useState(saved)
   const [server, setServer] = useState<ColibriServer | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState<'' | 'save' | 'check'>('')
   const refreshProviders = useStore((s) => s.refreshProviders)
-  const changed = value.trim() !== settings.colibri_url
+  const changed = value.trim() !== saved
   const look = async () => {
     setServer(await api.systemColibri())
     await refreshProviders()            // the model list of the chats follows what answers there now
   }
   useEffect(() => {                     // asked when Settings opens with an address, and after one was saved (the key of this component is the address)
-    if (!settings.colibri_url) return
+    if (!saved) return
     let gone = false
     api.systemColibri().then((found) => { if (!gone) { setServer(found); void refreshProviders().catch(() => {}) } }).catch(() => {})
     return () => { gone = true }
@@ -193,24 +193,24 @@ function Colibri({ settings, save, keySaved }: { settings: Settings; save(addres
       setBusy('')
     }
   }
-  const { lines, warn } = colibriHint(server, settings.colibri_key_set)
+  const { lines, warn } = colibriHint(server, keySet)
   return (
     <div className="colibri">
       <div className="keyrow">
         <label className="field">
-          <span>Address of your colibri server · <b className={settings.colibri_url ? 'state-on' : 'state-off'}>{settings.colibri_url ? 'in use' : 'none'}</b></span>
+          <span>Address of your colibri server · <b className={saved ? 'state-on' : 'state-off'}>{saved ? 'in use' : 'none'}</b></span>
           <input className="mono" spellCheck={false} autoComplete="off" value={value} aria-label="colibri address" placeholder="http://127.0.0.1:8000"
             onChange={(e) => setValue(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && changed && void run('save')} />
         </label>
         <div className="row">
           <button className="btn" disabled={!changed || busy !== ''} onClick={() => void run('save')}>{busy === 'save' ? 'Saving…' : value.trim() ? 'Save' : 'Clear'}</button>
-          <button className="btn" disabled={!settings.colibri_url || changed || busy !== ''} title="Ask the server at this address what it serves now" onClick={() => void run('check')}>{busy === 'check' ? 'Checking…' : 'Check'}</button>
+          <button className="btn" disabled={!saved || changed || busy !== ''} title="Ask the server at this address what it serves now" onClick={() => void run('check')}>{busy === 'check' ? 'Checking…' : 'Check'}</button>
         </div>
       </div>
       {error && <div className="ask-warning" role="alert">{error}</div>}
       {!changed && lines.map((line) => <div key={line} className="hint" role="status">{line}</div>)}
       {!changed && warn && <div className="ask-warning" role="alert">{warn}</div>}
-      <KeyRow name="COLIBRI_API_KEY" isSet={settings.colibri_key_set} onSaved={async () => { await keySaved(); await look().catch(() => {}) }} />
+      <KeyRow name="COLIBRI_API_KEY" isSet={keySet} onSaved={async () => { await keySaved(); await look().catch(() => {}) }} />
       <div className="hint">colibri (github.com/JustVugg/colibri) runs large models on this machine: what fits is held in memory and the rest is read from storage. It is installed and started with its own setup (./start-here.sh in the colibri folder), which ends by printing its addresses: enter the one it calls the OpenAI base URL here. It serves one model, and that model is then in the model list of every chat. HunterAI asks it directly, never through a proxy. Empty: colibri is not used. Written to .env as HUNTERAI_COLIBRI_URL.</div>
     </div>
   )
@@ -315,15 +315,19 @@ export function SettingsDialog({ onClose, onSetup }: { onClose: () => void; onSe
             <span>Risk gate: screen every write, edit, and execute call first. It is advice: it can make an allowed call ask, and it never approves one. Costs one decision-model call per screened call.</span>
           </label>
           <h3 className="section">colibri</h3>
-          <Colibri key={settings.colibri_url} settings={settings}
-            save={async (address) => {
-              const s = await api.putSettings({ colibri_url: address })
-              setSettings(s)
-              useStore.setState({ settings: s })
-              if (!s.colibri_url) await refreshProviders().catch(() => {})     // cleared: nothing is asked any more, and the model list has to drop what it served
-              return s.colibri_url
-            }}
-            keySaved={reload} />
+          {settings.colibri_url === undefined
+            // The page is newer than the server: after an update the server was not started again. Its settings
+            // lack what this page added, and it would refuse an address that was sent to it.
+            ? <div className="colibri hint">The HunterAI server that answers is from before it knew colibri. Start it again (press Ctrl+C where it runs, then scripts/start.sh), reload this page, and the address of your colibri server is set here.</div>
+            : <Colibri key={settings.colibri_url} saved={settings.colibri_url} keySet={settings.colibri_key_set === true}
+                save={async (address) => {
+                  const s = await api.putSettings({ colibri_url: address })
+                  setSettings(s)
+                  useStore.setState({ settings: s })
+                  if (!s.colibri_url) await refreshProviders().catch(() => {})     // cleared: nothing is asked any more, and the model list has to drop what it served
+                  return s.colibri_url ?? ''
+                }}
+                keySaved={reload} />}
           <h3 className="section">Images</h3>
           <label className="field"><span>Local model that reads images for the look_at_image tool (an Ollama model name; empty: the first installed one that can)</span>
             <input className="mono" defaultValue={settings.vision_model ?? ''} placeholder="automatic" onBlur={(e) => { if (e.target.value.trim() !== (settings.vision_model ?? '')) update({ vision_model: e.target.value.trim() }) }} /></label>

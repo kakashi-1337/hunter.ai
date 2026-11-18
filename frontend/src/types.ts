@@ -279,10 +279,11 @@ export interface Settings {
   /** The proxy the model providers are reached through, as it is shown; "" for none. */
   provider_proxy: string
   provider_proxy_password: boolean
-  /** Where the owner's colibri server is, as it is reached ("http://127.0.0.1:8000"); "" while colibri is not used. */
-  colibri_url: string
+  /** Where the owner's colibri server is, as it is reached ("http://127.0.0.1:8000"); "" while colibri is not used.
+   * Absent: the server that answers is from before it knew colibri (it was updated and not started again). */
+  colibri_url?: string
   /** A key is stored for it. It is never sent to the page. */
-  colibri_key_set: boolean
+  colibri_key_set?: boolean
 }
 
 export interface Goal {

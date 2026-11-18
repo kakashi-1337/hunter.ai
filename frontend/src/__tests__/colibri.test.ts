@@ -268,6 +268,36 @@ describe('colibri in Settings', () => {
   })
 })
 
+describe('Settings on a server from before it knew colibri', () => {
+  /** What such a server sends: everything but the two fields this page added. The owner updated, the page is the
+   * new one, and the server that answers was not started again yet. */
+  const before = (): Settings => {
+    const { colibri_url: _url, colibri_key_set: _key, ...older } = SETTINGS
+    void _url; void _key
+    return older as Settings
+  }
+
+  it('opens all the same, and every other setting is there', async () => {
+    install(before(), OFF)
+    await open()
+    expect(host.querySelector('[role="dialog"]')?.getAttribute('aria-label')).toBe('Settings')
+    expect(host.textContent).not.toContain('This part of the page could not be shown')
+    expect(host.textContent).toContain('Fallback model (Ollama)')
+    expect(host.textContent).toContain('Max model turns per run')
+  })
+
+  it('says under colibri that the server has to be started again, and offers nothing that it would refuse', async () => {
+    install(before(), OFF)
+    await open()
+    const section = host.querySelector('.colibri') as HTMLElement
+    expect(section.textContent).toBe('The HunterAI server that answers is from before it knew colibri. Start it again '
+      + '(press Ctrl+C where it runs, then scripts/start.sh), reload this page, and the address of your colibri server is set here.')
+    expect(section.querySelector('input')).toBeNull()
+    expect(section.querySelector('button')).toBeNull()
+    expect(look).not.toHaveBeenCalled()
+  })
+})
+
 describe('the model list of a chat', () => {
   const CHAT: Chat = { id: 'c1', target_id: null, title: 't', mode: 'pentesting', provider: 'abliteration', model: 'big', options: {},
     active_leaf_id: null, created_at: '', updated_at: '', workdir: null, permissions: {} }
