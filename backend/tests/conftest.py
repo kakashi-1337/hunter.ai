@@ -25,7 +25,7 @@ def isolated_home(tmp_path, monkeypatch):
                  "ABLIT_API_KEY", "ABLIT_MODEL", "ANTHROPIC_API_KEY", "OPENAI_API_KEY",
                  "XAI_API_KEY", "GEMINI_API_KEY", "OLLAMA_HOST", "HUNTERAI_MOCK",
                  "HUNTERAI_ABLIT_BASE_URL", "HUNTERAI_QDRANT_URL", "HUNTERAI_FAKE_EMBED_DELAY",
-                 "HUNTERAI_FAKE_EMBED_LOG"):
+                 "HUNTERAI_FAKE_EMBED_LOG", "HUNTERAI_COLIBRI_URL", "COLIBRI_API_KEY"):
         monkeypatch.delenv(name, raising=False)
     yield home
     # A test that undoes every patch (monkeypatch.undo()) would go on in the owner's real

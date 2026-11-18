@@ -28,8 +28,8 @@ what is missing.
 
 - Chat with streaming, uploads, history grouped by target, search, edit-and-resend,
   retry, delete, and switchable message versions (nothing is overwritten).
-- Models from abliteration.ai (default), Anthropic, OpenAI, Google, xAI, Ollama, and
-  the Codex CLI, with per-model options.
+- Models from abliteration.ai (default), Anthropic, OpenAI, Google, xAI, Ollama, colibri,
+  and the Codex CLI, with per-model options.
 - `claude_code`: Claude through the `claude` CLI and its own login (a Claude subscription),
   for people who have no API key. HunterAI starts `claude -p` in an empty folder with no
   tools, no MCP servers, and none of your Claude Code settings, and never reads the login.
@@ -405,6 +405,67 @@ then lost the chat, and can lose part of its rules. So HunterAI asks it not to (
 and `shift` are sent as false; Ollama then refuses instead), does not send a request that
 is larger than the window by its own count, and says so: "The request does not fit the
 context window of the local model ...", with the two sizes and where to change the window.
+
+### colibri: large models from memory and storage
+
+[colibri](https://github.com/JustVugg/colibri) is an engine of its own that runs large
+models on an ordinary machine: what fits is held in memory (and on the GPU when it can use
+it), and the rest is read from storage while the model works. It has its own setup, which
+finds the hardware, recommends a model that fits, and starts a server with an
+OpenAI-compatible API. HunterAI talks to that server; it does not install or start it.
+
+```sh
+git clone https://github.com/JustVugg/colibri.git
+cd colibri
+./start-here.sh        # first time: picks and downloads a model; later: starts what is set up
+```
+
+The setup ends by printing its addresses. Enter the one it calls the OpenAI base URL
+(`http://127.0.0.1:8000/v1` unless you chose another) under **Settings → colibri**. It is
+written to `.env` as `HUNTERAI_COLIBRI_URL`. Without an address colibri is not used, and
+nothing is asked anywhere. With one, the line under the field says what answers there, and
+the model is in the model list of every chat.
+
+What HunterAI takes from the server, and nothing else is assumed:
+
+- **One model.** A colibri server serves one model. A chat set to a model it no longer
+  serves is told which one it serves now, and nothing is sent.
+- **Its context window.** It is settled when colibri starts (by the memory there is, or by
+  `--ctx`), and a request and its answer share it. HunterAI makes a chat fit it as
+  described above. When the rules and tools of a new chat leave less than 8,192 tokens of
+  it, Settings and `scripts/smoke.sh` say which context to start colibri with
+  (`./start-here.sh --ctx 65536` in the colibri folder; a larger context needs more
+  memory). A request colibri refuses for its size after all is made smaller and sent once
+  more.
+- **Whether the model reads pictures.** colibri holds one picture for a request: the
+  latest one is sent, and each earlier one becomes a line that says so and names the
+  `look_at_image` tool. A request larger than the 4 MB colibri reads is not sent, with the
+  size of the picture in the words.
+- **Thinking** is a switch (Options → Thinking). There is no "Reasoning effort" for a
+  colibri model: each family of models takes other values and refuses the rest.
+
+It works on one request at a time and lets the others wait, five minutes unless it was
+started with another `--queue-timeout`. HunterAI waits longer than that for a first byte,
+and says "colibri was busy with other requests ..." when colibri gives up on one. A swarm
+of subagents on a colibri model is therefore a queue: lower "Subagents of a swarm working
+at the same time" in Settings.
+
+When colibri's engine fails in the middle of an answer, its server sends no error: the
+answer just stops, under a status of success. HunterAI takes an answer that was never
+declared finished for a failure, keeps what came, and says so. The tool calls of such an
+answer are not run.
+
+A key is needed only when colibri was started with one (`COLI_API_KEY`, or `--api-key`):
+enter it beside the address (`COLIBRI_API_KEY` in `.env`). The address may be another
+machine; colibri then has to be told the name it is asked by (`--allowed-host`), and it
+says so itself when it is not. HunterAI asks colibri directly: neither the proxy for the
+model providers nor a proxy variable of the environment is used.
+
+All of this was held against colibri's own server (`c/openai_server.py` at commit
+`0a5504a`) run with a scripted engine in place of a model: its model list, its streams, its
+tool calls for the GLM and Qwen families, its refusals, a queue that is full, and an engine
+that exits in the middle of an answer. `tests/colibri_wire.py` holds what it sent. Not
+tried: a real model, and a real picture.
 
 ### Answer check
 
@@ -986,7 +1047,7 @@ How it behaves:
 (`HUNTERAI_PROVIDER_PROXY` in `.env`). It is separate on purpose: what you send to a
 model should not go through a proxy that a program asked for. Anthropic, Gemini, the
 OpenAI-compatible providers, and the Claude and Codex programs use it; Ollama on this
-machine never does.
+machine and your colibri server never do.
 
 **SearXNG** takes a proxy in `~/.hunterai/searxng/settings.yml`:
 
@@ -1010,6 +1071,8 @@ the model itself has:
   named levels (gpt-oss: low, medium, high) gets the effort list, a model with a switch
   gets "Thinking" on or off, and a model that reports `[false]` gets neither. An Ollama
   that reports nothing keeps the Thinking switch as before.
+- **colibri**: a Thinking switch and no effort list (see "colibri: large models from memory
+  and storage").
 - **Gemini 3 and later**: the effort is sent as the model's thinking level. A level the
   model does not have becomes the next one up (medium on a model with low and high is
   sent as high), "Thinking: off" is the lowest level the model has, and a thinking
@@ -1084,7 +1147,8 @@ chunker file. `HUNTERAI_SEARXNG_URL` points at another SearXNG. `HUNTERAI_DEV=1`
 ## Requirements
 
 Python 3.12 via [uv](https://docs.astral.sh/uv/), [Bun](https://bun.sh), and optionally
-[Ollama](https://ollama.com) for local models and the fallback.
+[Ollama](https://ollama.com) for local models and the fallback, and
+[colibri](https://github.com/JustVugg/colibri) for models larger than this machine's memory.
 
 ## Run
 
@@ -1096,7 +1160,7 @@ scripts/dev.sh     # development: hot reload on http://127.0.0.1:5173
 The server listens on 127.0.0.1 only. Set `HUNTERAI_PORT` to use another port.
 
 On a start with no model to talk to (no API key, and no chat model in Ollama) the interface
-opens a **setup check**: one line per part (a model, Ollama, the embedding model, Qdrant,
+opens a **setup check**: one line per part (a model, Ollama, colibri when it has an address, the embedding model, Qdrant,
 SearXNG, Caido, Camoufox, your tool folder, the MCP servers) with what was found and the
 command or place that fixes it. Only the model is required; each other line switches one
 feature on. It is under Settings → "Setup check" at any time.
@@ -1134,7 +1198,8 @@ An error says what is wrong and what to do about it.
   its kind: a key that is not set or was refused (Settings), no credit, a rate limit (with
   the wait the provider named), no answer in time, a provider that cannot be reached (the
   connection, the proxy for model providers), Ollama that does not answer (`ollama serve`,
-  `ollama ps`), a request the provider did not accept (the model list, Options).
+  `ollama ps`), colibri that does not answer (`./start-here.sh` in its folder, the address
+  under Settings), a request the provider did not accept (the model list, Options).
 - **An answer that did not end by itself** has a line under it: cut off at the "Max output
   tokens" of the chat, at the model's own limit for one answer, by the full context window
   of a local model (which holds the request and the answer together), or ended by the
@@ -1211,6 +1276,8 @@ shows a key again.
 | `OPENAI_API_KEY`, `XAI_API_KEY`, `GEMINI_API_KEY` | OpenAI, xAI, Google |
 | `OLLAMA_HOST` | Ollama address (default `http://127.0.0.1:11434`) |
 | `HUNTERAI_OLLAMA_NUM_CTX` | Context window of local models in tokens (default 16384; Settings writes it) |
+| `HUNTERAI_COLIBRI_URL` | Address of your colibri server (Settings writes it); empty: colibri is not used |
+| `COLIBRI_API_KEY` | Its key, only when colibri was started with one |
 | `HUNTERAI_PORT` | Port (default 8790) |
 | `HUNTERAI_HOME` | Data folder (default `~/.hunterai`) |
 | `HUNTERAI_PROVIDER_PROXY` | Proxy the model providers are reached through (see "Your own proxy") |
@@ -1224,7 +1291,7 @@ Chats, uploads, and settings live in `~/.hunterai/` (`hunterai.db` and `uploads/
 ```sh
 scripts/smoke.sh                  # every check that costs nothing
 scripts/smoke.sh --deep           # and a long chat answered by the local model
-scripts/smoke.sh --calls          # and one short request to each cloud provider that is ready
+scripts/smoke.sh --calls          # and one short request to each cloud provider that is ready, and to colibri
 scripts/smoke.sh --only local,proxy
 ```
 
@@ -1240,6 +1307,7 @@ failed.
 | `ollama` | Does Ollama answer? Its version and models. |
 | `local` | The fallback model is told a word and asked for it two messages later, through HunterAI's own code. Also: the window it gets, and where Ollama runs it (CPU, GPU, both). |
 | `window` | How many tokens of rules and tool definitions a new chat sends before the conversation, against the window for local models. With a running HunterAI the tools of your MCP servers are counted too. |
+| `colibri` | Only with an address in Settings: does it answer, which model does it serve, with which context, and does that leave room for a chat beside the rules and tools? With `--calls` it is sent "Reply with the word OK". One that does not answer is a `FAIL` when new chats are set to use it, otherwise a `note`. |
 | `embeddings` | Does the embedding model answer with numbers? |
 | `qdrant`, `searxng` | Do they answer? SearXNG is asked a real search in the format the tool needs. |
 | `proxy` | Your proxy carries a request: the address sites see through it, the one they see without it, and whether a command started with the proxy variables comes out at the same place. |

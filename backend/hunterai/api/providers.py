@@ -19,6 +19,11 @@ def clear_cache() -> None:
     _cache.clear()
 
 
+def forget(name: str) -> None:
+    """The next list asks this provider anew."""
+    _cache.pop(name, None)
+
+
 async def _describe(provider) -> tuple[dict, bool]:
     """A provider's entry, and whether its model listing worked."""
     configured = False
@@ -31,8 +36,15 @@ async def _describe(provider) -> tuple[dict, bool]:
         models = []  # one slow or broken provider must not hide the others
     # Adapters report an unreachable service as an empty list, so that counts as a failure too.
     ok = bool(models) or not configured
-    return {"name": provider.name, "configured": configured,
-            "models": [m.model_dump() for m in models]}, ok
+    entry = {"name": provider.name, "configured": configured, "models": [m.model_dump() for m in models]}
+    if configured and not models:
+        try:                # a provider that knows why it has no model to offer says so (colibri: nothing answers there)
+            note = provider.note() if hasattr(provider, "note") else None
+        except Exception:
+            note = None
+        if note:
+            entry["note"] = note
+    return entry, ok
 
 
 async def _cached(provider) -> dict:

@@ -82,7 +82,7 @@ def test_registry_unknown_raises():
 
 
 def test_registry_order_is_stable():
-    order = ["abliteration", "anthropic", "openai", "google", "xai", "ollama", "codex", "claude_code"]
+    order = ["abliteration", "anthropic", "openai", "google", "xai", "ollama", "colibri", "codex", "claude_code"]
     names = [p.name for p in registry.all()]
     assert names == [n for n in order if n in names]
 

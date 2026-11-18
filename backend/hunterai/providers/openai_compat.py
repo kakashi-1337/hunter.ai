@@ -42,6 +42,8 @@ _STREAM_ERROR_KINDS = [
 
 class OpenAICompatProvider:
     supports_tools = True
+    timeout = TIMEOUT
+    trust_env = True        # the proxy and the certificates of the environment apply, as the HTTP client has it by default
 
     def __init__(self, name: str, base_url: str, key_env: str,
                  default_models: list[ModelInfo] | None = None,
@@ -73,6 +75,28 @@ class OpenAICompatProvider:
         key = config.env(self.key_env)
         return text.replace(key, "[key]") if key else text
 
+    # What a provider with another way of being reached, or other answers, says differently (colibri.py).
+
+    def _base(self) -> str:
+        """Where the API is."""
+        return self.base_url
+
+    async def _via(self) -> str | None:
+        """The proxy the provider is reached through: the one for the model providers, when the owner set one."""
+        return await way_out()
+
+    def _refused(self, status: int, body: str, retry_after: str | None) -> ProviderError:
+        """An answer with a status of 400 or more, as the error it is."""
+        return error_from_status(status, self._scrub(body), retry_after)
+
+    def _unreached(self, e: httpx.HTTPError) -> ProviderError:
+        """A request that got no answer for another reason than time."""
+        return ProviderError("unavailable", f"{self.name} unreachable: {type(e).__name__}{through_proxy(e)}")
+
+    def _ended(self, finished: bool) -> None:
+        """The stream is over. `finished`: a chunk said why the answer ended. A stream that just ends is taken for an
+        answer that ended; a provider whose stream can stop without one raises here."""
+
     def _stream_error(self, err) -> ProviderError:
         """An {"error": ...} chunk inside a 200 stream, as the error its HTTP status would be."""
         fields = err if isinstance(err, dict) else {"message": err}
@@ -92,8 +116,8 @@ class OpenAICompatProvider:
 
     async def models(self) -> list[ModelInfo]:
         try:
-            async with httpx.AsyncClient(timeout=10.0, proxy=await way_out()) as c:
-                r = await c.get(f"{self.base_url}/models", headers=self._headers())
+            async with httpx.AsyncClient(timeout=10.0, proxy=await self._via(), trust_env=self.trust_env) as c:
+                r = await c.get(f"{self._base()}/models", headers=self._headers())
                 r.raise_for_status()
                 ids = [m["id"] for m in r.json().get("data", []) if m.get("id")]
         except (httpx.HTTPError, ProviderError, ValueError, KeyError, TypeError):
@@ -175,12 +199,12 @@ class OpenAICompatProvider:
                      options: Options, tools: list[ToolSpec] | None = None):
         headers = self._headers()
         payload = self._payload(model, system, messages, options, tools)
-        usage, reason = Usage(0, 0), "end"
+        usage, reason, finished = Usage(0, 0), "end", False
         pending: dict[int, dict] = {}   # tool-call fragments by index
         try:
-            via = await way_out()
-            async with httpx.AsyncClient(timeout=TIMEOUT, proxy=via) as client:
-                async with client.stream("POST", f"{self.base_url}/chat/completions",
+            via = await self._via()
+            async with httpx.AsyncClient(timeout=self.timeout, proxy=via, trust_env=self.trust_env) as client:
+                async with client.stream("POST", f"{self._base()}/chat/completions",
                                          headers=headers, json=payload) as r:
                     if via:                  # an answer the proxy made itself is not the provider's
                         from .. import hop
@@ -189,8 +213,7 @@ class OpenAICompatProvider:
                                                                f"providers did not carry the request ({hop.answered_itself(r)})")
                     if r.status_code >= 400:
                         body = (await r.aread()).decode("utf-8", "replace")
-                        raise error_from_status(r.status_code, self._scrub(body),
-                                                r.headers.get("retry-after"))
+                        raise self._refused(r.status_code, body, r.headers.get("retry-after"))
                     async for line in r.aiter_lines():
                         if not line.startswith("data:"):
                             continue
@@ -227,12 +250,12 @@ class OpenAICompatProvider:
                                 elif isinstance(fn.get("arguments"), dict):
                                     slot["args"] = json.dumps(fn["arguments"])
                             if choice.get("finish_reason"):
-                                reason = choice["finish_reason"]
+                                reason, finished = choice["finish_reason"], True
         except httpx.TimeoutException as e:
             raise ProviderError("timeout", f"{self.name} timed out") from e
         except httpx.HTTPError as e:
-            raise ProviderError("unavailable",
-                                f"{self.name} unreachable: {type(e).__name__}{through_proxy(e)}") from e
+            raise self._unreached(e) from e
+        self._ended(finished)           # before the tool calls: those of an answer that did not end are not handed on
         taken: set[str] = set()
         for index in sorted(pending):
             slot = pending[index]

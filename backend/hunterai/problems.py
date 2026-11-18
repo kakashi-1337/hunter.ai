@@ -13,6 +13,7 @@ SHOWN = 3                   # things wrong with one request that are spelled out
 LOG_BYTES = 2_000_000       # the file of faults is started anew at this size; the one before it is kept beside it
 MESSAGE = 200               # characters of an exception's own text that are shown
 _PLACES = ("body", "query", "path", "header", "cookie")       # where FastAPI found the field: not part of its name
+COLIBRI = "colibri"         # the provider that is a server of the owner's with one model: other things can be done about its errors
 
 
 def _one(error: dict) -> str:
@@ -53,13 +54,25 @@ def _advice(e, who: str | None) -> str:
         wait = f"{math.ceil(e.retry_after)} s" if e.retry_after else "a minute"
         return f"The provider limits how often this key may ask: wait {wait}, then send the message again."
     if e.kind == "timeout":
+        if who == COLIBRI:
+            return ("No answer came in time. colibri works on one request at a time, so it may still be busy with another one "
+                    "(its page, at the address under Settings, shows what it is doing): send the message again later.")
         return "No answer came in time: send the message again. If it keeps happening, the provider is slow or down."
     if e.kind == "unavailable":
         if who == "ollama":
             return ("Start Ollama (`ollama serve`) and see with `ollama ps` that the model fits this machine's memory, "
                     "then send the message again.")
+        if who == COLIBRI:
+            if getattr(e, "status", None):          # it answered, with a failure of its own: it runs
+                return ("It failed on its side: send the message again. If it goes on, `c/coli logs` in the colibri folder "
+                        "says why.")
+            return ("Start it (./start-here.sh in the colibri folder) and see that the address under Settings is the one it "
+                    "listens on, then send the message again.")
         return ("It could not be reached, or it failed on its side: check the internet connection (and the proxy for model "
                 "providers under Settings, if you set one), then send the message again.")
+    if who == COLIBRI:                              # it serves one model: there is no other one to pick in the list
+        return ("colibri did not accept the request as it was sent: its words say what the model it serves does not do. For "
+                "tools or pictures, have it serve another model (./start-here.sh --reconfigure in the colibri folder).")
     return ("The provider did not accept the request as it was sent: if its words name the model, pick another one; if they "
             "name an option, change it under Options.")
 
@@ -133,5 +146,13 @@ def cut_off(reason: str | None, *, provider: str | None, max_tokens: int | None 
         return "cut_off", (f"The answer was cut off: the context window of the local model{size} was full. It holds the request "
                            'and the answer together. Raise "Context window for local models" in Settings (a larger window needs '
                            "more memory), or continue in a new chat.")
+    if provider == COLIBRI:         # the request and the answer share the context colibri was started with
+        from .providers import colibri
+        size = f" ({window:,} tokens)" if window else ""
+        larger = colibri.context_for(window + 1) if window else None
+        more = f"; for more room start colibri with a larger context ({colibri.START} --ctx {larger} in the colibri folder)" if larger else ""
+        return "cut_off", (f"The answer was cut off: colibri ended it at its limit. Its context window{size} holds the request and "
+                           "the answer together and was full, or colibri was started with a limit for one answer (--ngen). Send "
+                           f'"continue" to have the model go on{more}.')
     return "cut_off", ('The answer was cut off at the limit the model has for one answer. Send "continue" to have it go on. If '
                        'the model takes "Max output tokens" under Options, a higher value there gives it more room.')

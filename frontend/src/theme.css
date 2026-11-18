@@ -186,6 +186,7 @@ details.thinking pre { white-space: pre-wrap; word-break: break-word; font: 12.5
 .dot.done { background: var(--accent); } .dot.error { background: var(--bad); }
 .dot.running { background: var(--info); } .dot.cancelled, .dot.interrupted { background: var(--warn); }
 .keyrow { display: grid; grid-template-columns: 1fr auto; gap: 6px; align-items: end; }
+.colibri { display: flex; flex-direction: column; gap: 12px; }      /* its rows stand apart as the rows around it do */
 .state-on { color: var(--accent); } .state-off { color: var(--faint); }
 
 @media (max-width: 1100px) { .traj { position: fixed; right: 0; top: 0; bottom: 0; z-index: 30; box-shadow: -12px 0 36px #000a; } }

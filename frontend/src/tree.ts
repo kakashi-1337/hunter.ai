@@ -1,4 +1,4 @@
-import type { AnswerCheckBlock, Block, ChangesBlock, CheckResult, FolderCheck, Goal, Helper, FindingRow, LocalModel, Message, Options, PermissionRequest, Policy, RunEvent, SourcesBlock, Step, SwarmMember, SystemStatus } from './types'
+import type { AnswerCheckBlock, Block, ChangesBlock, CheckResult, ColibriServer, FolderCheck, Goal, Helper, FindingRow, LocalModel, Message, Options, PermissionRequest, Policy, ProviderInfo, RunEvent, SourcesBlock, Step, SwarmMember, SystemStatus } from './types'
 
 export function messageText(m: Message): string {
   return m.blocks.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('\n')
@@ -528,6 +528,34 @@ export function localWindowHint(local: LocalModel | null, value: number): { line
     : local.limit && local.limit < local.enough ? `${short}, and ${local.model} takes ${whole(local.limit)} at most. Switch off the MCP servers you do not need, or choose a fallback model with a larger window.`
       : `${short}. Set ${whole(local.enough)} or more.`
   return { lines, warn }
+}
+
+/** What Settings says under the address of colibri: what answers there, and a warning for what stands in the way
+ * of a chat with it. A server that does not answer is said without alarm: it may be off on purpose. `keySet`: a key
+ * is stored for it. */
+export function colibriHint(server: ColibriServer | null, keySet: boolean): { lines: string[]; warn: string | null } {
+  if (!server || server.state === 'off') return { lines: [], warn: null }
+  if (server.state === 'down') return { lines: [`Nothing answers at ${server.url}. Start colibri (./start-here.sh in the colibri folder), then press Check.`], warn: null }
+  if (server.state === 'key') return { lines: [], warn: `colibri at ${server.url} ${keySet ? 'did not accept the key that is set' : 'asks for a key'}: enter the one it was started with below.` }
+  if (server.state !== 'ok') return { lines: [], warn: `colibri: ${server.said}.` }
+  const context = server.context ? `a context of ${whole(server.context)} tokens` : 'a context it does not name'
+  const lines = [`It serves ${server.model}: ${context}, ${server.images ? 'reads pictures' : 'reads text only'}. Pick it in the model list of a chat.`]
+  if (server.overhead != null) lines.push(`HunterAI's rules and tools take about ${whole(server.overhead)} tokens of that context.`)
+  const warn = server.enough
+    ? `Too small here: with the rules and tools, less than 8,192 tokens are left for the chat. Start colibri with a larger context: ./start-here.sh --ctx ${server.enough} in the colibri folder (a larger context needs more memory).`
+    : null
+  return { lines, warn }
+}
+
+/** How a provider stands in the list of models: the heading of its group, and the line that stands there in place
+ * of models (null when it has models to offer). */
+export function providerGroup(p: ProviderInfo): { label: string; empty: string | null } {
+  if (!p.configured) {
+    const how = p.name === 'codex' ? 'install the codex CLI' : p.name === 'claude_code' ? 'install the claude CLI and log in'
+      : p.name === 'colibri' ? 'set its address in Settings' : 'add key in settings'
+    return { label: `${p.name} — ${how}`, empty: 'not configured' }
+  }
+  return { label: p.name, empty: p.models.length ? null : p.note ?? 'no models available' }
 }
 
 const HOW_TO_RESTART = 'Press Ctrl+C where it runs, then start it again (scripts/start.sh).'

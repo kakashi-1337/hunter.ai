@@ -236,6 +236,8 @@ export interface ProviderInfo {
   name: string
   configured: boolean
   models: ModelInfo[]
+  /** Why it is set up and offers no model, when it knows (colibri: nothing answers at its address). */
+  note?: string
 }
 
 export interface Settings {
@@ -277,6 +279,10 @@ export interface Settings {
   /** The proxy the model providers are reached through, as it is shown; "" for none. */
   provider_proxy: string
   provider_proxy_password: boolean
+  /** Where the owner's colibri server is, as it is reached ("http://127.0.0.1:8000"); "" while colibri is not used. */
+  colibri_url: string
+  /** A key is stored for it. It is never sent to the page. */
+  colibri_key_set: boolean
 }
 
 export interface Goal {
@@ -587,6 +593,20 @@ export interface LocalModel {
   overhead: { tokens: number; tools: number; on_demand: number }   // what a new chat sends before the conversation
   enough: number               // the window that leaves room for a chat beside that
   loaded: { processor: string; context: number | null; size_mb: number } | null
+}
+
+/** What the colibri server at the address in Settings says of itself, for the line under that address. */
+export interface ColibriServer {
+  url: string
+  /** off: no address is set. down: nothing answers. key: it wants a key it was not given. refused: it refused who
+   * asked. odd: what answers is not colibri. nochat: its model does not chat. ok: it serves `model`. */
+  state: 'off' | 'down' | 'key' | 'refused' | 'odd' | 'nochat' | 'ok'
+  said: string                 // why it serves nothing to chat with, in words; '' for off and ok
+  model: string | null
+  context: number | null       // the tokens of context it holds; null when it does not say
+  images: boolean              // the model reads pictures
+  overhead: number | null      // what a new chat sends before the conversation, in tokens
+  enough: number | null        // the context to start it with, when its own leaves no room for a chat
 }
 
 export interface CheckupItem {

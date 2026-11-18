@@ -13,10 +13,11 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from .. import activity, caido, config, diagnostics, engine, mcp_manager, rea_tools, stale, thermal, toolbox
+from . import providers as providers_api
 from . import settings as settings_api
 from .deps import get_conn
 from ..kb import embed
-from ..providers import ollama, registry
+from ..providers import colibri, ollama, registry
 from ..repo import settings as store
 from ..tools import caido_tools
 from ..tools import registry as tools
@@ -110,6 +111,23 @@ async def local_model(conn=Depends(get_conn)):
             "overhead": {k: before[k] for k in ("tokens", "tools", "on_demand")},
             "enough": -(-(before["tokens"] + ROOM) // 4096) * 4096,
             "loaded": {k: now[k] for k in ("processor", "context", "size_mb")} if now else None}
+
+
+@router.get("/system/colibri")
+async def colibri_server(conn=Depends(get_conn)):
+    """What the colibri server at the address in Settings says of itself, for the line under that address: whether it
+    answers, the model it serves, its context, and whether that holds HunterAI's rules and tools with room for a chat
+    (`enough`: the context to start it with when it does not). The server is asked anew, and so is the next list of
+    models for the page: the owner looks here after he started or changed it."""
+    seen = await registry.get(colibri.NAME).served(fresh=True)
+    providers_api.forget(colibri.NAME)
+    out = {"url": seen.at, "state": seen.state, "said": "" if seen.state in ("ok", "off") else colibri.why(seen),
+           "model": None, "context": None, "images": False, "overhead": None, "enough": None}
+    if seen.state == "ok":
+        model, before = seen.models[0], await overhead(conn)
+        out.update(model=model.id, context=model.context_window, images=model.supports_images, overhead=before["tokens"],
+                   enough=colibri.context_to_start(before["tokens"] + ROOM, model.context_window))
+    return out
 
 
 @router.get("/system/status")
@@ -209,22 +227,27 @@ async def checkup(request: Request, conn=Depends(get_conn)):
     keyed = []
     for p in registry.all():
         try:
-            if p.name != LOCAL and p.configured():
+            if p.name not in (LOCAL, colibri.NAME) and p.configured():
                 keyed.append(p.name)
         except Exception:  # noqa: BLE001 - one broken provider must not hide the others
             pass
+    # colibri has an address or it is not used at all; with one, it is a model to talk to only while it serves one.
+    served = await registry.get(colibri.NAME).served() if colibri.address() else None
+    serves = served.models[0].id if served and served.state == "ok" else None
     embedder = embed.DEFAULT_EMBEDDER.partition(":")[2]
     have = []
     if keyed:
         have.append("ready: " + ", ".join(keyed))
     if chat_models:
         have.append("local: " + ", ".join(chat_models[:4]) + (f" and {len(chat_models) - 4} more" if len(chat_models) > 4 else ""))
+    if serves:
+        have.append(f"colibri: {serves}")
     binary = caido.binary() if caido.available() and caido.managed() else None
     programs = toolbox.installed()
     rea_found = rea_tools.found()
     caido_off = (os.environ.get("HUNTERAI_CAIDO") or "").lower() == "off"
     items = [
-        _item("model", "A model to talk to", bool(keyed or chat_models), "; ".join(have) or "no API key and no local model",
+        _item("model", "A model to talk to", bool(keyed or chat_models or serves), "; ".join(have) or "no API key and no local model",
               f"Open Settings and enter an API key (it is written to {config.env_file()}), or start Ollama and pull "
               "a chat model. Then press Check again.", required=True),
         _item("ollama", "Ollama (local models, the fallback, look_at_image)", tags is not None,
@@ -257,6 +280,11 @@ async def checkup(request: Request, conn=Depends(get_conn)):
               f"Put or link them in {rea_tools.folder()}: ghidra/ (a Ghidra installation), jdk/, hopper/, ilspycmd, adb, "
               "and bin/ for programs found by name (jadx, rizin, apktool). Switch the rea server off and on afterwards."),
     ]
+    if served is not None:
+        items.insert(2, _item("colibri", "colibri (a local model from memory and storage)", bool(serves),
+                              f"serves {serves} at {served.at}" if serves else colibri.why(served),
+                              "Start it (./start-here.sh in the colibri folder), or see its address and its key under "
+                              "Settings, colibri."))
     mcp, dead = _mcp_item()
     items.append(mcp)
     await _mark_stopped(conn, items)

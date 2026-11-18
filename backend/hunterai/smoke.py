@@ -1,5 +1,5 @@
-"""Checks against the real services of this install: Ollama and the local model, Qdrant, SearXNG, the owner's
-proxy, the model providers, and a running HunterAI. Run with scripts/smoke.sh after an update, or when something
+"""Checks against the real services of this install: Ollama and the local model, colibri, Qdrant, SearXNG, the
+owner's proxy, the model providers, and a running HunterAI. Run with scripts/smoke.sh after an update, or when something
 does not work. The tests of HunterAI use stand-ins for all of these; this is where the real ones are asked.
 
 Nothing is sent to a target and nothing of the owner's is changed: the checks read the settings, ask the services
@@ -8,7 +8,8 @@ lives in a database of its own that is thrown away.
 
     scripts/smoke.sh                  every check that costs nothing
     scripts/smoke.sh --deep           and a long chat answered by the local model in place of an unreachable one
-    scripts/smoke.sh --calls          and one short request to each cloud provider that has a key (a few tokens)
+    scripts/smoke.sh --calls          and one short request to each cloud provider that has a key (a few tokens),
+                                      and one to colibri when it is set up
     scripts/smoke.sh --only local,proxy
 
 Exit code: 0 when nothing failed, 1 when a check failed, 2 when the command line is not understood."""
@@ -29,7 +30,7 @@ import httpx
 from . import config, db, engine, hop, problems, upstream
 from .api import system as system_api
 from .kb import embed
-from .providers import ollama, registry
+from .providers import colibri, ollama, registry
 from .providers.base import ModelInfo, Options, ProviderError, Stop, TextDelta, Usage, WireMessage
 from .repo import settings
 from .tools.base import ToolError
@@ -207,29 +208,80 @@ async def _check_local(env: Env) -> list[Result]:
     return out
 
 
+async def _overhead(env: Env) -> tuple[int, int, str]:
+    """(the tokens a new chat sends before a word of the conversation, the window for local models, which tools
+    were counted). The running server counts the tools of the MCP servers too; without it they are left out."""
+    counted = await _get(f"{_server()}/api/system/overhead") if await env.server() is not None else None
+    if counted and counted.get("tokens"):
+        tokens, tools, later, window = (int(counted.get(k) or 0) for k in ("tokens", "tools", "on_demand", "window"))
+        return tokens, window, f"{tools:,} tools" + (f", and {later:,} more that are loaded on demand" if later else "")
+    from .tools import native
+    from .tools import registry as tools_registry
+    if not tools_registry.all():
+        native.register_all()
+    mine = await system_api.overhead(env.conn)
+    return mine["tokens"], mine["window"], f"{mine['tools']:,} tools, without those of MCP servers: start HunterAI to count them"
+
+
 async def _check_window(env: Env) -> list[Result]:
     """The first request of a chat holds HunterAI's rules and every tool definition before a word of the
     conversation: with many MCP tools that alone can be more than a local window."""
     if await env.ollama() is None:
         return [Result("local window", "skip", "Ollama does not answer")]
-    counted = await _get(f"{_server()}/api/system/overhead") if await env.server() is not None else None
-    if counted and counted.get("tokens"):
-        tokens, tools, later, window = (int(counted.get(k) or 0) for k in ("tokens", "tools", "on_demand", "window"))
-        which = f"{tools:,} tools" + (f", and {later:,} more that are loaded on demand" if later else "")
-    else:
-        from .tools import native
-        from .tools import registry as tools_registry
-        if not tools_registry.all():
-            native.register_all()
-        mine = await system_api.overhead(env.conn)
-        tokens, window = mine["tokens"], mine["window"]
-        which = f"{mine['tools']:,} tools, without those of MCP servers: start HunterAI to count them"
+    tokens, window, which = await _overhead(env)
     said = f"a new chat sends about {tokens:,} tokens of rules and tools ({which}); the window for local models is {window:,}"
     if tokens + ROOM <= window:
         return [Result("local window", "ok", said)]
     enough = -(-(tokens + ROOM) // 4096) * 4096
     return [Result("local window", "FAIL", f'{said}. Raise "Context window for local models" in Settings to {enough:,} or more '
                                            "(a larger window needs more memory), or switch off the MCP servers you do not need")]
+
+
+# ---- colibri
+
+COLIBRI_START = f"{colibri.START} in the colibri folder"
+
+
+async def _check_colibri(env: Env) -> list[Result]:
+    """colibri, when the owner gave its address: whether it answers, what it serves, whether its context holds the
+    rules and tools of a new chat with room for the chat, and with --calls whether it answers a request."""
+    provider = registry.get(colibri.NAME)
+    seen = await provider.served(fresh=True)
+    if seen.state == "off":
+        return [Result("colibri", "skip", "no address is set for it (Settings, colibri)")]
+    if seen.state == "down":
+        if await settings.get(env.conn, "default_provider") == colibri.NAME:
+            return [Result("colibri", "FAIL", f"{colibri.why(seen)}, and new chats are set to use it: start it ({COLIBRI_START})")]
+        return [Result("colibri", "note", f"{colibri.why(seen)}: start it when you want to use it ({COLIBRI_START})")]
+    if seen.state != "ok":          # something answers there, and not as colibri set up for HunterAI would
+        return [Result("colibri", "FAIL", f"{colibri.why(seen)} (the address is {seen.at}: Settings, colibri)")]
+    model = seen.models[0]
+    reads = "reads pictures" if model.supports_images else "reads text only"
+    window = f"a context of {model.context_window:,} tokens" if model.context_window else "a context it does not name"
+    out = [Result("colibri", "ok", f"{model.id} at {seen.at}, {window}, {reads}")]
+    tokens, _, _ = await _overhead(env)
+    said = f"a new chat sends about {tokens:,} tokens of rules and tools"
+    enough = colibri.context_to_start(tokens + ROOM, model.context_window)
+    if model.context_window and enough:
+        out.append(Result("colibri", "FAIL", f"{said}, which leaves too little of the context for the chat: start colibri with a "
+                                             f"larger one ({colibri.START} --ctx {enough} in the colibri folder; a larger context "
+                                             "needs more memory)"))
+    elif model.context_window and tokens + ROOM > model.context_window:
+        out.append(Result("colibri", "FAIL", f"{said}, which leaves too little of the context for the chat, and colibri offers "
+                                             "no larger one: switch off the MCP servers you do not need"))
+    elif model.context_window:
+        out.append(Result("colibri", "ok", f"{said}, which leaves room for the chat"))
+    if not env.calls:
+        return [*out, Result("colibri", "skip", "not called: run with --calls to send it one short request")]
+    try:
+        text, used, seconds = await _answer(provider, model.id, "", [WireMessage("user", [TextBlock(text="Reply with the word OK.")])],
+                                            Options(max_tokens=16, thinking=False))     # the tokens are for the word
+        out.append(Result("colibri", "ok", f"{model.id} answered in {seconds:.1f} s ({used.input_tokens:,} tokens in, "
+                                           f"{used.output_tokens:,} out)"))
+    except ProviderError as e:
+        e.provider, e.model = colibri.NAME, model.id
+        out.append(Result("colibri", "FAIL", problems.model_call(e)))
+    return out
 
 
 # ---- embeddings, Qdrant, SearXNG
@@ -358,7 +410,7 @@ def _cloud_providers() -> list:
     out = []
     for p in registry.all():
         try:
-            if p.name not in ("ollama", "mock") and p.configured():
+            if p.name not in ("ollama", colibri.NAME, "mock") and p.configured():
                 out.append(p)
         except Exception:  # noqa: BLE001 - one broken provider must not hide the others
             pass
@@ -487,6 +539,7 @@ class Check:
 
 CHECKS: dict[str, Check] = {
     "server": Check(_check_server), "ollama": Check(_check_ollama), "local": Check(_check_local), "window": Check(_check_window),
+    "colibri": Check(_check_colibri),
     "embeddings": Check(_check_embeddings), "qdrant": Check(_check_qdrant), "searxng": Check(_check_searxng),
     "proxy": Check(_check_proxy), "providers": Check(_check_providers), "chat": Check(_check_long_chat, deep=True),
 }

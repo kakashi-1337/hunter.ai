@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react'
 import * as api from '../api'
 import { proxyTestText } from '../proxy'
 import { useStore } from '../store'
-import { localWindowHint } from '../tree'
-import type { LocalModel, McpStatus, Settings, ToolInfo } from '../types'
+import { colibriHint, localWindowHint } from '../tree'
+import type { ColibriServer, LocalModel, McpStatus, Settings, ToolInfo } from '../types'
 import { McpManager } from './McpManager'
 import { MemoryManager } from './MemoryManager'
 import { PersonaManager } from './PersonaManager'
@@ -12,7 +12,7 @@ import { PolicyEditor } from './PermissionsPanel'
 
 const KEY_LABELS: Record<string, string> = {
   ABLIT_API_KEY: 'abliteration.ai', ANTHROPIC_API_KEY: 'Anthropic', OPENAI_API_KEY: 'OpenAI',
-  XAI_API_KEY: 'xAI', GEMINI_API_KEY: 'Google Gemini',
+  XAI_API_KEY: 'xAI', GEMINI_API_KEY: 'Google Gemini', COLIBRI_API_KEY: 'colibri key, only when it was started with one',
 }
 
 /** One proxy address with its Save and Test buttons. The field holds the address as the server shows it: with the
@@ -102,7 +102,7 @@ function ProxyRow({ settings, onSaved }: { settings: Settings; onSaved: (s: Sett
       <div className="hint">Your own proxy: Burp, mitmproxy, ZAP, a tunnel, or a proxy service (an http:// or socks5:// address, with a user name and password when it asks for them). It is the default; a target can have a proxy of its own, set in the target. Every host is still resolved and checked first (scope, local addresses); the proxy is then asked for the host by name. When the proxy does not carry a connection, nothing is sent directly. Commands get proxy variables that lead to it, through a local address that holds the login: a program that ignores them, or cannot speak through an HTTP proxy (nmap), connects from this machine itself. Not combined with the Caido switch above.</div>
       <ProxyAddress label="Proxy for the model providers" name="Proxy for the model providers" providers
         shown={settings.provider_proxy} kept={settings.provider_proxy_password} save={async (value) => (await put({ provider_proxy: value })).provider_proxy} />
-      <div className="hint">Separate on purpose: what you send to a model does not go through a proxy that a program asked for. Used for Anthropic, Gemini, the OpenAI-compatible providers, and the Claude and Codex programs; written to .env as HUNTERAI_PROVIDER_PROXY. Ollama on this machine is never sent through it.</div>
+      <div className="hint">Separate on purpose: what you send to a model does not go through a proxy that a program asked for. Used for Anthropic, Gemini, the OpenAI-compatible providers, and the Claude and Codex programs; written to .env as HUNTERAI_PROVIDER_PROXY. Ollama on this machine and your colibri server are never sent through it.</div>
     </>
   )
 }
@@ -157,6 +157,61 @@ function KeyRow({ name, isSet, onSaved }: { name: string; isSet: boolean; onSave
           onChange={(e) => setValue(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && value.trim() && void save()} />
       </label>
       <button className="btn" disabled={!value.trim() || saving} onClick={save}>{saving ? 'Saving…' : 'Save'}</button>
+    </div>
+  )
+}
+
+/** The owner's colibri server: its address, what answers there, and the key it wants when it was started with one.
+ * `save` answers with the address as the server keeps it and rejects with the server's reason; `keySaved` reloads
+ * the settings after a key was stored. */
+function Colibri({ settings, save, keySaved }: { settings: Settings; save(address: string): Promise<string>; keySaved(): Promise<void> }) {
+  const [value, setValue] = useState(settings.colibri_url)
+  const [server, setServer] = useState<ColibriServer | null>(null)
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState<'' | 'save' | 'check'>('')
+  const refreshProviders = useStore((s) => s.refreshProviders)
+  const changed = value.trim() !== settings.colibri_url
+  const look = async () => {
+    setServer(await api.systemColibri())
+    await refreshProviders()            // the model list of the chats follows what answers there now
+  }
+  useEffect(() => {                     // asked when Settings opens with an address, and after one was saved (the key of this component is the address)
+    if (!settings.colibri_url) return
+    let gone = false
+    api.systemColibri().then((found) => { if (!gone) { setServer(found); void refreshProviders().catch(() => {}) } }).catch(() => {})
+    return () => { gone = true }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  const run = async (what: 'save' | 'check') => {
+    setBusy(what)
+    setError('')
+    try {
+      if (what === 'save') setValue(await save(value))
+      else await look()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy('')
+    }
+  }
+  const { lines, warn } = colibriHint(server, settings.colibri_key_set)
+  return (
+    <div className="colibri">
+      <div className="keyrow">
+        <label className="field">
+          <span>Address of your colibri server · <b className={settings.colibri_url ? 'state-on' : 'state-off'}>{settings.colibri_url ? 'in use' : 'none'}</b></span>
+          <input className="mono" spellCheck={false} autoComplete="off" value={value} aria-label="colibri address" placeholder="http://127.0.0.1:8000"
+            onChange={(e) => setValue(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && changed && void run('save')} />
+        </label>
+        <div className="row">
+          <button className="btn" disabled={!changed || busy !== ''} onClick={() => void run('save')}>{busy === 'save' ? 'Saving…' : value.trim() ? 'Save' : 'Clear'}</button>
+          <button className="btn" disabled={!settings.colibri_url || changed || busy !== ''} title="Ask the server at this address what it serves now" onClick={() => void run('check')}>{busy === 'check' ? 'Checking…' : 'Check'}</button>
+        </div>
+      </div>
+      {error && <div className="ask-warning" role="alert">{error}</div>}
+      {!changed && lines.map((line) => <div key={line} className="hint" role="status">{line}</div>)}
+      {!changed && warn && <div className="ask-warning" role="alert">{warn}</div>}
+      <KeyRow name="COLIBRI_API_KEY" isSet={settings.colibri_key_set} onSaved={async () => { await keySaved(); await look().catch(() => {}) }} />
+      <div className="hint">colibri (github.com/JustVugg/colibri) runs large models on this machine: what fits is held in memory and the rest is read from storage. It is installed and started with its own setup (./start-here.sh in the colibri folder), which ends by printing its addresses: enter the one it calls the OpenAI base URL here. It serves one model, and that model is then in the model list of every chat. HunterAI asks it directly, never through a proxy. Empty: colibri is not used. Written to .env as HUNTERAI_COLIBRI_URL.</div>
     </div>
   )
 }
@@ -259,6 +314,16 @@ export function SettingsDialog({ onClose, onSetup }: { onClose: () => void; onSe
           <label className="check"><input type="checkbox" checked={settings.decision_gate && settings.decision_engine} disabled={!settings.decision_engine} onChange={(e) => update({ decision_gate: e.target.checked })} />
             <span>Risk gate: screen every write, edit, and execute call first. It is advice: it can make an allowed call ask, and it never approves one. Costs one decision-model call per screened call.</span>
           </label>
+          <h3 className="section">colibri</h3>
+          <Colibri key={settings.colibri_url} settings={settings}
+            save={async (address) => {
+              const s = await api.putSettings({ colibri_url: address })
+              setSettings(s)
+              useStore.setState({ settings: s })
+              if (!s.colibri_url) await refreshProviders().catch(() => {})     // cleared: nothing is asked any more, and the model list has to drop what it served
+              return s.colibri_url
+            }}
+            keySaved={reload} />
           <h3 className="section">Images</h3>
           <label className="field"><span>Local model that reads images for the look_at_image tool (an Ollama model name; empty: the first installed one that can)</span>
             <input className="mono" defaultValue={settings.vision_model ?? ''} placeholder="automatic" onBlur={(e) => { if (e.target.value.trim() !== (settings.vision_model ?? '')) update({ vision_model: e.target.value.trim() }) }} /></label>

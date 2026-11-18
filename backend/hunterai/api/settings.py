@@ -9,7 +9,7 @@ from pydantic import BaseModel, StrictInt, ValidationError
 
 from .. import answer_check, caido, config, engine, envfile, notify, permissions, problems, stale, subagents
 from ..tools import on_demand
-from ..providers import ollama, registry
+from ..providers import colibri, ollama, registry
 from . import providers as providers_api
 from ..repo import settings
 from ..tools import runner
@@ -20,7 +20,7 @@ router = APIRouter(prefix="/api/settings")
 
 KEY_NAMES = ["ABLIT_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "XAI_API_KEY",
              "GEMINI_API_KEY"]
-SECRET_NAMES = [*KEY_NAMES, notify.KEY]      # what Settings may write to the .env file
+SECRET_NAMES = [*KEY_NAMES, notify.KEY, colibri.KEY_ENV]      # what Settings may write to the .env file
 
 
 class KeyIn(BaseModel):
@@ -49,6 +49,7 @@ class SettingsIn(BaseModel):
     upstream_proxy_intercepts: bool | None = None   # it reads https: accept the certificates it presents
     upstream_proxy_kb: bool | None = None   # knowledge crawls go through the proxy too (off: they connect directly)
     provider_proxy: str | None = None       # the proxy the model providers are reached through; "" for none
+    colibri_url: str | None = None          # where the owner's colibri server is; "" for none (colibri is then not used)
     decision_engine: bool | None = None     # the built-in decide_* tools and the risk gate (off: another engine is used)
 
 
@@ -105,6 +106,8 @@ async def _view(conn) -> dict:
         "upstream_proxy_kb": bool(await settings.get(conn, "upstream_proxy_kb", False)),
         "provider_proxy": models_via.shown if models_via else "",
         "provider_proxy_password": bool(models_via and models_via.password),
+        "colibri_url": colibri.address() or "",
+        "colibri_key_set": bool(config.env(colibri.KEY_ENV)),
     }
 
 
@@ -150,8 +153,18 @@ async def put_settings(body: SettingsIn, conn=Depends(get_conn)):
             models_via = upstream.typed(typed, _provider_proxy())
         except upstream.ProxyError as e:
             raise HTTPException(400, f"proxy for the model providers: {e}") from None
+    at = fields.pop("colibri_url", None)
+    if at is not None and at.strip():
+        try:
+            at = colibri.typed(at)
+        except ValueError as e:
+            raise HTTPException(400, f"colibri address: {e}") from None
     if {"upstream_proxy", "upstream_proxy_intercepts"} & fields.keys() or fields.get("browser_via_caido"):
         await _put_proxy(conn, fields)
+    if at is not None:
+        envfile.set_var(config.env_file(), colibri.URL_ENV, at.strip())
+        registry._instances.clear()      # what the last server said of itself is not what this one says
+        providers_api.clear_cache()
     if typed is not None:
         envfile.set_var(config.env_file(), upstream.PROVIDER_ENV, models_via.url if models_via else "")
         registry._instances.clear()      # adapters pick the new way out up on next use
