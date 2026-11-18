@@ -3,7 +3,9 @@ with HunterAI, and a site's certificate is checked by HunterAI itself before a r
 passes on a certificate no authority signed, and one that has expired, without a word."""
 import asyncio
 import datetime
+import socket
 import ssl
+import struct
 
 import httpx
 import pytest
@@ -14,7 +16,7 @@ from hunterai.providers.base import ToolCall
 from hunterai.repo import settings
 from hunterai.tools import registry, shell, web
 from hunterai.tools.base import ToolError
-from tests.proxies import HttpProxy, Site, running
+from tests.proxies import HttpProxy, Site, _pipe, running
 from tests.test_api import client  # noqa: F401 - a fixture: the API of a HunterAI with its own home
 from tests.test_tools_caido import URL, fake  # noqa: F401 - `fake` is a fixture: a Caido that answers by what is asked
 from tests.test_tools_web import IP, NET
@@ -27,6 +29,17 @@ def registered(monkeypatch):
         registry.register(t)
     monkeypatch.delenv("CAIDO_PROXY", raising=False)
     monkeypatch.setitem(caido._unreached, "until", 0.0)      # noqa: SLF001
+
+
+@pytest.fixture(autouse=True)
+def pauses(monkeypatch):
+    """The waits before a handshake is made again: written down, not waited."""
+    waited = []
+
+    async def pause(seconds):
+        waited.append(seconds)
+    monkeypatch.setattr(certs, "_pause", pause)
+    return waited
 
 
 def a_caido(monkeypatch, port: int | None = 18791) -> list:
@@ -260,6 +273,140 @@ async def test_a_site_whose_certificate_cannot_be_seen_stops_the_call_too(sites)
     await s.wait_closed()
     with pytest.raises(ToolError, match="could not be checked .*nothing answers there.*Nothing was sent"):
         await certs.check("shop.acme.test", "127.0.0.1", closed)
+
+
+@pytest.fixture
+async def front(sites):
+    """before(label, cut=n, how=...) -> the port of a door in front of the https site `label` that ends the first n
+    connections before the site has shown anything, by closing or by a reset; `seen` counts every connection made."""
+    doors, seen = [], []
+
+    async def before(label: str, cut: int = 0, how: str = "closes") -> int:
+        site = await sites.serve(label)
+
+        async def door(reader, writer):
+            seen.append(1)
+            if len(seen) > cut:
+                await _pipe(reader, writer, *await asyncio.open_connection("127.0.0.1", site))
+                return
+            if how == "resets":
+                writer.get_extra_info("socket").setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+            else:
+                await reader.read(65536)                       # the hello is taken first, so that the close is a close
+            writer.close()
+        s = await asyncio.start_server(door, "127.0.0.1", 0)
+        doors.append(s)
+        return s.sockets[0].getsockname()[1]
+    yield type("F", (), {"before": staticmethod(before), "seen": seen})
+    for s in doors:
+        s.close()
+
+
+COULD_NOT = ("and what cannot be checked is not taken for good. Nothing was sent. This says nothing about the certificate itself "
+             "and may pass: send the call again. If it stays like this, tell the owner; a command with curl -k reaches the site "
+             "without this check.")
+
+
+async def check(port: int) -> None:
+    await asyncio.wait_for(certs.check("shop.acme.test", "127.0.0.1", port), 20)
+
+
+@pytest.mark.parametrize("how", ["closes", "resets"])
+async def test_a_handshake_that_is_cut_short_once_is_made_again(front, pauses, how):
+    """A connection that ends before the site showed anything is a passing fault as often as not."""
+    port = await front.before("good", cut=1, how=how)
+    await check(port)
+    assert len(front.seen) == 2 and pauses == [certs.AGAIN_AFTER]
+    await check(port)                                          # found good: not asked for again
+    assert len(front.seen) == 2
+
+
+async def test_a_site_that_cut_the_first_handshake_and_then_shows_a_bad_certificate_is_told_what_is_wrong_with_it(front):
+    """The first run against a real site ended in "could not be checked (ConnectionResetError)" for a certificate that
+    is simply not valid."""
+    port = await front.before("self-signed", cut=1)
+    with pytest.raises(ToolError, match=r"^the certificate of shop\.acme\.test is not valid \(self-signed certificate\)\. Nothing was sent\."):
+        await check(port)
+    assert len(front.seen) == 2
+
+
+async def test_a_handshake_that_is_cut_short_twice_stops_the_call_and_says_so_in_words(front, pauses):
+    port = await front.before("good", cut=9)
+    with pytest.raises(ToolError) as e:
+        await check(port)
+    assert str(e.value) == ("the certificate of shop.acme.test could not be checked (the connection was closed twice before the site "
+                            "showed a certificate), " + COULD_NOT)
+    assert len(front.seen) == 2 and pauses == [certs.AGAIN_AFTER]                # once more, and not a third time
+
+
+async def test_a_bad_certificate_is_not_asked_for_a_second_time(front, pauses):
+    port = await front.before("expired")
+    with pytest.raises(ToolError, match="certificate has expired"):
+        await check(port)
+    assert len(front.seen) == 1 and pauses == []
+
+
+@pytest.mark.parametrize("fault,why", [(TimeoutError(), "no answer in time"), (ConnectionRefusedError(), "nothing answers there"),
+                                       (OSError(113, "No route to host"), "No route to host")])
+async def test_a_fault_that_trying_again_does_not_mend_is_said_at_once(monkeypatch, pauses, fault, why):
+    asked = []
+
+    async def handshake(host, ip, port):
+        asked.append(host)
+        raise fault
+    monkeypatch.setattr(certs, "_handshake", handshake)
+    with pytest.raises(ToolError) as e:
+        await certs.check("shop.acme.test", "203.0.113.5", 443)
+    assert str(e.value) == f"the certificate of shop.acme.test could not be checked ({why}), " + COULD_NOT
+    assert asked == ["shop.acme.test"] and pauses == []
+
+
+async def test_what_cannot_be_checked_is_not_said_to_be_a_bad_certificate(front):
+    """"Caido passes one like this on" is for a certificate that was seen and is not valid. Of one that was not seen it
+    is not known, and the way round the check is not the first thing to try."""
+    port = await front.before("good", cut=9)
+    with pytest.raises(ToolError) as e:
+        await check(port)
+    assert "like this on" not in str(e.value) and "Error" not in str(e.value) and "send the call again" in str(e.value)
+    port = await front.before("self-signed")
+    with pytest.raises(ToolError) as e:
+        await check(port)
+    assert str(e.value).endswith("Caido passes one like this on. To work with this site all the same, use curl -k in a command.")
+    assert "send the call again" not in str(e.value)
+
+
+async def test_what_answers_without_tls_is_named_with_the_reason_the_library_gives(sites):
+    async def plain(reader, writer):
+        await reader.read(65536)
+        writer.write(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
+        await writer.drain()
+        writer.close()
+    s = await asyncio.start_server(plain, "127.0.0.1", 0)
+    try:
+        with pytest.raises(ToolError, match=r"could not be checked \(what answers there is not TLS, or not TLS this machine accepts: [A-Z0-9_]+\), and"):
+            await check(s.sockets[0].getsockname()[1])
+    finally:
+        s.close()
+
+
+@pytest.mark.parametrize("label,cut,said", [("good", 0, ""), ("good", 1, ""), ("self-signed", 0, "is not valid (self-signed certificate)"),
+                                            ("expired", 0, "is not valid (certificate has expired)"),
+                                            ("wrong-name", 1, "is not valid (Hostname mismatch"),
+                                            ("good", 9, "could not be checked (the connection was closed twice")])
+async def test_the_check_says_the_same_on_the_loop_the_server_runs_on(front, label, cut, said):
+    """uvicorn runs HunterAI on uvloop where that is installed, and it is. These tests run on asyncio's own loop."""
+    uvloop = pytest.importorskip("uvloop")
+    port = await front.before(label, cut=cut)
+
+    async def ask() -> str:
+        try:
+            await check(port)
+            return ""
+        except ToolError as e:
+            return str(e)
+    got = await asyncio.to_thread(lambda: asyncio.Runner(loop_factory=uvloop.new_event_loop).run(ask()))
+    assert (said in got) if said else (got == ""), got
+    assert len(front.seen) == min(cut, 1) + 1
 
 
 def checks(monkeypatch, bad: str = "") -> list:

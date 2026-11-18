@@ -847,12 +847,16 @@ crawler is not recorded, and a Caido that does not come up does not stop the bro
 **A site's certificate is checked by HunterAI, not by Caido.** Caido reads https by
 answering with its own certificates, so the tool that asks sees Caido's and not the
 site's, and Caido takes the site's much as it comes: against badssl.com a real Caido
-passed on a certificate no authority signed and one that had expired, and refused only
-one for another name. So before `web_fetch`, `web_download`, `caido_send` or the browser
+answered 200 for a site whose certificate no authority signed, and for one whose
+certificate had expired. So before `web_fetch`, `web_download`, `caido_send` or the browser
 hand an https request to Caido, HunterAI makes a TLS handshake with the site itself, at
 the address it checked, and goes by that. Nothing is sent in it. A certificate that does
 not verify stops the call and says why, as it would without Caido, and so does a site
-whose certificate cannot be seen. One found good is not asked for again for ten minutes.
+whose certificate cannot be seen. The two are told apart: "is not valid" is a fact about
+the site, "could not be checked" is not, and that answer says to send the call again
+rather than how to get round the check. A handshake that the other side cuts short before
+it showed anything is made once more first, since that is a passing fault as often as
+not. One found good is not asked for again for ten minutes.
 In the browser the check is made on each TLS connection before Caido gets it; a
 connection with a bad certificate is closed, and the reason is in the session's log. A
 scanner in a command does not check certificates, with or without Caido; to work with a
