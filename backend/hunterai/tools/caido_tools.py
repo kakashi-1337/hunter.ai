@@ -107,13 +107,22 @@ async def _caido(ctx: ToolContext, args: dict) -> ToolResult:
         if action == "status":
             s = await caido.status()
             proxy = s["url"].split("://", 1)[-1]
+            from .. import upstream
+            own = await upstream.load(ctx.target.id if ctx.target is not None else None)
+            # While recording is on, a command has the address in a variable (one that names it is asked about);
+            # not in a chat that goes out through the owner's own proxy.
+            if own is None and await caido.recording():
+                how = ("the owner has recording switched on, so the browser tools and web_fetch do it by themselves, and a "
+                       "command does when it gives a program the variable every command now has, for example "
+                       f'curl -k -x "${caido.VARIABLE}" <url>.')
+            else:
+                how = (f"a command can with, for example, curl -x http://{proxy} -k <url>, and the browser tools do when the "
+                       'owner switched on "Send the browser and web_fetch through Caido" in Settings.')
             return ToolResult(
                 f"Caido {s['version']} is running at {s['url']} (the owner can open that address to watch the traffic).\n"
                 f"Project: {s['project']}" + (" (temporary: the history is gone when Caido stops)" if s["temporary"] else "") + "\n"
                 f"Requests recorded: {s['requests']}\n"
-                f"Proxy: http://{proxy}. Traffic sent through it is recorded: caido_send does that for one request, a "
-                f"command can with, for example, curl -x http://{proxy} -k <url>, and the browser tools do when the owner "
-                'switched on "Send the browser and web_fetch through Caido" in Settings.')
+                f"Proxy: http://{proxy}. Traffic sent through it is recorded: caido_send does that for one request, " + how)
         if action == "requests":
             rows, total = await caido.history((args.get("filter") or "").strip() or None, int(args.get("limit") or DEFAULT_ROWS),
                                               int(args.get("offset") or 0))

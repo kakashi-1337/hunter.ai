@@ -59,7 +59,7 @@ export function CaidoPanel({ onClose }: { onClose: () => void }) {
             <button className="btn" disabled={busy}>Filter</button>
             {filter && <button type="button" className="btn" onClick={() => { setFilter(''); void load('') }}>Clear</button>}
           </form>
-          <div className="hint">{rows.length ? `Showing the newest ${rows.length} of ${total}.` : busy ? '' : filter ? 'Nothing matches this filter.' : 'Nothing recorded yet. Requests of the browser tools and of caido_send appear here.'}</div>
+          <div className="hint">{rows.length ? `Showing the newest ${rows.length} of ${total}.` : busy ? '' : filter ? 'Nothing matches this filter.' : 'Nothing recorded yet. Requests of the browser tools, of caido_send, and of commands sent through Caido appear here.'}</div>
           <div className="caido-rows">
             {rows.map((r) => (
               <div key={r.id} className="caido-row">

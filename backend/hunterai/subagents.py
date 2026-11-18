@@ -285,7 +285,7 @@ async def _one(ctx: ToolContext, args: dict, swarm: bool = False) -> dict:
         target = await targets.get(conn, chat.target_id) if chat.target_id else None
         system = build_system(chat.mode, target, [s.name for s in specs], ctx.workdir) + "\n\n" + SUBAGENT_NOTE
         from . import upstream
-        via = upstream.rule(await upstream.in_effect(conn, chat.target_id), [s.name for s in specs])
+        via = await upstream.told(conn, chat.target_id, [s.name for s in specs])
         if via:
             system += "\n\n" + via
         status, error = await _loop(conn, ctx, chat, system, task, specs, blocks, fallback=not swarm)

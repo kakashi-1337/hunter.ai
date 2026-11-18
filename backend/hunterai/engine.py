@@ -485,7 +485,7 @@ async def _execute(conn_factory, run_id: str, chat_id: str, user_message_id: str
                                   chats.resolve_workdir(chat), goal=await goals.get(conn, chat_id),
                                   persona=persona)
             from . import upstream
-            via = upstream.rule(await upstream.in_effect(conn, chat.target_id), [s.name for s in specs])
+            via = await upstream.told(conn, chat.target_id, [s.name for s in specs])
             if via:
                 system += "\n\n" + via
             if later:

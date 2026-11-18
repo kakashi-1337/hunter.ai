@@ -254,6 +254,14 @@ def rule(up: Upstream | None, tool_names) -> str:
     return text
 
 
+async def told(conn, target_id: str | None, tool_names) -> str:
+    """What a model is told about the way out of its chat: the owner's proxy when one is in effect; else, while
+    recording in Caido is on, how a command is sent through Caido (the owner's proxy is never swapped for
+    Caido: the program asked for that one); else nothing."""
+    from . import caido
+    return rule(await in_effect(conn, target_id), tool_names) or caido.commands_rule(await caido.recording(conn), tool_names)
+
+
 # ---- a connection made by the proxy, for the parts of HunterAI that speak to it themselves
 
 def basic(up: Upstream) -> str | None:

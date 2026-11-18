@@ -84,6 +84,20 @@ def _not_carried(up, before: int) -> str:
             f"ran: {why}. Nothing was sent directly.]")
 
 
+async def _recorder() -> tuple[dict, str]:
+    """While the owner has recording in Caido switched on: (the variable that tells a command where Caido's
+    proxy is, ""), or ({}, a line for the end of the output) when Caido cannot be reached. ({}, "") otherwise.
+    Only the variable: a command goes through Caido when it hands that address to a program, see
+    `caido.commands_rule`. With HTTP_PROXY set for it, every install would fail on Caido's certificate."""
+    from .. import caido
+    address, why = await caido.for_command()
+    if address:
+        return {caido.VARIABLE: address}, ""
+    if why:
+        return {}, f"\n[Caido could not be reached ({why}): {caido.VARIABLE} is not set, so nothing this command sent was recorded.]"
+    return {}, ""
+
+
 async def _execute(ctx: ToolContext, args: dict) -> ToolResult:
     cwd = ctx.prepared.cwd
     background = bool(args.get("background"))
@@ -91,9 +105,17 @@ async def _execute(ctx: ToolContext, args: dict) -> ToolResult:
         raise ToolError(f"this chat already has {procs.MAX_PROCS_PER_CHAT} background processes "
                         "running; kill one first")
     up, env = await _way_out(ctx)
+    unrecorded = ""
     if up is not None:
         from .. import hop
         before = hop.refused(up)[0]
+    else:                         # the owner's own proxy is never swapped for Caido: the program asked for that one
+        env, unrecorded = await _recorder()
+
+    def said(result: ToolResult, more: str = "") -> ToolResult:
+        note = more + unrecorded
+        return dataclasses.replace(result, text=result.text + note) if note else result
+
     began = time.monotonic()
     p = await procs.start(chat_id=ctx.chat_id, run_id=ctx.run_id, step_id=ctx.step_id,
                           command=args["command"], cwd=cwd, background=background, env=env)
@@ -102,19 +124,18 @@ async def _execute(ctx: ToolContext, args: dict) -> ToolResult:
         done = await procs.wait(p.id, timeout)
         took = time.monotonic() - began
         result = _finished(done, took, timeout if done.status == "killed" and took >= timeout else None)
-        note = _not_carried(up, before) if up is not None else ""
-        return dataclasses.replace(result, text=result.text + note) if note else result
+        return said(result, _not_carried(up, before) if up is not None else "")
     deadline = time.monotonic() + procs.BACKGROUND_FIRST_WAIT
     while time.monotonic() < deadline and p.id in [x.id for x in procs.running(ctx.chat_id)]:
         await asyncio.sleep(0.05)
     now = await procs.get(p.id)
     if now.status != "running":
-        return _finished(now, time.monotonic() - began, None)
+        return said(_finished(now, time.monotonic() - began, None))
     text, nxt, _ = procs.read(p.log_path)
-    return ToolResult(
+    return said(ToolResult(
         f"started background process {p.id} (pid {p.pid})\n{text}\n"
         f"read more: process_output(id=\"{p.id}\", offset={nxt})",
-        meta={"process_id": p.id, "keep_step_open": True})
+        meta={"process_id": p.id, "keep_step_open": True}))
 
 
 async def _own(ctx: ToolContext, proc_id: str) -> procs.Proc:

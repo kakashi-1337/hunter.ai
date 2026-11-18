@@ -830,8 +830,38 @@ every page the agent fetches is in the history, and a `web_fetch` result says th
 recorded. Caido reads https by answering with its own certificates, so the browser and
 `web_fetch` stop checking a site's certificate while that is on. When Caido cannot be
 reached, `web_fetch` goes out directly as before and its result says it was not recorded.
-`web_download` and commands of the shell tool are not recorded. With the `caido` tool on
-offer, the model is told to read the history after it browsed or fetched pages of a target.
+`web_download` is not recorded. With the `caido` tool on offer, the model is told to read
+the history after it browsed or fetched pages of a target.
+
+**Commands** of the shell tool are recorded when they are sent through Caido, and not
+otherwise. While the switch is on, every command has the variable `CAIDO_PROXY` with the
+address of Caido's proxy, and the model is told to hand it to the proxy switch of each
+program that sends HTTP requests to the target:
+
+| Program | Its switch |
+|---|---|
+| httpx | `-http-proxy "$CAIDO_PROXY"` |
+| nuclei, katana | `-proxy "$CAIDO_PROXY"` |
+| ffuf | `-replay-proxy "$CAIDO_PROXY"` (only what matched) or `-x "$CAIDO_PROXY"` (every request) |
+| sqlmap | `--proxy="$CAIDO_PROXY"` |
+| curl | `-k -x "$CAIDO_PROXY"` |
+
+Nothing else about a command changes. `HTTP_PROXY` and `HTTPS_PROXY` are left alone on
+purpose: Caido answers https with its own certificate, and with those set every install
+and download in a command (pip, npm, git, apt) would fail on it. So a scan goes through
+Caido because the model wrote the switch; say so in your message ("run httpx through
+Caido") when a model does not do it by itself.
+
+- Not recorded this way: programs that do not speak HTTP (naabu, dnsx, nmap), and a target
+  on this machine or the local network, which Caido's way out refuses for a command.
+- subfinder asks other services about the target, not the target: the model is told to
+  run it without the proxy, so that those requests, with your keys for those services,
+  stay out of the history.
+- A chat whose target has a proxy of its own keeps that proxy for its commands and gets
+  no `CAIDO_PROXY`.
+- When Caido cannot be reached, the variable is not set and the result of each command
+  ends with a line that says so. Caido is asked again after a minute, or as soon as
+  something else reached it (the Caido panel, the browser, `web_fetch`).
 
 ### Your own proxy
 
@@ -904,7 +934,7 @@ How it behaves:
   on the new way out. A background process keeps the variables it was started with.
 - It is not combined with the Caido switch: Settings refuses to have both, and in a
   chat whose target has a proxy of its own, the browser and `web_fetch` stop and say so
-  while Caido's recording is on.
+  while Caido's recording is on. The commands of such a chat keep the target's proxy.
 
 **The model providers** have a proxy of their own, in the same section of Settings
 (`HUNTERAI_PROVIDER_PROXY` in `.env`). It is separate on purpose: what you send to a
@@ -985,6 +1015,9 @@ There is no wrapper and no MCP server in between: the model writes the command, 
 shell tool's permissions decide whether it runs. That also keeps requests small: a program
 costs its name in the prompt, where an MCP server costs every one of its tool definitions
 in every request. The setup check lists what the folders hold.
+
+To see what these programs send to a target, switch Caido's recording on: the model is
+then told how to send each of them through Caido (see [Caido](#caido)).
 
 ### Web search
 
