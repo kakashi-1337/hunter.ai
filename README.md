@@ -818,7 +818,13 @@ Its data is in `~/.hunterai/caido`, its output in `~/.hunterai/caido.log`.
 
 - `caido` (a read): `status`; `requests`, the recorded requests, newest first, filtered
   with HTTPQL (`req.host.cont:"acme.com" AND resp.code.eq:403`); `request`, the raw request
-  and response of one.
+  and response of one. The list leaves out pictures, fonts, sound and film (they are
+  recorded all the same, and the list says how many it left out; `media: true` lists
+  them). A body is shown for what it is, not for what it was sent as: text is shown as
+  text whatever its content type says, a certificate is read out (subject, issuer,
+  validity, names), another binary body is one line that says what it looks like (a zip
+  archive, a PDF, a serialized Java object) with the words found in it, and media is one
+  line. The Caido panel reads the same list and the same bodies.
 - `caido_send` (a network call, asked about and checked against the target's scope like
   `web_fetch`): one raw HTTP request, sent by Caido, answered with the raw response. The
   model reads a recorded request, edits the text, and sends it.
@@ -830,8 +836,15 @@ every page the agent fetches is in the history, and a `web_fetch` result says th
 recorded. Caido reads https by answering with its own certificates, so the browser and
 `web_fetch` stop checking a site's certificate while that is on. When Caido cannot be
 reached, `web_fetch` goes out directly as before and its result says it was not recorded.
-`web_download` is not recorded. With the `caido` tool on offer, the model is told to read
-the history after it browsed or fetched pages of a target.
+With the `caido` tool on offer, the model is told to read the history after it browsed or
+fetched pages of a target.
+
+`web_download` goes through Caido as well, and its result says whether the file was
+recorded. Two kinds of file are not: a picture, a font, sound or film (by the end of the
+address, or by what the answer says it is), and a file larger than 25 MB. When that only
+shows in the answer, the download is made again without Caido, and the first request stays
+in the history as the record of it. A chat whose target has a proxy of its own downloads
+through that proxy, as before.
 
 **Commands** of the shell tool are recorded when they are sent through Caido, and not
 otherwise. While the switch is on, every command has the variable `CAIDO_PROXY` with the
@@ -849,11 +862,19 @@ program that sends HTTP requests to the target:
 Nothing else about a command changes. `HTTP_PROXY` and `HTTPS_PROXY` are left alone on
 purpose: Caido answers https with its own certificate, and with those set every install
 and download in a command (pip, npm, git, apt) would fail on it. So a scan goes through
-Caido because the model wrote the switch; say so in your message ("run httpx through
-Caido") when a model does not do it by itself.
+Caido because its command says so, and HunterAI sees to it that it does: **a scanner from
+your tool folder (httpx, nuclei, katana, ffuf, sqlmap) whose command does not name
+`CAIDO_PROXY` is not run.** The model is told which switch is missing and sends the
+command again. The command is never changed for it, so what the Trajectory shows is what
+ran. The scanner asked about itself (`-h`, `-version`, an update) runs as it is, and so
+does any other program.
 
 - Not recorded this way: programs that do not speak HTTP (naabu, dnsx, nmap), and a target
-  on this machine or the local network, which Caido's way out refuses for a command.
+  on this machine or the local network, which Caido's way out refuses for a command. For
+  such a target the scanner is run with `CAIDO_PROXY=` in front of it, unrecorded.
+- The hold reads the command's text. A scanner started in a way it does not see (from a
+  script, through `xargs`, by a name of your own) runs unrecorded; a program is only held
+  when it is in your tool folder under its usual name.
 - subfinder asks other services about the target, not the target: the model is told to
   run it without the proxy, so that those requests, with your keys for those services,
   stay out of the history.

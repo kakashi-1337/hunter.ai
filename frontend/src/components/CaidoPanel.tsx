@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import * as api from '../api'
-import { visible } from '../tree'
+import { caidoListLine, visible } from '../tree'
 import type { CaidoExchange, CaidoRow, CaidoStatus } from '../types'
 import { Modal } from './Modal'
 
@@ -12,17 +12,19 @@ export function CaidoPanel({ onClose }: { onClose: () => void }) {
   const [status, setStatus] = useState<CaidoStatus | null>(null)
   const [rows, setRows] = useState<CaidoRow[]>([])
   const [total, setTotal] = useState(0)
+  const [leftOut, setLeftOut] = useState(0)
+  const [media, setMedia] = useState(false)
   const [filter, setFilter] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [open, setOpen] = useState<CaidoExchange | null>(null)
 
-  const load = async (code = filter) => {
+  const load = async (code = filter, withMedia = media) => {
     setBusy(true); setError(null)
     try {
       const s = await api.caidoStatus()
       setStatus(s)
-      if (s.running) { const r = await api.caidoRequests(code); setRows(r.rows); setTotal(r.total) } else { setRows([]); setTotal(0) }
+      if (s.running) { const r = await api.caidoRequests(code, withMedia); setRows(r.rows); setTotal(r.total); setLeftOut(r.left_out ?? 0) } else { setRows([]); setTotal(0); setLeftOut(0) }
     } catch (e) { setError(text(e)) } finally { setBusy(false) }
   }
   useEffect(() => { void load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -58,8 +60,9 @@ export function CaidoPanel({ onClose }: { onClose: () => void }) {
             <input className="grow mono" aria-label="HTTPQL filter" placeholder={'HTTPQL filter, for example  req.host.cont:"example.com" and resp.code.gte:400'} value={filter} onChange={(e) => setFilter(e.target.value)} />
             <button className="btn" disabled={busy}>Filter</button>
             {filter && <button type="button" className="btn" onClick={() => { setFilter(''); void load('') }}>Clear</button>}
+            <label className="check" title="Images, fonts, audio and video are recorded too, and left out of this list unless ticked"><input type="checkbox" checked={media} onChange={(e) => { setMedia(e.target.checked); void load(filter, e.target.checked) }} /><span>Media too</span></label>
           </form>
-          <div className="hint">{rows.length ? `Showing the newest ${rows.length} of ${total}.` : busy ? '' : filter ? 'Nothing matches this filter.' : 'Nothing recorded yet. Requests of the browser tools, of caido_send, and of commands sent through Caido appear here.'}</div>
+          <div className="hint">{caidoListLine(rows.length, total, leftOut, { busy, filtered: Boolean(filter) })}</div>
           <div className="caido-rows">
             {rows.map((r) => (
               <div key={r.id} className="caido-row">

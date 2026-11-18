@@ -15,14 +15,92 @@ from .base import Prepared, Tool, ToolContext, ToolError, ToolResult
 
 MAX_RAW_BYTES = 1024**2
 MAX_TEXT_CHARS = 20_000
+MAX_WORDS_CHARS = 1500           # of the words found in a binary body
+MAX_WORD = 120
+WORDS_FROM_BYTES = 64 * 1024     # the part of a binary body that is looked at for words
 DEFAULT_ROWS = 25
 _REQUEST_LINE = re.compile(r"^([A-Z]{1,20})[ \t]+(\S+)(?:[ \t]+HTTP/[\d.]+)?$")
 _TEXTUAL = ("text/", "application/json", "application/xml", "application/xhtml+xml", "application/javascript",
             "application/x-javascript", "application/x-www-form-urlencoded", "application/graphql")
 
 
+# What a binary body is, by how it starts: a model that knows it is looking at a backup or a serialized object
+# knows what to do next.
+_LOOKS_LIKE = ((b"PK\x03\x04", "a zip archive (also jar, apk, docx)"), (b"%PDF-", "a PDF"), (b"\x1f\x8b", "gzip data"),
+               (b"SQLite format 3\x00", "an SQLite database"), (b"\xac\xed\x00\x05", "a serialized Java object"),
+               (b"\x7fELF", "an ELF program"), (b"MZ", "a Windows program"), (b"BZh", "bzip2 data"), (b"7z\xbc\xaf\x27\x1c", "a 7z archive"),
+               (b"Rar!\x1a\x07", "a RAR archive"), (b"\xfd7zXZ\x00", "xz data"), (b"\x28\xb5\x2f\xfd", "zstd data"),
+               (b"\xca\xfe\xba\xbe", "a Java class file"), (b"dex\n", "an Android dex file"), (b"\x00asm", "a WebAssembly module"),
+               (b"bplist0", "an Apple binary property list"))
+_WORD = re.compile(rb"[\x20-\x7e]{6,}")
+_CERTIFICATE_TYPES = ("application/pkix-cert", "application/x-x509-ca-cert", "application/x-x509-user-cert", "application/x-x509-server-cert")
+
+
 def available() -> bool:
     return caido.available()
+
+
+def _read_certificate(data: bytes) -> list[str] | None:
+    """What an X.509 certificate in DER says, one fact a line; None when the bytes are not one, or when the
+    library that reads one is not installed (it comes with other packages; HunterAI does not ask for it)."""
+    try:
+        from cryptography import x509
+        cert = x509.load_der_x509_certificate(data)
+        subject, issuer = cert.subject.rfc4514_string(), cert.issuer.rfc4514_string()
+        out = [f"subject: {subject}", f"issuer: {issuer}" + (" (the same: it signed itself)" if issuer == subject else ""),
+               f"valid: {cert.not_valid_before_utc:%Y-%m-%d} to {cert.not_valid_after_utc:%Y-%m-%d}", f"serial: {cert.serial_number:x}"]
+        try:
+            names = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+            out.insert(3, "names: " + ", ".join(str(n.value) for n in names)[:1000])
+        except x509.ExtensionNotFound:
+            pass
+        return out
+    except Exception:  # noqa: BLE001 - not a certificate, an odd one, or no library: the body is then shown as what else it is
+        return None
+
+
+def _is_text(body: bytes) -> str | None:
+    """The body as text when it is text: UTF-8, and no control character but tab and line ends."""
+    try:
+        shown = body.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    return None if not shown.strip() or re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", shown) else shown
+
+
+def _cut(shown: str, cap: int) -> str:
+    return shown if len(shown) <= cap else shown[:cap] + f"\n[body cut at {cap} characters of {len(shown)}]"
+
+
+def _binary(body: bytes, kind: str, cap: int) -> str:
+    """A body that did not say it is text: text all the same, a certificate, or bytes with what they look like
+    and the words in them. Pictures, fonts, sound and film stay one line."""
+    said = kind or "no content type"
+    if caido.media_type(kind):
+        return f"[binary body, {len(body)} bytes, {said}]"
+    shown = _is_text(body)
+    if shown is not None:
+        return f"[sent as {said}; it is text]\n" + _cut(shown, cap)
+    if body[:1] == b"\x30":                      # DER starts like this; so do other things, which the reading settles
+        facts = _read_certificate(body)
+        if facts is not None or kind in _CERTIFICATE_TYPES:
+            import ssl
+            head = f"[certificate, {len(body)} bytes, {said}" + ("]" if facts is not None else ": not read out here]")
+            return "\n".join([head, *(facts or []), _cut(ssl.DER_cert_to_PEM_cert(body).strip(), cap)])
+    looks = next((name for magic, name in _LOOKS_LIKE if body.startswith(magic)), "")
+    found = [w.decode("ascii").strip()[:MAX_WORD] for w in _WORD.findall(body[:WORDS_FROM_BYTES])]
+    found = [w for w in found if len(w) >= 6]
+    line = f"[binary body, {len(body)} bytes, {said}" + (f": it looks like {looks}]" if looks else "]")
+    if not found:
+        return line
+    words, used = [], 0
+    for w in found:
+        if used + len(w) + 3 > MAX_WORDS_CHARS:
+            words.append("[more left out]")
+            break
+        words.append(w)
+        used += len(w) + 3
+    return line + "\nwords in it: " + " | ".join(words)
 
 
 # ---------------------------------------------------------------- reading raw HTTP
@@ -68,11 +146,8 @@ def render(raw: bytes, cap: int = MAX_TEXT_CHARS) -> str:
     kind = headers.get("content-type", "").split(";")[0].strip().lower()
     textual = kind.startswith(_TEXTUAL) or kind.endswith(("+json", "+xml")) or (not kind and b"\x00" not in body[:2000])
     if not textual:
-        return f"{text}\n\n[binary body, {len(body)} bytes, {kind or 'no content type'}]"
-    shown = body.decode("utf-8", "replace")
-    if len(shown) > cap:
-        shown = shown[:cap] + f"\n[body cut at {cap} characters of {len(shown)}]"
-    return f"{text}\n\n{shown}"
+        return f"{text}\n\n{_binary(body, kind, cap)}"
+    return f"{text}\n\n{_cut(body.decode('utf-8', 'replace'), cap)}"
 
 
 def _named_host(raw: bytes) -> str | None:
@@ -124,13 +199,19 @@ async def _caido(ctx: ToolContext, args: dict) -> ToolResult:
                 f"Requests recorded: {s['requests']}\n"
                 f"Proxy: http://{proxy}. Traffic sent through it is recorded: caido_send does that for one request, " + how)
         if action == "requests":
-            rows, total = await caido.history((args.get("filter") or "").strip() or None, int(args.get("limit") or DEFAULT_ROWS),
-                                              int(args.get("offset") or 0))
-            if not rows:
-                return ToolResult("No recorded request matches." if total == 0 else f"No more rows ({total} match).")
             first = int(args.get("offset") or 0)
-            return ToolResult(f"{total} recorded request(s) match; rows {first + 1}-{first + len(rows)}, newest first:\n"
-                              + "\n".join(_row(r) for r in rows))
+            rows, total, left, upto = await caido.listing((args.get("filter") or "").strip() or None,
+                                                          int(args.get("limit") or DEFAULT_ROWS), first, bool(args.get("media")))
+            media = "images, fonts, audio, video"
+            if not rows and left and first == 0 and upto >= total:
+                return ToolResult(f"{total} recorded request(s) match, all of them media ({media}): media=true lists them.")
+            if not rows and not left:
+                return ToolResult("No recorded request matches." if total == 0 else f"No more rows ({total} match).")
+            out = f"{total} recorded request(s) match; rows {first + 1}-{upto}, newest first"
+            if left:
+                out += f" ({left} media request{'' if left == 1 else 's'} left out: {media}; media=true lists them)"
+            more = f"\nmore: offset={upto}" if left and upto < total else ""
+            return ToolResult(out + ":\n" + "\n".join(_row(r) for r in rows) + more)
         rid = str(args.get("id") or "").lstrip("#").strip()
         if not rid.isdigit():
             raise ToolError("give the id of a recorded request (a number from the requests list)")
@@ -238,6 +319,7 @@ def tools() -> list[Tool]:
                 "filter": {"type": "string", "maxLength": 1000, "description": "HTTPQL, for requests."},
                 "limit": {"type": "integer", "minimum": 1, "maximum": caido.MAX_ROWS},
                 "offset": {"type": "integer", "minimum": 0},
+                "media": {"type": "boolean", "description": "For requests: list images, fonts, audio and video too."},
                 "id": {"type": "string", "maxLength": 20, "description": "For request: the number from the list."},
                 "part": {"enum": ["both", "request", "response"]}},
              "required": ["action"], "additionalProperties": False},

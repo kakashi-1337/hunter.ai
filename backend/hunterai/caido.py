@@ -35,7 +35,14 @@ START_WAIT = 30.0            # seconds for a started Caido to answer
 REPLAY_WAIT = 90.0           # seconds for a sent request to be answered
 TIMEOUT = httpx.Timeout(30.0, connect=5.0)
 MAX_ROWS = 100
+LISTING_PAGES = 5            # how many further looks fill a list whose rows were mostly media
 VARIABLE = "CAIDO_PROXY"     # where a command of the shell finds the address of Caido's proxy while recording is on
+# The scanners that send HTTP requests to a target, and the switch that sends each through a proxy. Every one was
+# run with its switch against a proxy and an https site with a certificate no authority signed: it went through,
+# and it accepted the certificate, as it has to with Caido's.
+SWITCHES = {"httpx": f'-http-proxy "${VARIABLE}"', "nuclei": f'-proxy "${VARIABLE}"', "katana": f'-proxy "${VARIABLE}"',
+            "ffuf": f'-replay-proxy "${VARIABLE}"', "sqlmap": f'--proxy="${VARIABLE}"'}
+SWITCH_NOTES = {"ffuf": f' (only what matched; -x "${VARIABLE}" records every request)'}
 RETRY_AFTER = 60.0           # seconds before a Caido that could not be reached is asked again for a command
 
 _state: dict = {"token": None, "egress": None, "routed": None}
@@ -46,6 +53,28 @@ _now = time.monotonic
 
 class CaidoError(Exception):
     """An expected failure, in words for the model and the owner."""
+
+
+# Pictures, fonts, sound and film: what a page loads beside what it says and does. They are recorded like the
+# rest; a list of the history leaves them out unless asked, and a download of one is not sent through Caido.
+# Not among them: svg (text, and it can carry script), m3u8 and ts (text, and TypeScript), source maps.
+MEDIA = frozenset("png jpg jpeg gif webp avif bmp ico tif tiff heic heif woff woff2 ttf otf eot mp3 wav ogg oga m4a aac flac opus "
+                  "weba mp4 m4v m4s webm mov avi mkv mpg mpeg flv wmv 3gp".split())
+
+
+def media_extension(path: str) -> str:
+    """".png" for a path or an address that ends in the name of a picture, a font, sound or film; else ""."""
+    name = path.split("#", 1)[0].split("?", 1)[0].rsplit("/", 1)[-1]
+    stem, dot, ext = name.rpartition(".")
+    return f".{ext.lower()}" if dot and stem and ext.lower() in MEDIA else ""
+
+
+def media_type(kind: str) -> bool:
+    """Whether a Content-Type names a picture, a font, sound or film."""
+    kind = kind.split(";", 1)[0].strip().lower()
+    if kind.startswith(("audio/", "video/", "font/", "application/font-", "application/x-font-")):
+        return True
+    return kind == "application/vnd.ms-fontobject" or (kind.startswith("image/") and not kind.endswith("+xml"))
 
 
 def binary() -> Path | None:
@@ -344,12 +373,14 @@ def commands_rule(on: bool, tool_names) -> str:
     if not on or "execute" not in tool_names:
         return ""
     v = f'"${VARIABLE}"'
+    switches = ", ".join(f"{name} {switch}" for name, switch in SWITCHES.items() if name != "ffuf")
     text = (f"Recording commands in Caido: a command of the shell is recorded only when it is sent through Caido. Every "
             f"command has the variable {VARIABLE}, the address of Caido's proxy. Give it to the proxy switch of each program "
             "that sends HTTP requests to the target, as the variable and never as the address itself (a command that names "
-            f"a local address is one the owner is asked about): httpx -http-proxy {v}, nuclei -proxy {v}, katana -proxy {v}, "
-            f"sqlmap --proxy={v}, curl -k -x {v}. A fuzzer makes thousands of requests: record only the ones it matched, "
-            f"ffuf -replay-proxy {v}. Caido answers https with a certificate of its own, so curl needs -k and a script has "
+            f"a local address is one the owner is asked about): {switches}, curl -k -x {v}. A fuzzer makes thousands of "
+            f"requests: record only the ones it matched, ffuf {SWITCHES['ffuf']}. A scanner from the owner's tool folder "
+            f"({', '.join(SWITCHES)}) that is not sent through Caido is not run: the call says which switch is missing. "
+            "Caido answers https with a certificate of its own, so curl needs -k and a script has "
             "to leave the certificate unchecked for these requests. Use it for requests to the target only, and do not put "
             "it into HTTP_PROXY or HTTPS_PROXY for a whole command: installs and downloads (pip, npm, git, apt) fail on "
             "that certificate. subfinder asks other services about the target, not the target: run it without the proxy. "
@@ -389,6 +420,32 @@ async def history(filter_code: str | None, limit: int, offset: int) -> tuple[lis
     for r in rows:
         r["raw"] = _blob(r.get("raw"))
     return rows, int((got.get("count") or {}).get("value") or 0)
+
+
+async def listing(filter_code: str | None, limit: int, offset: int, media: bool = False) -> tuple[list[dict], int, int, int]:
+    """(rows, how many match, how many media rows were left out, the offset after the last row looked at): the
+    history as `history` gives it, without the pictures, fonts, sound and film unless `media`. The first look is
+    the one `history` always made; only when it held media are further rows read to fill the list."""
+    limit, at = max(1, min(int(limit), MAX_ROWS)), max(0, int(offset))
+    if media:
+        rows, total = await history(filter_code, limit, at)
+        return rows, total, 0, at + len(rows)
+    kept: list[dict] = []
+    left = total = 0
+    for look in range(1 + LISTING_PAGES):
+        want = limit if look == 0 else MAX_ROWS
+        rows, total = await history(filter_code, want, at)
+        for r in rows:
+            if len(kept) == limit:
+                return kept, total, left, at
+            at += 1
+            if media_extension(str(r.get("path") or "")):
+                left += 1
+            else:
+                kept.append(r)
+        if len(rows) < want or len(kept) == limit:
+            break
+    return kept, total, left, at
 
 
 async def exchange(request_id: str) -> dict | None:

@@ -228,8 +228,8 @@ export const hideStopped = () => request<{ stopped: { id: string; label: string 
 export const systemDiagnostics = () => request<{ text: string }>('GET', '/api/system/diagnostics')
 export const caidoStatus = () => request<CaidoStatus>('GET', '/api/caido/status')
 export const caidoStart = () => request<CaidoStatus>('POST', '/api/caido/start')
-export const caidoRequests = (filter: string, limit = 50) =>
-  request<{ total: number; rows: CaidoRow[] }>('GET', `/api/caido/requests?limit=${limit}&filter=${encodeURIComponent(filter)}`)
+export const caidoRequests = (filter: string, media = false, limit = 50) =>
+  request<{ total: number; rows: CaidoRow[]; left_out: number }>('GET', `/api/caido/requests?limit=${limit}&media=${media}&filter=${encodeURIComponent(filter)}`)
 export const caidoRequest = (id: string) => request<CaidoExchange>('GET', `/api/caido/requests/${encodeURIComponent(id)}`)
 export const notifyTest = () => request<{ ok: boolean; detail: string }>('POST', '/api/notify/test')
 export const activity = (days: number) => request<ActivitySummary>('GET', `/api/activity?days=${days}`)

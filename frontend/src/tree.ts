@@ -625,3 +625,14 @@ export function compact(n: number): string {
   if (n >= 1e3) return `${(n / 1e3).toFixed(1)}k`
   return String(n)
 }
+
+/** The line under the Caido panel's filter: how many requests are shown, and how many pictures, fonts, sound
+ * and film were left out of the list (they are recorded all the same). */
+export function caidoListLine(shown: number, total: number, leftOut: number, now: { busy: boolean; filtered: boolean }): string {
+  const media = `${leftOut} media request${leftOut === 1 ? '' : 's'} (images, fonts, audio, video)`
+  if (shown) return `Showing the newest ${shown} of ${total}.` + (leftOut ? ` ${media} left out: tick "Media too" to list them.` : '')
+  if (now.busy) return ''
+  if (leftOut) return `Only media was recorded here: ${media}. Tick "Media too" to list them.`
+  if (now.filtered) return 'Nothing matches this filter.'
+  return 'Nothing recorded yet. Requests of the browser tools, of web_fetch, of downloads, of caido_send, and of commands sent through Caido appear here.'
+}

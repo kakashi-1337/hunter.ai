@@ -97,7 +97,7 @@ async def test_caido_routes_show_what_was_recorded_without_starting_it(client, m
     got = (await client.get("/api/caido/requests", params={"filter": 'req.host.eq:"example.com"', "limit": 10})).json()
     assert started == [('req.host.eq:"example.com"', 10, 0)]
     assert got == {"total": 1, "rows": [{"id": "7", "method": "GET", "url": "https://example.com/a?x=1", "status": 200,
-                                         "length": 12, "ms": 40, "source": "PROXY", "at": 1731500000000}]}
+                                         "length": 12, "ms": 40, "source": "PROXY", "at": 1731500000000}], "left_out": 0}
     one = (await client.get("/api/caido/requests/7")).json()
     assert one["request"].startswith("GET /a HTTP/1.1") and one["response"].endswith("hello")
     assert (await client.get("/api/caido/requests/8")).status_code == 404

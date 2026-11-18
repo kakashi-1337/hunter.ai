@@ -355,10 +355,11 @@ async def caido_start():
 
 
 @router.get("/caido/requests")
-async def caido_requests(filter: str = "", limit: int = 50, offset: int = 0):  # noqa: A002 - the query name the UI sends
+async def caido_requests(filter: str = "", limit: int = 50, offset: int = 0, media: bool = False):  # noqa: A002 - the query name the UI sends
+    """The recorded requests, without the pictures, fonts, sound and film unless `media`: `left_out` says how many."""
     await _running()
     try:
-        rows, total = await caido.history(filter.strip() or None, limit, offset)
+        rows, total, left_out, _ = await caido.listing(filter.strip() or None, limit, offset, media)
     except caido.CaidoError as e:
         raise HTTPException(400, str(e))
     out = []
@@ -371,7 +372,7 @@ async def caido_requests(filter: str = "", limit: int = 50, offset: int = 0):  #
                     "url": f"{'https' if tls else 'http'}://{r.get('host')}{at}{r.get('path') or '/'}{query}",
                     "status": response.get("statusCode"), "length": response.get("length"),
                     "ms": response.get("roundtripTime"), "source": r.get("source"), "at": r.get("createdAt")})
-    return {"total": total, "rows": out}
+    return {"total": total, "rows": out, "left_out": left_out}
 
 
 @router.get("/caido/requests/{rid}")

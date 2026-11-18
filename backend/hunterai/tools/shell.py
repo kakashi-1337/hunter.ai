@@ -18,6 +18,7 @@ async def _prepare_execute(ctx: ToolContext, args: dict) -> Prepared:
     if not cwd.is_dir():
         raise ToolError(f"cwd is not a directory: {cwd}")
     command = args["command"]
+    await _hold_unrecorded(ctx, command)
     env_file = Path(resolve._real(config.env_file()))   # noqa: SLF001
     paths: dict[PathUse, None] = {}
     for token in re.split(r"[\s'\"<>|;&()=`$]+", command):
@@ -30,6 +31,54 @@ async def _prepare_execute(ctx: ToolContext, args: dict) -> Prepared:
             pass
     return Prepared(paths=tuple(paths), hosts=tuple(resolve.extract_hosts(command)),
                     cwd=str(cwd), grant_target=f"{cwd}\n{command}")
+
+
+_QUOTED = re.compile(r"'[^']*'|\"(?:[^\"\\]|\\.)*\"")
+_COMMENT = re.compile(r"(?:^|(?<=\s))#[^\n]*")
+_ABOUT_ITSELF = {"-h", "-hh", "-help", "--help", "-version", "--version", "-V", "-up", "-update", "--update", "-ut",
+                 "-update-templates", "-tl"}
+# Where a simple command starts, what may stand in front of the program, the program, and its arguments.
+_RUNS = (r"(?:^|[;&|()\n`]|(?<!\$)\{|\$\(|(?<![\w./-])(?:do|then|else)[ \t])[ \t]*"
+         r"(?:(?:nohup|time|exec|sudo|command|env)[ \t]+|timeout[ \t]+(?:-\S+[ \t]+)*\S+[ \t]+)*"
+         r"(?:[A-Za-z_]\w*=\S*[ \t]+)*(?:[\w.~/-]*/)?(%s)(?![\w.-])([^;&|\n`)]*)")
+
+
+def unrecorded(command: str, names: set[str]) -> tuple[str, str] | None:
+    """(program, the switch it lacks) for the first scanner among `names` that the command runs without naming
+    Caido's variable; None when there is none. Read from the text, without running anything: what is in quotes
+    or in a comment is not a command, a program asked about itself (-h, -version, an update) sends nothing to a
+    target, and a way of running it that this does not see (xargs, a script) is let through unrecorded."""
+    from .. import caido
+    if caido.VARIABLE in command:
+        return None
+    wanted = [n for n in caido.SWITCHES if n in names and n in command]
+    if not wanted:
+        return None
+    bare = _COMMENT.sub(" ", _QUOTED.sub("''", command))
+    for m in re.finditer(_RUNS % "|".join(map(re.escape, wanted)), bare):
+        if not _ABOUT_ITSELF.intersection(m.group(2).split()):
+            return m.group(1), caido.SWITCHES[m.group(1)] + caido.SWITCH_NOTES.get(m.group(1), "")
+    return None
+
+
+async def _hold_unrecorded(ctx: ToolContext, command: str) -> None:
+    """While recording in Caido is on, a scanner from the owner's tool folder is not run until its command sends
+    it through Caido: what the owner wants to see in the history does not depend on the model remembering a
+    switch. Nothing is changed in the command; the model is told what is missing and sends it again."""
+    from .. import caido, toolbox, upstream
+    if caido.VARIABLE in command or not any(name in command for name in caido.SWITCHES):
+        return
+    if not await caido.recording():
+        return
+    if await upstream.load(ctx.target.id if ctx.target is not None else None) is not None:
+        return                                    # the owner's own proxy carries this chat's commands, not Caido
+    found = unrecorded(command, {t["name"] for t in toolbox.installed()})
+    if found:
+        program, switch = found
+        raise ToolError(f"Recording in Caido is switched on, and this command runs {program} without sending it through "
+                        f"Caido, so nothing it sends would be recorded. Add {switch} to {program} and send the command "
+                        "again. Only for a target on this machine or the local network, which Caido does not carry for a "
+                        f"command: put {caido.VARIABLE}= in front of {program} instead, and it runs unrecorded. Nothing was run.")
 
 
 def _status(p: procs.Proc) -> str:
