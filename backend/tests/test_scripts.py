@@ -53,3 +53,9 @@ def test_qdrant_script_does_nothing_in_memory_mode(tmp_path):
     r = subprocess.run(["bash", str(SCRIPTS / "qdrant.sh")], capture_output=True, text=True,
                        env={"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "HUNTERAI_VECTOR": "memory"})
     assert r.returncode == 0 and "memory" in r.stdout and not (tmp_path / ".hunterai").exists()
+
+
+def test_the_retrieval_test_has_a_script_that_can_be_run_and_the_readme_says_how():
+    script = SCRIPTS / "rag-test.sh"
+    assert script.stat().st_mode & 0o111 and "python -m hunterai.kb.ragtest" in script.read_text()
+    assert 'scripts/rag-test.sh "NAME"' in (ROOT / "README.md").read_text()

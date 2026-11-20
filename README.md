@@ -519,6 +519,35 @@ job that was running. Files that were already embedded are not embedded again; a
 crawl that was cut off is thrown away and done again from the start, so a half-downloaded
 file is never read.
 
+### What the search finds, measured
+
+`scripts/rag-test.sh "NAME"` asks the search of a collection for things that stand in exactly
+one passage, and says where that passage stood: first, among the 8 a message gets, among the
+40 the search chooses from, or nowhere. Nothing of the collection is changed.
+
+```sh
+scripts/rag-test.sh                          # the collections
+scripts/rag-test.sh "NAME"                   # builds a test once, asks it, keeps it
+scripts/rag-test.sh "NAME" --questions 0     # a new test without a model: identifiers only
+scripts/rag-test.sh "NAME" --new             # a new test in place of the kept one
+```
+
+A test asks two kinds of things, 30 of each unless you say otherwise:
+
+- **Identifiers** that occur in one passage only: a CVE number, a path, a parameter name.
+  They need no model, and they are what a search by meaning alone is weak at.
+- **Questions** the decision model writes, each about one passage, in the words of someone
+  who has not read it. That is one model call for a question, when the test is built.
+
+The test is kept with its runs (`rag-tests/` in the data folder). The next run asks the same
+test and compares with the run before, so a change to the search, to the embedding model or
+to how the texts are cut is measured with the same questions. How to read it: what stood
+among the 40 and not among the 8 is what a reranker could bring up; what was not among the
+40 was found by neither half of the search, and no reranker brings that up. The questions
+are a model's and the answer counted as right is the passage they were written from:
+another passage that answers as well counts as a miss, so read the list of misses before
+you conclude from the numbers.
+
 ## Orchestrator
 
 When the orchestrator sets a goal record (the `focus` tool), a panel appears above the
