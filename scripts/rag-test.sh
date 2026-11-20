@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # What the search of a knowledge collection brings: things that stand in one passage only are asked of the real
-# search, and the result says where that passage stood (first, among the 8 a message gets, among the 40 the search
-# chooses from, or nowhere). Nothing of the collection is changed. The embedding model has to be reachable.
+# search, and the result says where that passage stood (first, in the message as a message is filled, among the 40
+# the search chooses from, or nowhere). Nothing of the collection is changed. The embedding model has to be reachable.
 #   scripts/rag-test.sh                  the collections
 #   scripts/rag-test.sh "NAME"           builds a test for the collection once (identifiers, and questions written
 #                                        by the decision model), asks it, and keeps it; next time it asks the same
