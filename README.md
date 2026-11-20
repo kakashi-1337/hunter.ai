@@ -623,6 +623,7 @@ A decision is a model's estimate. The numbers say how sure the model is, not how
 | `web_download` | network | Saves a URL into `<working folder>/downloads`. 200 MB by default, 2048 MB at most; refuses when free disk would fall under 10 GiB. |
 | `web_search` | network | Searches through the local SearXNG container. |
 | `repo_search` | read | ripgrep under a folder. Files that usually hold credentials are never searched. |
+| `encode_decode` | read | Converts a text without starting a process: base64 (standard and URL-safe, with or without padding), URL percent-encoding, hex, HTML entities, `\u` escapes, the header and payload of a JWT with its `iat`, `nbf` and `exp` as dates (the signature is not checked), and md5, sha1 or sha256. One operation a call, on a text the model gives: it reads no file. An encoding returns the value alone. A decoding says that what it brought is data; bytes that are not UTF-8 come back as hex, and a control character is shown as `\xNN`. |
 | `skill` | read | Loads a skill you installed, by name. What it returns is followed as your instructions (see [Skills](#skills)). |
 
 A result longer than 30,000 characters reaches the model as its first 22,000 and last

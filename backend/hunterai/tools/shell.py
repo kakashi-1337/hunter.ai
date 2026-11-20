@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 from .. import config, procs
-from . import resolve
+from . import codec, resolve
 from .base import PathUse, Prepared, Tool, ToolContext, ToolError, ToolResult
 
 
@@ -261,4 +261,5 @@ def tools() -> list[Tool]:
              {"type": "object", "properties": {"id": _ID}, "required": ["id"],
               "additionalProperties": False},
              "read", _kill),
+        *codec.tools(),         # what a model would otherwise run a command for: converting a text needs no process
     ]
