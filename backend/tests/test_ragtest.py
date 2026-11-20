@@ -7,10 +7,10 @@ search chooses from, or nowhere. It is kept, so that a change to the search can 
 import json
 
 from hunterai import config
-from hunterai.kb import ragtest
+from hunterai.kb import ragtest, search
 from hunterai.providers import registry
 from hunterai.repo import kb, settings
-from tests.kb_samples import ingest_texts
+from tests.kb_samples import StubStore, ingest_texts
 from tests.test_decision_engine import Json
 
 FILL = " This note is long enough to be worth a question: it goes on about how the issue was found, what was tried first, " \
@@ -163,3 +163,35 @@ def test_a_run_from_before_the_message_was_counted_is_not_compared_with():
     assert "counted the first 8" in ragtest.report(test, now, old)
     same = ragtest.report(test, now, now)
     assert "the same as in the run before" in same
+
+
+async def test_a_passage_put_first_for_its_spelling_is_counted_as_that(conn, col, tmp_path, monkeypatch):
+    """Fifty passages say "wait for"; one has `wait_for`. Neither half of the search brings that one."""
+    texts = {f"n{i:02}.txt": f"Then wait for the page to load, and wait for the next one. Note {i}." for i in range(50)}
+    texts["api.txt"] = "Call wait_for with a selector before reading the table."
+    docs = await ingest_texts(conn, col, tmp_path, texts)
+    test = {"collection": col.id, "name": col.name, "written_by": None,
+            "items": [{"kind": "identifier", "query": "wait_for", "chunk_id": kb.chunk_id(docs["api.txt"].id, 0), "source": "api.txt"}]}
+    monkeypatch.setattr(search, "get_store", lambda: StubStore({}))        # the vectors bring nothing here
+    result = await ragtest.run(conn, test)
+    assert result["kinds"]["identifier"] == {"asked": 1, "first": 1, "sent": 1, "pool": 1, "missed": 0}
+    assert result["exact"] == 1 and result["found_by"] == {"both": 0, "vectors": 0, "keywords": 0, "spelling": 1}
+    said = ragtest.report(test, result)
+    assert "1 stood first for the exact spelling of an identifier" in said and "By its exact spelling only: 1." in said
+
+
+def test_the_report_says_how_the_first_places_changed_and_reads_a_run_from_before_the_spelling_was_looked_for():
+    test = {"name": "n", "written_by": None, "items": []}
+    old = {"at": "t", "kinds": {"identifier": {"asked": 30, "first": 9, "sent": 22, "pool": 25, "missed": 5}},
+           "found_by": {"both": 9, "vectors": 0, "keywords": 16}, "misses": []}
+    now = {"at": "t", "kinds": {"identifier": {"asked": 30, "first": 30, "sent": 30, "pool": 30, "missed": 0}},
+           "found_by": {"both": 9, "vectors": 0, "keywords": 16, "spelling": 5}, "exact": 30, "misses": []}
+    said = ragtest.report(test, now, old)
+    assert "identifiers in the message: 30, 22 in the run before" in said
+    assert "identifiers found first: 30, 9 in the run before" in said
+    assert "By its exact spelling only: 5." in said and "30 stood first for the exact spelling of an identifier" in said
+    assert "exact spelling" not in ragtest.report(test, old)            # an old run has nothing of it, and says nothing
+
+
+def test_the_test_and_the_search_agree_on_what_an_identifier_is():
+    assert ragtest._FORMS is search.IDENTIFIER_FORMS

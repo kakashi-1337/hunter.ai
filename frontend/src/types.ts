@@ -378,6 +378,8 @@ export interface Source {
   line_end: number
   score: number
   text: string
+  /** It stood first because it holds an identifier of the query in its exact spelling. Its score is then no measure. */
+  exact?: boolean
 }
 
 export interface SourcesBlock { type: 'sources'; query: string; items: Source[]; hits: number; error: string | null }
@@ -449,6 +451,8 @@ export interface KbHit {
   score: number
   dense_rank: number | null
   keyword_rank: number | null
+  /** It holds an identifier of the query in its exact spelling, and stands first for that. */
+  exact?: boolean
 }
 
 export interface ChatKb { chat_id: string; collection_ids: string[]; always_retrieve: boolean }

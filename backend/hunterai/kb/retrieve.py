@@ -63,7 +63,7 @@ def pick(hits: list[Hit], budget: int) -> list[Source]:
         used += cost
         out.append(Source(n=len(out) + 1, chunk_id=h.chunk_id, document_id=h.document_id,
                           collection_id=h.collection_id, source_uri=h.source_uri, ordinal=h.ordinal,
-                          line_start=h.line_start, line_end=h.line_end, score=h.score, text=h.text))
+                          line_start=h.line_start, line_end=h.line_end, score=h.score, text=h.text, exact=h.exact))
     return out
 
 
