@@ -119,10 +119,9 @@ async def test_a_swarm_runs_three_subagents_at_a_time_and_judges_each_answer(con
     assert len({s.seq for s in run.steps}) == len(run.steps)       # no two steps share a number
 
 
-async def test_a_swarm_is_refused_for_a_local_chat_model_or_a_local_decision_model(conn, hive):
-    p, run, msg = await hive.run([task("a"), task("b")], provider="ollama")
-    block = next(b for b in msg.blocks if b.type == "tool_result")
-    assert block.is_error and "needs a cloud model" in block.content and "delegate" in block.content and hive.ran == []
+async def test_a_swarm_is_refused_for_a_local_decision_model(conn, hive):
+    """A cloud chat whose decision model is local: no swarm, and `delegate` is named instead. A chat whose own model
+    is local is offered neither tool (tests/test_local_alone.py)."""
     await settings.put(conn, "decision_provider", "ollama")
     await settings.put(conn, "decision_model", "qwen3:8b")
     p, run, msg = await hive.run([task("a"), task("b")])

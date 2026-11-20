@@ -446,9 +446,9 @@ What HunterAI takes from the server, and nothing else is assumed:
 
 It works on one request at a time and lets the others wait, five minutes unless it was
 started with another `--queue-timeout`. HunterAI waits longer than that for a first byte,
-and says "colibri was busy with other requests ..." when colibri gives up on one. A swarm
-of subagents on a colibri model is therefore a queue: lower "Subagents of a swarm working
-at the same time" in Settings.
+and says "colibri was busy with other requests ..." when colibri gives up on one. A chat
+on a colibri model therefore has no subagents: `delegate` and `swarm` are not offered to
+it, as with an Ollama model, and it does the work itself (see "Orchestrator").
 
 When colibri's engine fails in the middle of an answer, its server sends no error: the
 answer just stops, under a status of success. HunterAI takes an answer that was never
@@ -524,8 +524,17 @@ line.
 | `focus` | The chat's goal record: objective, success criteria, open items. It is part of every request, and `check` says how far a next step drifts from it. |
 | `critique` | A second look at a claim or plan: assumptions, alternatives, what would disprove it. Labelled as the model's analysis. |
 | `finding_add`, `finding_update`, `finding_list` | Findings for the chat's target. Adding one runs a triage first (severity, false positive, in scope, duplicate), stored with it. |
-| `delegate` | Runs a subagent on a brief with a subset of the chat's tools: at most 12 model turns, 8 subagents per run, one at a time, never nested. Its calls pass the same permission engine and its questions appear in the same chat. |
-| `swarm` | Runs 2 to 6 such subagents on independent briefs, three at a time unless you set another number (Settings, 1 to 6: more load this machine and your provider's rate limit); each answer is judged on its own. Cloud models only: with a local chat model or a local decision model it is refused and `delegate` is the tool, because this kind of machine cannot run two local models at once. A swarm member has no fallback to the local model, no browser (a chat has one), and no `look_at_image`. |
+| `delegate` | Runs a subagent on a brief with a subset of the chat's tools: at most 12 model turns, 8 subagents per run, one at a time, never nested. Its calls pass the same permission engine and its questions appear in the same chat. For a chat on a cloud model only (see "A local model works alone" below). |
+| `swarm` | Runs 2 to 6 such subagents on independent briefs, three at a time unless you set another number (Settings, 1 to 6: more load this machine and your provider's rate limit); each answer is judged on its own. For a chat on a cloud model only, and the decision model has to be a cloud one too, because it checks every answer: with a local decision model a swarm is refused and `delegate` is the tool. A swarm member has no fallback to the local model, no browser (a chat has one), and no `look_at_image`. |
+
+- **A local model works alone.** A subagent runs on the chat's own model. A local model
+  (Ollama, colibri) that delegates would hand the task to itself: it reads the task once
+  more from an empty context, on a machine that runs one local model at a time, and
+  nothing is won. A chat on a local model is therefore not offered `delegate` or `swarm`
+  and is not told of them: it does the work itself, one part after another. The same
+  holds for a run that went on with the local Ollama model because abliteration.ai did
+  not answer: it was told of both tools before that, and a call to either is refused with
+  the reason, before anything is asked of you.
 
 - **Verification.** When a subagent finishes, the decision model judges its answer against
   the tool output in its own transcript. Only a confident "accept" is reported as

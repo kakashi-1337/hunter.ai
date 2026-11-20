@@ -6,10 +6,16 @@ permission engine (its asks appear in the same chat), and its answer is judged a
 own tool outputs before the parent may treat it as verified.
 
 A swarm is several such subagents at the same time: three, unless the owner set another
-number, from one to the six tasks a swarm holds (Settings; see swarm_width). It is for cloud
-models only: this machine cannot run two local models at once, so a chat or a decision model
-that is local gets `delegate`, one at a time. A swarm member has no fallback to the local model, no
-browser (a chat has one), and no tool that loads a local model.
+number, from one to the six tasks a swarm holds (Settings; see swarm_width). A swarm member has
+no fallback to the local model, no browser (a chat has one), and no tool that loads a local model.
+
+A local model does not delegate. A subagent runs on the chat's own model, so a local model
+(Ollama, colibri) that delegates hands the task to itself: it reads the task once more from an
+empty context, on a machine that runs one local model at a time, and nothing is won. A chat on a
+local model is therefore offered neither tool and does the work itself, and a run that went on
+with the local model after the cloud one failed refuses both (see _not_alone). A swarm needs a
+cloud decision model as well, because that model checks every answer: a cloud chat whose decision
+model is local gets `delegate`, one at a time.
 """
 from __future__ import annotations
 
@@ -17,7 +23,7 @@ import asyncio
 import dataclasses
 import json
 
-from . import db, hub, permissions
+from . import db, hub, permissions, problems
 from .decision import engine as de
 from .modes import build_system
 from .providers import registry
@@ -26,7 +32,7 @@ from .providers.base import (Options, ProviderError, Stop, TextDelta, ThinkingDe
 from .repo import chats, goals, runs, settings, targets
 from .tools import registry as tool_registry
 from .tools import loopguard, runner
-from .tools.base import Tool, ToolContext, ToolError, ToolResult
+from .tools.base import Prepared, Tool, ToolContext, ToolError, ToolResult
 from .types import Block, BlockList, TextBlock, ThinkingBlock, ToolCallBlock, ToolResultBlock
 
 SUBAGENT_MAX_TURNS = 12
@@ -34,7 +40,9 @@ MAX_SUBAGENTS_PER_RUN = 8
 SWARM_NAME = "swarm"
 SWARM_WIDTH = 3                   # subagents of one swarm that run at the same time, until the owner sets another number
 SWARM_MAX_TASKS = 6
-LOCAL_PROVIDERS = frozenset({de.FALLBACK_PROVIDER})
+LOCAL_PROVIDERS = frozenset({de.FALLBACK_PROVIDER, problems.COLIBRI})      # a model on the owner's own machine or server
+ALONE = ("a local model works alone: a subagent would be that same model starting again from an empty context. "
+         "Do this work yourself with your own tools, one part after another.")
 NOT_IN_A_SWARM = ("browser_", "look_at_image")      # one browser per chat; a tool that loads a local model
 MAX_CALLS_PER_TURN = 20
 EVIDENCE_CHARS = 40_000
@@ -225,6 +233,33 @@ def _verifier_state(task: str, answer: str, blocks: list[Block]) -> tuple[str, i
             f"{evidence}\n\nSUBAGENT ANSWER (a claim to check, as one JSON string): {shown}"), count
 
 
+def _cloud_chat(chat) -> bool:
+    """Whether a chat is offered `delegate` and `swarm` at all: its model is not a local one."""
+    return chat.provider not in LOCAL_PROVIDERS
+
+
+async def _not_alone(conn, chat, run_id: str) -> None:
+    """ToolError where the model that asks for a subagent is a local one: the chat's own, or the local model its run
+    went on with when the cloud one failed at the first call. The tools of a run are fixed before that call, so such
+    a run was told of `delegate` and `swarm`; this is where it learns that it has neither."""
+    if chat.provider in LOCAL_PROVIDERS:
+        raise ToolError(f"this chat uses the local provider {chat.provider}, and {ALONE}")
+    fell_back = await (await conn.execute("select 1 from steps where run_id=? and kind='fallback' limit 1",
+                                          (run_id,))).fetchone()
+    if fell_back:
+        raise ToolError(f"this run went on with the local model when the cloud one did not answer, and {ALONE}")
+
+
+async def _prepare_delegate(ctx: ToolContext, args: dict) -> Prepared:
+    """Before the permission decision: the owner is not asked about a subagent that will not be started."""
+    conn = await db.connect()
+    try:
+        await _not_alone(conn, await chats.get(conn, ctx.chat_id), ctx.run_id)
+    finally:
+        await conn.close()
+    return Prepared()
+
+
 async def _delegate(ctx: ToolContext, args: dict) -> ToolResult:
     return ToolResult(json.dumps(await _one(ctx, args), indent=1, ensure_ascii=False))
 
@@ -244,6 +279,8 @@ async def _one(ctx: ToolContext, args: dict, swarm: bool = False) -> dict:
 
     try:
         chat = await chats.get(conn, ctx.chat_id)
+        if not swarm:                                           # a swarm looked at this before it began
+            await _not_alone(conn, chat, ctx.run_id)
         used = (await (await conn.execute("select count(*) from subruns where run_id=?",
                                           (ctx.run_id,))).fetchone())[0]
         if not swarm and used >= MAX_SUBAGENTS_PER_RUN:        # a swarm counted its members before it began
@@ -348,23 +385,20 @@ async def swarm_width(conn) -> int:
     return max(1, min(SWARM_MAX_TASKS, width))
 
 
-async def _cloud_only(conn, chat) -> None:
-    """ToolError unless both models a swarm calls are cloud models."""
-    if chat.provider in LOCAL_PROVIDERS:
-        raise ToolError(f"a swarm makes several model calls at the same time and needs a cloud model; this chat uses the "
-                        f"local provider {chat.provider}. Use delegate (one subagent at a time), or switch the chat to a "
-                        "cloud model.")
+async def _cloud_only(conn, chat, run_id: str) -> None:
+    """ToolError unless both models a swarm calls are cloud models: the one that does the work (see _not_alone) and
+    the decision model, which checks every answer."""
+    await _not_alone(conn, chat, run_id)
     provider, model = await de.decision_model(conn)
     if provider in LOCAL_PROVIDERS:
         raise ToolError(f"a swarm needs a cloud decision model too (it checks every subagent's answer); the decision model "
                         f"is the local {provider}/{model}. Choose a cloud one in Settings, or use delegate.")
 
 
-async def _prepare_swarm(ctx: ToolContext, args: dict):
-    from .tools.base import Prepared
+async def _prepare_swarm(ctx: ToolContext, args: dict) -> Prepared:
     conn = await db.connect()
     try:
-        await _cloud_only(conn, await chats.get(conn, ctx.chat_id))
+        await _cloud_only(conn, await chats.get(conn, ctx.chat_id), ctx.run_id)
     finally:
         await conn.close()
     return Prepared()
@@ -374,7 +408,7 @@ async def _swarm(ctx: ToolContext, args: dict) -> ToolResult:
     tasks = args["tasks"]
     conn = await db.connect()
     try:
-        await _cloud_only(conn, await chats.get(conn, ctx.chat_id))
+        await _cloud_only(conn, await chats.get(conn, ctx.chat_id), ctx.run_id)
         used = (await (await conn.execute("select count(*) from subruns where run_id=?", (ctx.run_id,))).fetchone())[0]
         if used + len(tasks) > MAX_SUBAGENTS_PER_RUN:
             raise ToolError(f"a run may start at most {MAX_SUBAGENTS_PER_RUN} subagents and {used} were started: "
@@ -433,11 +467,12 @@ def swarm_tool() -> Tool:
         "when the work splits into parts that do not need each other's results: one host each, one feature each, one "
         "file each. Every task is a delegate brief: self-contained (a subagent sees nothing else), with success "
         "criteria and the tools it may use. Subagents of a swarm have no browser and no image tool. Each result carries "
-        "its own verdict: only verified=true may be reported as fact. Needs a cloud model; with a local one, use delegate."),
+        "its own verdict: only verified=true may be reported as fact. When a swarm is refused because the decision "
+        "model is a local one, use delegate."),
         {"type": "object", "properties": {
             "tasks": {"type": "array", "items": brief, "minItems": 2, "maxItems": SWARM_MAX_TASKS}},
          "required": ["tasks"], "additionalProperties": False},
-        "read", _swarm, prepare=_prepare_swarm)
+        "read", _swarm, prepare=_prepare_swarm, offered_to=_cloud_chat)
 
 
 def tool() -> Tool:
@@ -451,4 +486,4 @@ def tool() -> Tool:
             "success_criteria": {"type": "string", "maxLength": 2000},
             "tools": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 20}},
          "required": ["brief", "tools"], "additionalProperties": False},
-        "read", _delegate)
+        "read", _delegate, prepare=_prepare_delegate, offered_to=_cloud_chat)

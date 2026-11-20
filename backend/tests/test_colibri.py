@@ -505,6 +505,8 @@ async def test_a_busy_colibri_says_that_it_is_busy_and_how_long_to_wait(at, body
     listed(), answers(body, 429, {"retry-after": "1"})
     e = await refused()
     assert e.kind == "rate_limit" and e.retry_after == 1.0 and e.complete and said in e.message and "key" not in e.message
+    # a chat on colibri has no subagents (tests/test_local_alone.py): the way out is not a setting about them
+    assert "send the message again when it is free" in e.message and "subagent" not in e.message
 
 
 @respx.mock

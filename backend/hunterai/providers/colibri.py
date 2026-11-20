@@ -332,8 +332,8 @@ class ColibriProvider(OpenAICompatProvider):
                     "colibri was busy with other requests for as long as it lets one wait (five minutes, unless it was started "
                     "with another --queue-timeout).")
             wait = error_from_status(status, "", retry_after).retry_after
-            return ProviderError("rate_limit", f"{what} It works on one request at a time: send the message again when it is free, "
-                                               "and let fewer subagents work at the same time (Settings) if this goes on.",
+            return ProviderError("rate_limit", f"{what} It works on one request at a time, and every chat that uses it waits in "
+                                               "the same line: send the message again when it is free.",
                                  429, wait, complete=True)
         return error_from_status(status, self._scrub(body), retry_after)
 
