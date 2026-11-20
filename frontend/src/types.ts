@@ -260,6 +260,8 @@ export interface Settings {
   decision_gate: boolean
   decision_engine: boolean
   kb_redact: boolean
+  /** Build output, bundles, source maps and lock files are left out of a collection when a folder is indexed. */
+  kb_skip_generated: boolean
   vision_model: string | null
   browser_via_caido: boolean
   answer_check: boolean

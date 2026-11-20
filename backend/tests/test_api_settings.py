@@ -158,6 +158,12 @@ async def test_kb_redact_is_on_by_default_and_can_be_switched(client):
     assert (await client.put("/api/settings", json={"max_turns": 10})).json()["kb_redact"] is False
 
 
+async def test_leaving_out_what_nobody_wrote_is_on_by_default_and_can_be_switched(client):
+    assert (await client.get("/api/settings")).json()["kb_skip_generated"] is True
+    assert (await client.put("/api/settings", json={"kb_skip_generated": False})).json()["kb_skip_generated"] is False
+    assert (await client.put("/api/settings", json={"max_turns": 10})).json()["kb_skip_generated"] is False
+
+
 async def test_the_swarm_width_is_three_until_the_owner_sets_one_to_six(client):
     seen = (await client.get("/api/settings")).json()
     assert seen["swarm_width"] == 3 and seen["machine"]["cores"] >= 1

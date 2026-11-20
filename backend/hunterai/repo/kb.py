@@ -317,6 +317,19 @@ async def spread_chunks(conn, collection_id: str, limit: int) -> list[tuple[str,
     return [(r["id"], r["text"], r["source_uri"]) for r in rows]
 
 
+async def indexed_documents(conn, collection_id: str) -> list[Document]:
+    """Every document of a collection that is searched (`ok`), in the order of where they came from."""
+    rows = await (await conn.execute("select * from kb_documents where collection_id=? and status='ok' order by source_uri",
+                                     (collection_id,))).fetchall()
+    return [_doc(r) for r in rows]
+
+
+async def chunk_texts(conn, document_id: str) -> list[str]:
+    """The passages of a document, in its order."""
+    rows = await (await conn.execute("select text from kb_chunks where document_id=? order by ordinal", (document_id,))).fetchall()
+    return [r["text"] for r in rows]
+
+
 async def list_chunks(conn, document_id: str, limit: int = 100, offset: int = 0) -> tuple[int, list[Chunk]]:
     total = (await (await conn.execute("select count(*) from kb_chunks where document_id=?", (document_id,))).fetchone())[0]
     rows = await (await conn.execute("select * from kb_chunks where document_id=? order by ordinal limit ? offset ?",

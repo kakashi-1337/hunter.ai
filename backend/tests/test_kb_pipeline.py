@@ -256,8 +256,8 @@ async def test_cancel_and_stop_are_seen_during_discovery(conn, col, tmp_path, mo
     seen = {"n": 0}
     real = sources.discover
 
-    async def watched(payload):
-        async for x in real(payload):
+    async def watched(payload, **kw):
+        async for x in real(payload, **kw):
             seen["n"] += 1
             if seen["n"] == 25:
                 await jobs.request(conn, job.id, "cancel")

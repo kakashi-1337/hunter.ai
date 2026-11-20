@@ -44,6 +44,7 @@ class SettingsIn(BaseModel):
     notify_findings: bool | None = None     # announce positive findings to the Discord webhook
     notify_min_severity: Literal["info", "low", "medium", "high", "critical"] | None = None
     kb_redact: bool | None = None
+    kb_skip_generated: bool | None = None   # leave build output, bundles, source maps and lock files out of a collection
     vision_model: str | None = None         # "" or null: the first local model that reads images
     browser_via_caido: bool | None = None   # the browser tools' traffic goes through Caido and is recorded there
     upstream_proxy: str | None = None       # the owner's own HTTP proxy for the agent's web traffic; "" for none
@@ -101,6 +102,7 @@ async def _view(conn) -> dict:
         "notify_webhook_set": notify.webhook() is not None,
         "decision_engine": bool(await settings.get(conn, "decision_engine", runner.ENGINE_DEFAULT)),
         "kb_redact": bool(await settings.get(conn, "kb_redact", True)),
+        "kb_skip_generated": bool(await settings.get(conn, "kb_skip_generated", True)),
         "vision_model": await settings.get(conn, "vision_model") or None,
         "browser_via_caido": await caido.recording(conn),      # what is in effect: on by default where nothing stands against it
         "caido_available": caido.available(),
@@ -227,6 +229,9 @@ async def put_settings(body: SettingsIn, conn=Depends(get_conn)):
     if fields.get("kb_redact") is not None:
         await settings.put(conn, "kb_redact", bool(fields["kb_redact"]))
     fields.pop("kb_redact", None)
+    if fields.get("kb_skip_generated") is not None:
+        await settings.put(conn, "kb_skip_generated", bool(fields["kb_skip_generated"]))
+    fields.pop("kb_skip_generated", None)
     if fields.get("decision_engine") is not None:
         await settings.put(conn, "decision_engine", bool(fields["decision_engine"]))
     fields.pop("decision_engine", None)

@@ -350,6 +350,9 @@ export function SettingsDialog({ onClose, onSetup }: { onClose: () => void; onSe
           <label className="check"><input type="checkbox" checked={settings.kb_redact} onChange={(e) => update({ kb_redact: e.target.checked })} />
             <span>Mask strings shaped like keys, tokens, and passwords before a document is indexed. Retrieved passages are sent to the model provider; turn this off only for material where the secrets are what you are looking for. It applies to documents ingested from now on.</span>
           </label>
+          <label className="check"><input type="checkbox" checked={settings.kb_skip_generated} onChange={(e) => update({ kb_skip_generated: e.target.checked })} />
+            <span>Leave out what nobody wrote when a folder, a repository or an archive is indexed: the output of a build (.next, .nuxt, .cache and the like), minified and bundled scripts and style sheets, source maps, and lock files. One build folder makes thousands of passages that answer no question and stand in the way of the ones that do. Each is listed as skipped, with the reason. Turn this off to index such a file on purpose, a target's bundle for example. It applies to what is indexed from now on; scripts/kb-clean.sh shows what a collection already holds of them, and takes it out when you say so.</span>
+          </label>
           {settings.embed_on_cpu !== undefined && (
             <label className="check"><input type="checkbox" checked={settings.embed_on_cpu} onChange={(e) => update({ embed_on_cpu: e.target.checked })} />
               <span>Run the embedding model on the processor. The graphics card then stays with the chat model: the embedding model, which searches the knowledge base and memory on every message, takes none of its memory. Searches find the same passages. It is slower there, which shows when a large folder or repository is indexed. It applies from the next request on.</span>

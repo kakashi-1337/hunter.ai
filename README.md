@@ -182,6 +182,21 @@ when the collection is created.
 - **What is never read.** `.git`, `node_modules`, `__pycache__`, virtual environments,
   symlinks, files over 50 MB, and secret-like names (`.env`, `*.pem`, `*.key`, `id_rsa*`,
   `.netrc`, `.pgpass`): their text would end up in prompts.
+- **What nobody wrote is left out.** A folder, a repository, an upload or an archive brings
+  along files that no one wrote: the output of a build (`.next`, `.nuxt`, `.svelte-kit`,
+  `.cache`, `.turbo`, `.yarn` and the like), minified and bundled scripts and style sheets
+  (`*.min.js`, `*.bundle.js`, `*.chunk.js`, and any `.js`, `.mjs`, `.cjs` or `.css` file of
+  which more than half stands in lines longer than 500 characters, whatever its name),
+  source maps (`*.js.map`, `*.css.map`) and lock files (`package-lock.json`, `yarn.lock`,
+  `Cargo.lock`, `go.sum` and the like). One build folder makes thousands of passages that
+  answer no question, and each can stand in the place of one that does. They are listed as
+  skipped, with the reason. `dist`, `build`, `out`, `target` and `vendor` are not passed
+  over for their name: somebody's writing stands under such a name often enough, and a
+  bundle under it is told by its own name or shape. A page of a crawled site is never
+  judged. The switch is under Settings, Knowledge base: turn it off to index such a file on
+  purpose, a target's bundle for example. Indexing a folder again sets aside the files it
+  now leaves out by name or shape; what stands in a directory that is now passed over is
+  taken out by `scripts/kb-clean.sh` (below).
 - **Limits per job.** 50 MB per file, 2 GB of staged and unpacked data, 50,000 files. An
   archive that unpacks to more than 200 times its size is refused as a bomb. Paths that
   leave the archive, links, and device files inside archives are recorded and never written.
@@ -582,6 +597,29 @@ why nothing came of it, and stops asking after three in a row. The questions
 are a model's and the answer counted as right is the passage they were written from:
 another passage that answers as well counts as a miss, so read the list of misses before
 you conclude from the numbers.
+
+### A collection that was filled before
+
+`scripts/kb-clean.sh "NAME"` goes through what a collection holds and says what would be left
+out of it today (see "What nobody wrote is left out"): how many files and passages, of which
+kind, where they stand, and the largest. It changes nothing, and writes the whole list into
+the data folder (`kb-clean/`).
+
+```sh
+scripts/kb-clean.sh                  # the collections
+scripts/kb-clean.sh "NAME"           # what would be left out today; nothing is changed
+scripts/kb-clean.sh "NAME" --apply   # takes them out
+```
+
+With `--apply` their passages and vectors are removed for good, one whole document at a
+time; the files on your disk are not touched, and each stays listed in the collection as
+skipped, with the reason. To have one back, switch off "Leave out what nobody wrote" in
+Settings and index its folder again. It does nothing while a job of the collection is queued
+or running, and nothing when that switch is off. A document is judged by the directory it
+stood in, by its name and, for a script or a style sheet, by its passages; every directory
+of a path on this machine counts, also the ones above the folder you indexed. Build a new
+search test afterwards (`scripts/rag-test.sh "NAME" --new`): the kept one asks about passages
+that may be gone.
 
 ## Orchestrator
 
