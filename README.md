@@ -580,7 +580,13 @@ A test asks two kinds of things, 30 of each unless you say otherwise:
   they were indexed), so each identifier is then asked of the whole collection: one that
   stands in a second passage anywhere has no single right passage and is left out.
 - **Questions** the decision model writes, each about one passage, in the words of someone
-  who has not read it. That is one model call for a question, when the test is built.
+  who has not read it. That is one model call for a question, when the test is built. A
+  question needs a single right passage too, so it is written only from a document meant to
+  be read (Markdown, text, HTML, PDF, an office file, a web page: not code, not a table of
+  translations, nothing that would be left out of a collection today), and not from a
+  passage of which another passage shares most of the wording: 60% or more of its sequences
+  of three words, as the same text does that stands in the collection once for every
+  product. Such a one is looked for among the passages whose vectors stand nearest.
 
 The test is kept with its runs (`rag-tests/` in the data folder). The next run asks the same
 test and compares with the run before, so a change to the search, to the embedding model or
@@ -596,7 +602,14 @@ decision model writes no question that can be used, the test says which model wa
 why nothing came of it, and stops asking after three in a row. The questions
 are a model's and the answer counted as right is the passage they were written from:
 another passage that answers as well counts as a miss, so read the list of misses before
-you conclude from the numbers.
+you conclude from the numbers. Two things are taken off that list. A **twin** answers for the
+right passage: another passage with 80% or more of its wording, the same text in another
+file. The question is counted where the twin stood, and the test says how many were
+answered so. A miss whose passage has a neighbour between 60% and 80% stays a miss and names
+it, with the share. And a thing about a passage the collection **no longer holds** (taken out
+by `scripts/kb-clean.sh`, or its file changed) is left out of the numbers; the test says how
+many and that a new one is due. What the measure does not see: a passage that says the same
+in other words, or in another language.
 
 ### A collection that was filled before
 
