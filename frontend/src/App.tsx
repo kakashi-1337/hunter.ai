@@ -2,17 +2,23 @@ import { useEffect, useState } from 'react'
 import { AdvancedOptions } from './components/AdvancedOptions'
 import { ChatView } from './components/ChatView'
 import { DialogHost } from './components/DialogHost'
+import { ErrorBoundary } from './components/ErrorBoundary'
 import { GoalPanel } from './components/GoalPanel'
 import { KnowledgeView } from './components/KnowledgeView'
+import { DialogGuard } from './components/Modal'
 import { ModelPicker } from './components/ModelPicker'
 import { PermissionsPanel } from './components/PermissionsPanel'
 import { ProcessPanel } from './components/ProcessPanel'
 import { SettingsDialog } from './components/SettingsDialog'
 import { SetupChecklist } from './components/SetupChecklist'
+import { SkillsManager } from './components/SkillsManager'
 import { Sidebar } from './components/Sidebar'
 import { TrajectoryPanel } from './components/TrajectoryPanel'
 import * as api from './api'
+import { confirmBox } from './dialog'
+import { proxyInEffect } from './proxy'
 import { useChatView, useStore } from './store'
+import { AUTO_APPROVE_WARNING, withAuto } from './tree'
 import type { Mode } from './types'
 
 const MODES: Mode[] = ['plan', 'pentesting', 'coding']
@@ -20,6 +26,7 @@ const MODES: Mode[] = ['plan', 'pentesting', 'coding']
 function ChatHeader({ trajectoryOpen, onToggleTrajectory }: { trajectoryOpen: boolean; onToggleTrajectory: () => void }) {
   const chat = useChatView()
   const targets = useStore((s) => s.targets)
+  const settings = useStore((s) => s.settings)
   const newChat = useStore((s) => s.newChat)
   const busy = useStore((s) => s.live !== null)
   const patchChat = useStore((s) => s.patchChat)
@@ -34,6 +41,13 @@ function ChatHeader({ trajectoryOpen, onToggleTrajectory }: { trajectoryOpen: bo
     if (!useStore.getState().activeChatId) await newChat()
     setPanel(which)
   }
+  const auto = chat?.permissions?.auto === true
+  /** Auto-approve is a chat's own switch. Switching it on shows what it means first; off needs no question. */
+  const toggleAuto = async () => {
+    if (!auto && !(await confirmBox(AUTO_APPROVE_WARNING, true))) return
+    if (!useStore.getState().activeChatId) await newChat()
+    await patchChat({ permissions: withAuto(useStore.getState().chat?.permissions, !auto) })
+  }
   // How many processes of this chat are running: refreshed as the run makes progress.
   useEffect(() => {
     if (!chatId) return
@@ -42,6 +56,7 @@ function ChatHeader({ trajectoryOpen, onToggleTrajectory }: { trajectoryOpen: bo
     return () => { stop = true }
   }, [chatId, steps, busy, panel])
   if (!chat) return null
+  const via = proxyInEffect(targets.find((t) => t.id === chat.target_id), settings)
   return (
     <header className="chat-head">
       <span className="title grow" title={chat.title}>{chat.title}</span>
@@ -49,6 +64,8 @@ function ChatHeader({ trajectoryOpen, onToggleTrajectory }: { trajectoryOpen: bo
         <option value="">No target</option>
         {targets.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
       </select>
+      {via && <span className="via-proxy mono" role="status" aria-label={`Traffic of this chat goes through the proxy at ${via.address}`}
+        title={`${via.own ? "This target's own proxy" : 'The proxy from Settings'}: web_fetch, web_download, the browser and commands of this chat go out through it. When it does not carry a connection, nothing is sent directly.`}>via {via.address}</span>}
       <select aria-label="Persona" title="Who the assistant is for this chat" value={chat.persona_id ?? ''} disabled={busy} onChange={(e) => void choosePersona(e.target.value || null)}>
         <option value="">No persona</option>
         {personas.map((p) => <option key={p.id} value={p.id} title={p.description}>{p.name}</option>)}
@@ -62,6 +79,9 @@ function ChatHeader({ trajectoryOpen, onToggleTrajectory }: { trajectoryOpen: bo
       <AdvancedOptions />
       <button className="btn" title="Goal record and findings" onClick={() => void openPanel('goal')}>Goal</button>
       <button className="btn" onClick={() => void openPanel('permissions')}>Permissions</button>
+      <button className={`btn${auto ? ' danger-solid' : ''}`} aria-pressed={auto} disabled={busy} onClick={() => void toggleAuto()}
+        title={auto ? 'Auto-approve is on for this chat: calls run without asking, except where one touches what always asks. Click to switch it off.' : 'Stop asking before each call in this chat (you are shown what that means first)'}>
+        {auto ? 'Auto-approve: on' : 'Auto-approve'}</button>
       <button className="btn" onClick={() => void openPanel('processes')}>Processes{running ? ` (${running})` : ''}</button>
       <button className="btn" aria-pressed={trajectoryOpen} title="Toggle trajectory (Ctrl+J)" onClick={onToggleTrajectory}>Trajectory</button>
       {panel === 'permissions' && <PermissionsPanel onClose={() => setPanel(null)} />}
@@ -82,6 +102,8 @@ export default function App() {
     try { return localStorage.getItem('trajectory') !== 'closed' } catch { return true }
   })
   const [setupOpen, setSetupOpen] = useState(false)
+  const skillsOpen = useStore((s) => s.skillsOpen)
+  const shown = useStore((s) => s.activeChatId) ?? ''      // a part that failed to draw is drawn again for another chat
   useEffect(() => { void load() }, [load])
   // A first start with no model to talk to opens the setup check by itself; later it is under Settings.
   useEffect(() => { api.systemCheckup().then((c) => { if (!c.ready) setSetupOpen(true) }).catch(() => {}) }, [])
@@ -99,7 +121,8 @@ export default function App() {
 
   return (
     <div className="app">
-      <Sidebar onSettings={() => setSettingsOpen(true)} />
+      <ErrorBoundary><Sidebar onSettings={() => setSettingsOpen(true)} onSetup={() => setSetupOpen(true)} /></ErrorBoundary>
+      <ErrorBoundary resetKey={`${view}:${shown}`}>
       {view === 'knowledge' ? <KnowledgeView onClose={() => setView('chat')} /> : <ChatView header={
         <>
           <ChatHeader trajectoryOpen={trajectoryOpen} onToggleTrajectory={() => setTrajectoryOpen((o) => !o)} />
@@ -111,10 +134,12 @@ export default function App() {
           )}
         </>
       } />}
-      {trajectoryOpen && view === 'chat' && <TrajectoryPanel onClose={() => setTrajectoryOpen(false)} />}
+      </ErrorBoundary>
+      {trajectoryOpen && view === 'chat' && <ErrorBoundary resetKey={shown}><TrajectoryPanel onClose={() => setTrajectoryOpen(false)} /></ErrorBoundary>}
       <DialogHost />
-      {settingsOpen && <SettingsDialog onClose={() => setSettingsOpen(false)} onSetup={() => { setSettingsOpen(false); setSetupOpen(true) }} />}
-      {setupOpen && <SetupChecklist onClose={() => setSetupOpen(false)} onSettings={() => { setSetupOpen(false); setSettingsOpen(true) }} />}
+      {settingsOpen && <DialogGuard title="Settings" onClose={() => setSettingsOpen(false)}><SettingsDialog onClose={() => setSettingsOpen(false)} onSetup={() => { setSettingsOpen(false); setSetupOpen(true) }} /></DialogGuard>}
+      {skillsOpen && <DialogGuard title="Skills" onClose={() => useStore.getState().setSkillsOpen(false)}><SkillsManager onClose={() => useStore.getState().setSkillsOpen(false)} /></DialogGuard>}
+      {setupOpen && <DialogGuard title="Setup check" onClose={() => setSetupOpen(false)}><SetupChecklist onClose={() => setSetupOpen(false)} onSettings={() => { setSetupOpen(false); setSettingsOpen(true) }} /></DialogGuard>}
     </div>
   )
 }

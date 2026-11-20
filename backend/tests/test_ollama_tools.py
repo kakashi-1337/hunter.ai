@@ -31,6 +31,7 @@ HI = [WireMessage("user", [TextBlock(text="hi")])]
 
 
 async def run(msgs=HI, tools=(SPEC,), system="sys"):
+    respx.post(URL.replace("/api/chat", "/api/show")).mock(return_value=httpx.Response(200, json={"capabilities": ["completion", "tools"]}))
     return [e async for e in ollama.make().stream(
         "qwen3:8b", system, msgs, Options(), tools=list(tools) if tools is not None else None)]
 
@@ -43,7 +44,7 @@ async def test_tool_call_parsed_and_tools_sent():
     assert evs[0].id.startswith("call_") and evs[1:] == [Usage(9, 2), Stop("stop")]
     assert sent(route)["tools"] == [{"type": "function", "function": {
         "name": "execute", "description": "Run a command", "parameters": SPEC.parameters}}]
-    assert sent(route)["options"]["num_ctx"] == 8192
+    assert sent(route)["options"]["num_ctx"] == ollama.DEFAULT_NUM_CTX
 
 
 @respx.mock

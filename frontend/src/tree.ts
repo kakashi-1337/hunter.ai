@@ -1,4 +1,4 @@
-import type { AnswerCheckBlock, Block, Goal, Helper, FindingRow, Message, Options, PermissionRequest, RunEvent, SourcesBlock, Step, SwarmMember, SystemStatus } from './types'
+import type { AnswerCheckBlock, Block, ChangesBlock, CheckResult, ColibriServer, FolderCheck, Goal, Helper, FindingRow, LocalModel, Message, Options, PermissionRequest, Policy, ProviderInfo, RunEvent, SourcesBlock, Step, SwarmMember, SystemStatus } from './types'
 
 export function messageText(m: Message): string {
   return m.blocks.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('\n')
@@ -87,6 +87,25 @@ export function branchLabel(m: Message): string {
   return `${index + 1}/${count}`
 }
 
+/** What the owner is told, and agrees to, before auto-approve is switched on for a chat. It says what the permission engine does. */
+export const AUTO_APPROVE_WARNING = `Switch auto-approve on for this chat?
+
+HunterAI will stop asking before it writes files, runs commands, or contacts hosts, wherever only the mode or your defaults say "ask". The agent and its subagents then act on their own judgement, and on whatever a page, a file, or a tool result talks them into.
+
+It still asks when a call:
+• names a host that is out of scope or not on the target's in-scope list (with no target scope: every host it names)
+• touches files that usually hold credentials, or that run later
+• addresses this machine or your local network
+• is one you set to "ask" for this chat, or one the risk gate wants confirmed
+
+What is denied stays denied, and plan mode still writes and runs nothing. A command can reach hosts it does not name: switch this on only for work you are authorised to do, and watch the run.`
+
+/** The chat's policy with auto-approve switched on or off. Switched off, nothing of the switch is left in it. */
+export function withAuto(policy: Policy | null | undefined, on: boolean): Policy {
+  const { auto: _, ...rest } = policy ?? {}
+  return on ? { ...rest, auto: true } : rest
+}
+
 export function pruneOptions(options: Options, allowed: string[]): Options {
   const out: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(options)) {
@@ -116,6 +135,7 @@ export type RenderItem =
   | { kind: 'thinking'; text: string }
   | { kind: 'tool'; card: ToolCard }
   | { kind: 'note'; text: string }
+  | { kind: 'notice'; text: string; level: 'warn' }
 
 /** The message's blocks in order, each tool result folded into its call's card. */
 export function renderItems(m: Message): RenderItem[] {
@@ -127,6 +147,7 @@ export function renderItems(m: Message): RenderItem[] {
     else if (b.type === 'thinking') { if (b.text) out.push({ kind: 'thinking', text: b.text }) }
     else if (b.type === 'tool_call') out.push({ kind: 'tool', card: { call: b, result: results.get(b.id) ?? null } })
     else if (b.type === 'owner_note') { if (b.text) out.push({ kind: 'note', text: b.text }) }
+    else if (b.type === 'notice') { if (b.text) out.push({ kind: 'notice', text: b.text, level: 'warn' }) }
   }
   return out
 }
@@ -206,7 +227,20 @@ export function stepSummary(step: Step): string {
   const args = (d.arguments ?? {}) as Record<string, unknown>
   const main = ['command', 'path', 'url', 'query', 'pattern'].map((k) => args[k]).find((v) => typeof v === 'string' && v)
   const what = typeof main === 'string' ? main : step.name
+  const fit = fitNote(d.context)
+  if (fit) return `${what} · ${fit}`
   return typeof d.exit_code === 'number' ? `${what} · exit ${d.exit_code}` : what
+}
+
+/** What was done to a request so that it fits the model's context window, or null when it went out as it was. */
+function fitNote(context: unknown): string | null {
+  if (!context || typeof context !== 'object') return null
+  const c = context as Record<string, unknown>
+  if (typeof c.error === 'string') return `could not be made to fit its context (${c.error})`
+  const cut = Number(c.results_cut ?? 0), summarized = Number(c.messages_summarized ?? 0)
+  const parts = [cut > 0 ? `${cut} old result${cut === 1 ? '' : 's'} cut down` : '', summarized > 0 ? `${summarized} earlier messages summarized` : ''].filter(Boolean)
+  if (parts.length === 0 && c.summary_used) parts.push('the summary of the earlier messages was used')
+  return parts.length ? `made to fit its context: ${parts.join(', ')}` : null
 }
 
 /** One line for a decision step: what the decision model answered. */
@@ -246,6 +280,78 @@ export function triageFacts(triage: Record<string, unknown>): string[] {
 
 export function sourcesOf(m: Message): SourcesBlock | null {
   return (m.blocks.find((b) => b.type === 'sources') as SourcesBlock | undefined) ?? null
+}
+
+/** What the run of this answer changed in its work folder (coding mode), when anything is to be said about it. */
+export function changesOf(m: Message): ChangesBlock | null {
+  return (m.blocks.find((b) => b.type === 'changes') as ChangesBlock | undefined) ?? null
+}
+
+const filesOf = (n: number) => (n === 1 ? '1 file' : `${n} files`)
+
+/** The line over the list of what a run changed: how much, where, and what became of it. */
+export function changesView(b: ChangesBlock): { text: string; level: '' | 'warn'; canUndo: boolean } {
+  if (!b.files.length) return { text: b.reason, level: 'warn', canUndo: false }
+  const head = `This run changed ${filesOf(b.files.length)} in ${b.folder}.`
+  const one = b.files.length === 1
+  if (b.undone) return { text: `${head} ${one ? 'It was put back as it was' : 'They were put back as they were'} before it.`, level: '', canUndo: false }
+  if (!b.left.length) return { text: head, level: '', canUndo: true }
+  // An undo was asked and files were left: the owner's later work is in them. It can be asked again.
+  const rest = b.files.length - b.left.length
+  const left = b.left.length === 1 ? 'was left as it is' : 'were left as they are'
+  const text = one ? `${head} It changed after the run and was left as it is.`
+    : rest <= 0 ? `${head} All of them changed after the run and were left as they are.`
+      : `${head} ${b.left.length} of them changed after the run and ${left}: ${b.left.join(', ')}. `
+        + (rest === 1 ? 'The other is as it was before it.' : 'The others are as they were before it.')
+  return { text, level: 'warn', canUndo: true }
+}
+
+/** How a run of the check ended when it did not pass. */
+const ended = (r: CheckResult) => (r.timed_out ? `it did not end within ${Math.round(r.seconds)} seconds and was stopped`
+  : r.exit_code === null ? 'it could not be started' : `exit code ${r.exit_code}`)
+
+/** What a folder's check said before a run and after it, for the line beside the list of what the run changed
+ * (the line names the command first). Red when the run broke it, green when the run made it pass. */
+export function checkView(c: FolderCheck): { text: string; level: '' | 'ok' | 'warn' | 'bad' } {
+  const { before, after } = c
+  if (!after) {
+    const was = !before ? 'was not run before the run' : before.passed ? 'passed before the run' : `failed before the run (${ended(before)})`
+    return { text: `${was}. ${c.note}`.trim(), level: 'warn' }
+  }
+  if (!before) {
+    return after.passed ? { text: 'passes after the run. It was not run before it.', level: '' }
+      : { text: `fails after the run (${ended(after)}). It was not run before it.`, level: 'warn' }
+  }
+  if (after.passed) {
+    return before.passed ? { text: 'passed before the run and after it.', level: '' } : { text: 'failed before the run, passes after it.', level: 'ok' }
+  }
+  return before.passed ? { text: `passed before the run, fails after it (${ended(after)}).`, level: 'bad' }
+    : { text: `failed before the run and still fails after it (${ended(after)}).`, level: 'warn' }
+}
+
+const whenOf = (s: Step) => (s.detail?.when === 'before' ? 'before the first change' : 'after the run')
+
+/** The check of the folder that is going right now, from the steps of the run that is live. */
+export function runningCheck(steps: Step[]): { command: string; text: string } | null {
+  const going = [...steps].reverse().find((s) => s.kind === 'check' && !s.ended_at)
+  return going ? { command: going.name, text: `Running the check of this folder ${whenOf(going)}: ${going.name}` } : null
+}
+
+/** One run of the check in the list of a run's steps. */
+export function checkStepLine(step: Step): string {
+  const d = step.detail as { passed?: boolean; exit_code?: number | null; seconds?: number; timed_out?: boolean }
+  if (!step.ended_at) return `${whenOf(step)} · running`
+  if (step.status === 'cancelled') return `${whenOf(step)} · stopped with the run`
+  if (d.timed_out) return `${whenOf(step)} · stopped: it did not end within ${Math.round(d.seconds ?? 0)} seconds`
+  const how = d.passed ? 'passed' : d.exit_code == null ? 'could not be started' : `failed (exit code ${d.exit_code})`
+  return `${whenOf(step)} · ${how} · ${d.seconds ?? 0} s`
+}
+
+/** What the owner is asked before anything is put back. */
+export function undoQuestion(b: ChangesBlock): string {
+  const one = b.files.length === 1
+  return `Put the ${filesOf(b.files.length)} this run changed in ${b.folder} back as ${one ? 'it was' : 'they were'} before it? `
+    + 'A file that changed after the run is left as it is.'
 }
 
 export function answerCheckOf(m: Message): AnswerCheckBlock | null {
@@ -365,17 +471,119 @@ export function swarmMembers(steps: Step[], callId: string, result: string | nul
 const NEAR_LIMIT = 10   // degrees under the limit at which the line turns yellow
 
 /** One line about the machine: how hot the processor is and which local models hold memory. */
-export function machineLine(s: SystemStatus): { text: string; level: '' | 'warn' | 'bad' } {
+const whole = (n: number) => n.toLocaleString('en-US')
+type Loaded = NonNullable<SystemStatus['local_models']>[number]
+const inMemory = (m: Loaded) => ((m.size_mb ?? m.vram_mb) / 1024).toFixed(1)
+/** Partly on the GPU and partly on the processor, in the words of `ollama ps`: "40%/60% CPU/GPU". */
+const split = (m: Loaded) => /\/\d+% CPU\/GPU$/.test(m.processor ?? '')
+/** "GPU", "CPU", or the share that is on the GPU; "" from a server that does not say. */
+function share(m: Loaded): string {
+  if (m.processor === '100% GPU') return 'GPU'
+  if (m.processor === '100% CPU') return 'CPU'
+  const part = /\/(\d+)% CPU\/GPU$/.exec(m.processor ?? '')
+  return part ? `${part[1]}% GPU` : ''
+}
+
+/** How hot the processor is against its limit: '' | 'warn' (within ten degrees) | 'bad' (at or over it). */
+export function heat(s: SystemStatus): '' | 'warn' | 'bad' {
+  return s.cpu_temp === null || s.cpu_limit === null ? '' : s.cpu_temp >= s.cpu_limit ? 'bad' : s.cpu_temp >= s.cpu_limit - NEAR_LIMIT ? 'warn' : ''
+}
+
+/** The line at the bottom of the sidebar: the models that hold memory now, Ollama's and the one a colibri server
+ * holds. `about` says of each loaded model how much memory it takes, where Ollama runs it and with which window, and
+ * what it means when part of it is on the processor; of colibri's, its context; '' when the server does not say. */
+export function machineLine(s: SystemStatus): { text: string; level: '' | 'warn' | 'bad'; about: string } {
   const parts: string[] = []
   if (s.cpu_temp !== null) parts.push(`CPU ${Math.round(s.cpu_temp)}°C`)
+  const held = s.colibri ?? null      // absent from a server from before it asked colibri
+  const size = (m: Loaded) => `(${inMemory(m)} GB${share(m) ? `, ${share(m)}` : ''})`
+  const loaded = [...(s.local_models ?? []).map((m) => ({ name: m.name, how: size(m) })), ...(held ? [{ name: held.model, how: '(colibri)' }] : [])]
   if (s.local_models === null) parts.push('Ollama is not running')
-  else if (!s.local_models.length) parts.push('no local model loaded')
-  else {
-    const gb = s.local_models.reduce((n, m) => n + m.vram_mb, 0) / 1024
-    parts.push(`${s.local_models.map((m) => m.name).join(', ')} loaded (${gb.toFixed(1)} GB)`)
+  if (loaded.length === 1) parts.push(`${loaded[0].name} loaded ${loaded[0].how}`)
+  else if (loaded.length) parts.push(`${loaded.map((m) => `${m.name} ${m.how}`).join(', ')} loaded`)
+  else if (s.local_models !== null) parts.push('no local model loaded')
+  const about = [
+    ...(s.local_models ?? []).filter((m) => m.processor).map((m) =>
+      `${m.name}: ${inMemory(m)} GB in memory, ${m.processor} as \`ollama ps\` says it${m.context ? `, loaded with a window of ${whole(m.context)} tokens` : ''}.`
+      + (split(m) ? ' Part of it is on the processor, which makes it slow. On a machine with a graphics card it did not fit the memory of that card with this window: a smaller window or a smaller model fits.' : '')),
+    ...(held ? [`${held.model}: held by colibri${held.context ? `, with a context of ${whole(held.context)} tokens` : ''}.`] : []),
+  ].join(' ')
+  const level = heat(s) || (s.local_models?.some(split) ? 'warn' : '')
+  return { text: parts.join(' · '), level, about }
+}
+
+/** What the window setting says about the local model in use: what a window costs for it, how much of the window
+ * the rules and tools take, how Ollama runs it now; and a warning when the size in the field (`value`) leaves no
+ * room for a chat. */
+export function localWindowHint(local: LocalModel | null, value: number): { lines: string[]; warn: string | null } {
+  if (!local) return { lines: [], warn: null }
+  const most = local.limit ? ` It takes ${whole(local.limit)} tokens at most.` : ''
+  const lines = [
+    !local.answers ? `Ollama does not answer, so ${local.model} could not be asked what a window costs.`
+      : !local.installed ? `${local.model}, the fallback model, is not installed in Ollama (\`ollama pull ${local.model}\`).`
+        : local.bytes_per_token ? `With ${local.model}, each 8,192 tokens of window take about ${(local.bytes_per_token * 8192 / 2 ** 30).toFixed(1)} GB of memory beside the model itself.${most}`
+          : `What a larger window takes in memory depends on the model: \`ollama ps\` shows it once ${local.model} is loaded.${most}`,
+    `HunterAI's rules and tools take about ${whole(local.overhead.tokens)} tokens of the window (${whole(local.overhead.tools)} tools${local.overhead.on_demand ? `, and ${whole(local.overhead.on_demand)} more that are loaded on demand` : ''}).`,
+  ]
+  if (local.loaded) lines.push(`Ollama runs it ${local.loaded.processor}${local.loaded.context ? ` with a window of ${whole(local.loaded.context)}` : ''} now.`)
+  const short = 'Too small here: with the rules and tools, less than 8,192 tokens are left for the chat'
+  const warn = value >= local.enough ? null
+    : local.limit && local.limit < local.enough ? `${short}, and ${local.model} takes ${whole(local.limit)} at most. Switch off the MCP servers you do not need, or choose a fallback model with a larger window.`
+      : `${short}. Set ${whole(local.enough)} or more.`
+  return { lines, warn }
+}
+
+/** What Settings says under the address of colibri: what answers there, and a warning for what stands in the way
+ * of a chat with it. A server that does not answer is said without alarm: it may be off on purpose. `keySet`: a key
+ * is stored for it. */
+export function colibriHint(server: ColibriServer | null, keySet: boolean): { lines: string[]; warn: string | null } {
+  if (!server || server.state === 'off') return { lines: [], warn: null }
+  if (server.state === 'down') return { lines: [`Nothing answers at ${server.url}. Start colibri (./start-here.sh in the colibri folder), then press Check.`], warn: null }
+  if (server.state === 'key') return { lines: [], warn: `colibri at ${server.url} ${keySet ? 'did not accept the key that is set' : 'asks for a key'}: enter the one it was started with below.` }
+  if (server.state !== 'ok') return { lines: [], warn: `colibri: ${server.said}.` }
+  const context = server.context ? `a context of ${whole(server.context)} tokens` : 'a context it does not name'
+  const lines = [`It serves ${server.model}: ${context}, ${server.images ? 'reads pictures' : 'reads text only'}. Pick it in the model list of a chat.`]
+  if (server.overhead != null) lines.push(`HunterAI's rules and tools take about ${whole(server.overhead)} tokens of that context.`)
+  const warn = server.enough
+    ? `Too small here: with the rules and tools, less than 8,192 tokens are left for the chat. Start colibri with a larger context: ./start-here.sh --ctx ${server.enough} in the colibri folder (a larger context needs more memory).`
+    : null
+  return { lines, warn }
+}
+
+/** How a provider stands in the list of models: the heading of its group, and the line that stands there in place
+ * of models (null when it has models to offer). */
+export function providerGroup(p: ProviderInfo): { label: string; empty: string | null } {
+  if (!p.configured) {
+    const how = p.name === 'codex' ? 'install the codex CLI' : p.name === 'claude_code' ? 'install the claude CLI and log in'
+      : p.name === 'colibri' ? 'set its address in Settings' : 'add key in settings'
+    return { label: `${p.name} — ${how}`, empty: 'not configured' }
   }
-  const level = s.cpu_temp === null || s.cpu_limit === null ? '' : s.cpu_temp >= s.cpu_limit ? 'bad' : s.cpu_temp >= s.cpu_limit - NEAR_LIMIT ? 'warn' : ''
-  return { text: parts.join(' · '), level }
+  return { label: p.name, empty: p.models.length ? null : p.note ?? 'no models available' }
+}
+
+const HOW_TO_RESTART = 'Press Ctrl+C where it runs, then start it again (scripts/start.sh).'
+
+/** What the owner is told when the server that answers is not the code on disk. A server that does not say (no
+ * `restart_needed` in its status) is from before this page was built: it was updated and not restarted. */
+export function restartNotice(status: SystemStatus | null): string | null {
+  if (!status || status.restart_needed === false) return null
+  return status.restart_needed
+    ? `Restart HunterAI: its code on this machine changed after the server was started (an update, or an edit). Until then it runs the old code. ${HOW_TO_RESTART}`
+    : `Restart HunterAI: the server that answers is older than this page, so parts of the page will not work. ${HOW_TO_RESTART}`
+}
+
+/** The page runs an interface older than the one that is built now: an update, and this tab was open through it.
+ * `own` is the script this page runs. Null: nothing to say, or one side cannot tell. */
+export function reloadNotice(status: SystemStatus | null, own: string | null): string | null {
+  if (!status?.page || !own?.startsWith('/assets/') || status.page === own) return null
+  return 'Reload this page: HunterAI was updated after it was opened, and it still shows the interface from before.'
+}
+
+/** The parts that were in use and do not run now, for the line above the machine state. Null: nothing to say
+ * (also when the server does not answer, or is from before it could tell). */
+export function stoppedNotice(status: SystemStatus | null): string | null {
+  const stopped = status?.stopped ?? []
+  return stopped.length ? `Not working: ${stopped.map((s) => s.label).join(', ')}.` : null
 }
 
 export interface FindingFilter { severity?: string; status?: string; target_id?: string; text?: string }
@@ -447,4 +655,15 @@ export function compact(n: number): string {
   if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`
   if (n >= 1e3) return `${(n / 1e3).toFixed(1)}k`
   return String(n)
+}
+
+/** The line under the Caido panel's filter: how many requests are shown, and how many pictures, fonts, sound
+ * and film were left out of the list (they are recorded all the same). */
+export function caidoListLine(shown: number, total: number, leftOut: number, now: { busy: boolean; filtered: boolean }): string {
+  const media = `${leftOut} media request${leftOut === 1 ? '' : 's'} (images, fonts, audio, video)`
+  if (shown) return `Showing the newest ${shown} of ${total}.` + (leftOut ? ` ${media} left out: tick "Media too" to list them.` : '')
+  if (now.busy) return ''
+  if (leftOut) return `Only media was recorded here: ${media}. Tick "Media too" to list them.`
+  if (now.filtered) return 'Nothing matches this filter.'
+  return 'Nothing recorded yet. Requests of the browser tools, of web_fetch, of downloads, of caido_send, and of commands sent through Caido appear here.'
 }

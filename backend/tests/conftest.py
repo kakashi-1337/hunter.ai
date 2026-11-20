@@ -25,7 +25,7 @@ def isolated_home(tmp_path, monkeypatch):
                  "ABLIT_API_KEY", "ABLIT_MODEL", "ANTHROPIC_API_KEY", "OPENAI_API_KEY",
                  "XAI_API_KEY", "GEMINI_API_KEY", "OLLAMA_HOST", "HUNTERAI_MOCK",
                  "HUNTERAI_ABLIT_BASE_URL", "HUNTERAI_QDRANT_URL", "HUNTERAI_FAKE_EMBED_DELAY",
-                 "HUNTERAI_FAKE_EMBED_LOG"):
+                 "HUNTERAI_FAKE_EMBED_LOG", "HUNTERAI_COLIBRI_URL", "COLIBRI_API_KEY"):
         monkeypatch.delenv(name, raising=False)
     yield home
     # A test that undoes every patch (monkeypatch.undo()) would go on in the owner's real
@@ -61,6 +61,18 @@ def clean_tools():
     from hunterai.tools import registry
     yield
     registry.reset()
+
+
+@pytest.fixture(autouse=True)
+def no_certificate_handshakes(monkeypatch):
+    """No test makes a TLS handshake with a site of its own accord: a certificate is found good unless a test
+    puts the real check back (hunterai.certs.HANDSHAKE) or says otherwise."""
+    from hunterai import certs
+
+    async def good(host, ip, port):
+        return None
+    monkeypatch.setattr(certs, "_handshake", good)
+    certs._good.clear()     # noqa: SLF001
 
 
 @pytest.fixture(autouse=True)
@@ -108,8 +120,21 @@ async def clean_procs():
     yield
     await procs.shutdown()
     procs.reset()
+    from hunterai import hop, upstream
+    await hop.shutdown()           # a hop to the owner's proxy belongs to the test that asked for it
+    upstream._logins.clear()       # and so does a login it read
     from hunterai.tools import search
     search.set_provider(None)      # a fake provider never leaks into another test
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def runs_end_with_their_test():
+    """A test may stop looking at a run once it announced its end. The run is waited for all the same: it
+    is still closing its database connection, and a loop that closed under it would fail a later test
+    with "Event loop is closed"."""
+    yield
+    from tests.toolkit import runs_have_ended
+    await runs_have_ended()
 
 
 @pytest.fixture(autouse=True)

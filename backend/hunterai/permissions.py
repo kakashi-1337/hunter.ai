@@ -35,6 +35,7 @@ class Policy(BaseModel):
     read_paths: list[str] = []
     write_paths: list[str] = []
     domains: list[str] = []
+    auto: bool = False        # a chat's own switch: do not ask where only a default says "ask" (see auto_applies)
 
     @field_validator("read_paths", "write_paths")
     @classmethod
@@ -62,6 +63,7 @@ class Verdict:
 
 
 GRANT_REASON = "allowed for this chat earlier"
+AUTO_REASON = "auto-approve is on for this chat"
 
 
 class PermissionRequest(BaseModel):
@@ -123,6 +125,13 @@ def base_decision(mode: str, tool: Tool, global_policy: Policy,
         if value is not None:
             return value, rule
     return PRESETS.get(mode, PRESETS["pentesting"])[tool.risk], "preset"
+
+
+def auto_applies(rule: str, chat_policy: Policy) -> bool:
+    """Whether the chat's auto-approve answers an "ask" that `rule` gave. It stands in for the
+    owner where the mode or a default asks; an "ask" the owner set for this very chat stays,
+    and so does every deny. What a call touches is looked at afterwards, as always."""
+    return chat_policy.auto and rule not in ("chat-tool", "chat-risk")
 
 
 def offered(mode: str, tool: Tool, global_policy: Policy, chat_policy: Policy) -> bool:
@@ -208,7 +217,7 @@ def decide(*, mode: str, tool: Tool, prepared: Prepared, target: Target | None, 
     if decision == "deny":
         return deny(rule, reason)
     reasons = [reason]
-    # 5. allowlists and grants turn "ask" into "allow" (never the other way)
+    # 5. allowlists, grants, and the chat's auto-approve turn "ask" into "allow" (never the other way)
     if decision == "ask":
         writes = [p.path for p in prepared.paths if p.mode == "write"]
         if tool.risk == "write" and writes and all(
@@ -227,6 +236,9 @@ def decide(*, mode: str, tool: Tool, prepared: Prepared, target: Target | None, 
         elif grant is not None:
             decision = "allow"
             reasons.append(GRANT_REASON)
+        elif auto_applies(rule, chat_policy):
+            decision = "allow"
+            reasons.append(AUTO_REASON)
     # 6-9 only ever raise "allow" to "ask"
     warnings: list[str] = []
     can_chat = bool(prepared.grant_target)
@@ -236,10 +248,17 @@ def decide(*, mode: str, tool: Tool, prepared: Prepared, target: Target | None, 
             warnings.append(f"{host} is on this target's out-of-scope list")
             can_chat = False
         if not warned_grant:
+            for line in v.unread:
+                warnings.append(f"this target's out-of-scope line cannot be read, so nothing is checked against it: {line}")
             by_name = {h.host: h for h in prepared.hosts}
             for host in v.not_in:
                 if not _in_domains(by_name[host], domains, prepared.url_path):
                     warnings.append(f"{host} is not in this target's in-scope list")
+        if AUTO_REASON in reasons and not (target and [e for e in target.scope.get("in") or [] if isinstance(e, str)]):
+            # Auto-approve stands in for the owner inside a scope. Where the chat has none, a host a call names is theirs to answer.
+            named = [h.host for h in prepared.hosts if not _in_domains(h, domains, prepared.url_path)]
+            if named:
+                warnings.append(f"auto-approve covers hosts on a target's in-scope list, and this chat has none: {', '.join(named[:3])}")
     if _is_shell(tool) and any(resolve.is_own_api(h) for h in prepared.hosts):   # 7.
         warnings.append("this command addresses HunterAI's own API")
         can_chat = False

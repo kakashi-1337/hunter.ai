@@ -6,6 +6,12 @@ create table if not exists targets (
   created_at text not null
 );
 
+-- A target's own proxy, for the program that asks its hunters to come through one. The address holds the password.
+create table if not exists target_proxies (
+  target_id text primary key references targets(id) on delete cascade,
+  url text not null
+);
+
 create table if not exists chats (
   id text primary key,
   target_id text references targets(id) on delete set null,
@@ -267,6 +273,22 @@ create table if not exists personas (
   updated_at text not null
 );
 
+-- Skills: instructions for a kind of work, started with a slash command or loaded by the model
+create table if not exists skills (
+  id text primary key,
+  name text not null unique collate nocase,   -- also the slash command: lower-case letters, digits, hyphens
+  description text not null default '',       -- when to use it; the model reads this line
+  body text not null,                         -- the instructions
+  mode text,                                  -- plan | pentesting | coding | null: the mode its slash command switches to
+  source text not null default '',            -- where it came from: an address, a folder, "pasted text", "built in"
+  folder text,                                -- where its other files are kept, or null
+  enabled integer not null default 1,
+  auto integer not null default 1,            -- the model may load it by itself
+  builtin integer not null default 0,
+  created_at text not null,
+  updated_at text not null
+);
+
 -- Phase 5: memory
 create table if not exists memories (
   id text primary key,
@@ -296,3 +318,12 @@ create table if not exists queued_messages (
   created_at text not null
 );
 create index if not exists queued_messages_chat on queued_messages(chat_id, created_at);
+
+-- What stands in for the older part of a chat that no longer fits its model's context window.
+create table if not exists chat_summaries (
+  chat_id text not null references chats(id) on delete cascade,
+  upto_message_id text not null,       -- the summary covers the chat's path up to and including this message
+  summary text not null,
+  created_at text not null,
+  primary key (chat_id, upto_message_id)
+);

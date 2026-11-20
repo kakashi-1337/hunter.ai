@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  applyEvent, branchLabel, callDurations, canApprove, cardStatus, formatDuration, messageText, pendingAsks, pruneOptions, renderItems,
+  withAuto, applyEvent, branchLabel, callDurations, canApprove, cardStatus, formatDuration, messageText, pendingAsks, pruneOptions, renderItems,
   appendTail, commandLine, parseArgs, scanSummary, scanToolLine, citedNumbers, unknownCitations, decisionSummary, sourcesNote, sourcesOf, triageFacts, gateLine, parseLines, runningCalls, siblingPosition, stepSummary, stepsFromEvents, toolCards, visible, type ToolCard,
 } from '../tree'
 import type { Message, PermissionRequest, RunEvent, Step } from '../types'
@@ -13,6 +13,17 @@ const user = msg({ id: 'u1', blocks: [{ type: 'text', text: 'hi' }], siblings: [
 const started: RunEvent = { type: 'run_started', run_id: 'r', assistant_message_id: 'a1' }
 const run = (events: RunEvent[], start: Message[] = [user]) =>
   events.reduce((acc, e) => applyEvent(acc.messages, e, acc.target, 'u1'), { messages: start, target: null as string | null })
+
+describe('withAuto', () => {
+  it('switches auto-approve on next to what the chat already sets', () => {
+    expect(withAuto({ risk: { execute: 'ask' }, domains: ['a.test'] }, true)).toEqual({ risk: { execute: 'ask' }, domains: ['a.test'], auto: true })
+    expect(withAuto(undefined, true)).toEqual({ auto: true })
+  })
+  it('switched off, it leaves the policy as it was before: no trace of the switch', () => {
+    expect(withAuto({ risk: { execute: 'ask' }, auto: true }, false)).toEqual({ risk: { execute: 'ask' } })
+    expect('auto' in withAuto({ auto: true }, false)).toBe(false)
+  })
+})
 
 describe('applyEvent', () => {
   it('adds a streaming assistant message on run_started', () => {
@@ -183,6 +194,10 @@ describe('panel helpers', () => {
     expect(stepSummary(step({ name: 'read', detail: { arguments: { path: '/a' } } }))).toBe('/a')
     expect(stepSummary(step({ name: 'web_fetch', detail: { arguments: { url: 'https://x.test' } } }))).toBe('https://x.test')
     expect(stepSummary(step({ name: 'chunker_x', detail: { arguments: { n: 1 } } }))).toBe('chunker_x')
+    expect(stepSummary(step({ kind: 'model_call', name: 'anthropic/x', detail: { context: { results_cut: 3, messages_summarized: 8 } } })))
+      .toBe('anthropic/x · made to fit its context: 3 old results cut down, 8 earlier messages summarized')
+    expect(stepSummary(step({ kind: 'model_call', name: 'anthropic/x', detail: { context: { results_cut: 0, messages_summarized: 0, summary_used: true } } })))
+      .toBe('anthropic/x · made to fit its context: the summary of the earlier messages was used')
     expect(stepSummary(step({ kind: 'permission', detail: { decision: 'ask', answer: 'deny', rule: 'preset' } }))).toBe('ask → deny · preset')
     expect(stepSummary(step({ kind: 'permission', detail: { decision: 'allow', rule: 'chat-risk' } }))).toBe('allow · chat-risk')
   })

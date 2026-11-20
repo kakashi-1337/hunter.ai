@@ -145,3 +145,28 @@ async def test_allow_once_runs_the_tool(client):
     evs = await events(client, sent["run_id"])
     assert ran == [req["arguments"]] == [{"command": "id"}]
     assert evs[-1]["message"]["blocks"][-1]["text"] == "tool said: ok" and evs[-1]["status"] == "done"
+
+
+async def test_the_tool_list_shows_what_auto_approve_changes_for_a_chat(client):
+    chat = await new_chat(client)
+    listed = lambda: client.get("/api/tools", params={"chat_id": chat["id"]})      # noqa: E731
+    before = {t["name"]: t["decision"] for t in (await listed()).json()}
+    r = await client.patch(f"/api/chats/{chat['id']}", json={"permissions": {"auto": True}})
+    assert r.status_code == 200 and r.json()["permissions"] == {"auto": True}
+    after = {t["name"]: (t["decision"], t["rule"]) for t in (await listed()).json()}
+    asked = [n for n, decision in before.items() if decision == "ask"]
+    assert asked and all(after[n] == ("allow", "auto") for n in asked)
+    assert all(after[n][0] == decision for n, decision in before.items() if decision != "ask")
+
+
+async def test_with_auto_approve_a_call_that_would_have_asked_runs_unasked(client):
+    tool, ran = fake_tool("t_exec", risk="execute", grant_key="command"); registry.register(tool)
+    chat = await new_chat(client)
+    await client.patch(f"/api/chats/{chat['id']}", json={"permissions": {"auto": True}})
+    sent = await send(client, chat["id"], 'call t_exec {"command": "id"}', wait=False)
+    for _ in range(500):                                         # until it ran, or (the failure) waits for an answer
+        if ran or (await client.get(f"/api/runs/{sent['run_id']}/permissions")).json():
+            break
+        await asyncio.sleep(0.01)
+    assert ran == [{"command": "id"}]
+    assert [e for e in await events(client, sent["run_id"]) if e["type"] == "permission_request"] == []

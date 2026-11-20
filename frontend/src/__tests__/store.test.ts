@@ -239,6 +239,32 @@ describe('choices made before a chat exists', () => {
     await useStore.getState().newChat()
     expect(m.createChat).toHaveBeenCalledWith({ target_id: null, mode: 'coding', options: {} })
   })
+  it('are used up by the chat they made: the next new chat is left to the defaults again', async () => {
+    useStore.setState({ draft: { target_id: null, mode: 'pentesting', provider: null, model: null, options: {} } })
+    await useStore.getState().patchChat({ provider: 'colibri', model: 'qwen3.8-27b-colibri' })
+    m.createChat.mockResolvedValue(chat('N'))
+    m.sendMessage.mockResolvedValue(started('r9'))
+    await useStore.getState().send('hello', [])
+    expect(m.createChat).toHaveBeenLastCalledWith({ target_id: null, mode: 'pentesting', options: {}, provider: 'colibri', model: 'qwen3.8-27b-colibri' })
+    m.createChat.mockResolvedValue(chat('N2'))
+    await useStore.getState().newChat(null)
+    expect(m.createChat).toHaveBeenLastCalledWith({ target_id: null, mode: 'pentesting', options: {} })
+  })
+  it('are dropped when another chat is opened instead: the chat they were for was never made', async () => {
+    useStore.setState({ draft: { target_id: null, mode: 'pentesting', provider: null, model: null, options: {} } })
+    await useStore.getState().patchChat({ provider: 'colibri', model: 'qwen3.8-27b-colibri', mode: 'plan' })
+    await useStore.getState().openChat('A')
+    m.createChat.mockResolvedValue(chat('N3'))
+    await useStore.getState().newChat(null)
+    expect(m.createChat).toHaveBeenLastCalledWith({ target_id: null, mode: 'pentesting', options: {} })
+  })
+  it('stay when the chat could not be made', async () => {
+    useStore.setState({ draft: { target_id: null, mode: 'pentesting', provider: null, model: null, options: {} } })
+    await useStore.getState().patchChat({ provider: 'colibri', model: 'qwen3.8-27b-colibri' })
+    m.createChat.mockRejectedValue(new Error('no'))
+    await useStore.getState().newChat(null)
+    expect(useStore.getState().draft).toMatchObject({ provider: 'colibri', model: 'qwen3.8-27b-colibri' })
+  })
 })
 
 describe('new chat with an explicit "no target"', () => {

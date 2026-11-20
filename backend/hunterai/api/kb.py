@@ -444,12 +444,17 @@ async def _quiet(conn, cid: str) -> None:
 async def _embed(col, texts: list[str]) -> list[list[float]]:
     """Embed in the API process: short waits only, so a busy worker gives a 503, not a hang."""
     out: list[list[float]] = []
+    several = len(texts) > embed.EMBED_BATCH      # more than one request: the model is loaded once and unloaded once
+    embedder = None
     try:
-        embedder = embed.get(col.embedder, lock_timeout=30)
+        embedder = embed.get(col.embedder, lock_timeout=30, stays_loaded=several)
         for i in range(0, len(texts), embed.EMBED_BATCH):
             out += await embedder.embed(texts[i:i + embed.EMBED_BATCH])
     except EmbedError as e:
         raise HTTPException(503 if e.kind == "unavailable" else 400, e.message)
+    finally:
+        if several and embedder is not None:
+            await embedder.release()
     if any(len(v) != col.dimension for v in out):
         raise HTTPException(409, "the embedder's vector size no longer matches this collection; re-embed it")
     return out

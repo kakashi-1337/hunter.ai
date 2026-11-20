@@ -87,9 +87,25 @@ async def cleanup(conn, *, store: VectorStore | None = None) -> int:
     return cleaned
 
 
+async def _unload(used: list) -> None:
+    """The end of a job, however it ends: the model it kept loaded between its batches is unloaded.
+    Left behind, it would sit in memory beside whatever the machine does next."""
+    for embedder in used:
+        await asyncio.shield(embedder.release())
+
+
 async def run_job(conn, job: Job, *, store: VectorStore | None = None,
                   stop: Callable[[], bool] = lambda: False) -> str:
     """Run one claimed ingest job. Returns the state it left the job in."""
+    used: list = []
+    try:
+        return await _run_job(conn, job, used, store=store, stop=stop)
+    finally:
+        await _unload(used)
+
+
+async def _run_job(conn, job: Job, used: list, *, store: VectorStore | None = None,
+                   stop: Callable[[], bool] = lambda: False) -> str:
     payload = job.payload
     col = await kb.get_collection(conn, payload.get("collection_id", ""))
     if col is None:
@@ -133,10 +149,11 @@ async def run_job(conn, job: Job, *, store: VectorStore | None = None,
             await _sleep(delay)
 
     try:
-        embedder = embed.get(col.embedder)
+        embedder = embed.get(col.embedder, stays_loaded=True)
     except ValueError as e:
         await jobs.finish(conn, job.id, "failed", str(e))
         return "failed"
+    used.append(embedder)
 
     try:
         # ---- discover
@@ -289,6 +306,15 @@ async def run_reembed(conn, job: Job, *, store: VectorStore | None = None,
                       stop: Callable[[], bool] = lambda: False) -> str:
     """Embed a whole collection again with another embedder. The vectors are dropped first
     (their size may differ), so search finds less until the job is done."""
+    used: list = []
+    try:
+        return await _run_reembed(conn, job, used, store=store, stop=stop)
+    finally:
+        await _unload(used)
+
+
+async def _run_reembed(conn, job: Job, used: list, *, store: VectorStore | None = None,
+                       stop: Callable[[], bool] = lambda: False) -> str:
     col = await kb.get_collection(conn, job.payload.get("collection_id", ""))
     if col is None:
         await jobs.finish(conn, job.id, "failed", "collection no longer exists")
@@ -317,9 +343,10 @@ async def run_reembed(conn, job: Job, *, store: VectorStore | None = None,
                 return None, error
             await _sleep(delay)
     try:
-        embedder = embed.get(spec)
+        embedder = embed.get(spec, stays_loaded=True)
     except ValueError as e:
         return await fail(str(e))
+    used.append(embedder)
     if job.checkpoint.get("phase") != "embed":
         dim, error = await attempt(lambda: embed.dimension(embedder))
         if error:

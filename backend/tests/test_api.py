@@ -115,6 +115,35 @@ async def test_targets_crud(client):
     assert (await client.patch(f"/api/targets/{t['id']}", json={"notes": "n"})).status_code == 404
 
 
+async def test_a_scope_line_that_cannot_be_read_is_refused_with_its_reason(client):
+    r = await client.post("/api/targets", json={"name": "acme", "scope": {"in": ["*.acme.test", "acme.*"], "out": ["10.0.0.1-10.0.0.9"]}})
+    assert r.status_code == 422
+    said = r.json()["detail"]
+    assert "In scope: acme.*" in said and "Out of scope: 10.0.0.1-10.0.0.9" in said and "*.acme.test" not in said.replace("*.example.com", "")
+    assert (await client.get("/api/targets")).json() == []                                   # nothing was kept
+    t = (await client.post("/api/targets", json={"name": "acme", "scope": {"in": [" *.acme.test ", "", "acme.test/api/*"], "out": []}})).json()
+    assert t["scope"] == {"in": ["*.acme.test", "acme.test/api/*"], "out": []} and t["scope_problems"] == []
+    r = await client.patch(f"/api/targets/{t['id']}", json={"scope": {"in": ["*.acme.test"], "out": ["old.acme.test (legacy)"]}})
+    assert r.status_code == 422 and "Out of scope: old.acme.test (legacy)" in r.json()["detail"]
+    assert (await client.get("/api/targets")).json()[0]["scope"]["out"] == []                 # the stored lists are as they were
+    assert (await client.patch(f"/api/targets/{t['id']}", json={"notes": "only the notes"})).status_code == 200
+
+
+async def test_a_target_saved_before_the_check_says_which_of_its_lines_cannot_be_read(client):
+    from hunterai import db
+    from hunterai.repo import targets
+    conn = await db.connect()
+    try:
+        old = await targets.create(conn, "legacy", "", {"in": ["*.acme.test"], "out": ["*.old.*", "admin.acme.test"]})
+    finally:
+        await conn.close()
+    got = (await client.get("/api/targets")).json()[0]
+    assert got["scope"]["out"] == ["*.old.*", "admin.acme.test"]                              # shown as stored, for the owner to fix
+    assert [(p["side"], p["line"]) for p in got["scope_problems"]] == [("out", "*.old.*")] and "*.example.com" in got["scope_problems"][0]["why"]
+    r = await client.patch(f"/api/targets/{old.id}", json={"name": "renamed"})                # a change that leaves the lists alone goes through
+    assert r.status_code == 200 and r.json()["name"] == "renamed"
+
+
 async def test_edit_branches_and_switch_back(client):
     chat = await new_chat(client)
     first = await send(client, chat["id"], "one")
@@ -329,3 +358,19 @@ async def test_edit_keeps_attachments_unless_replaced(client):
     await events(client, r.json()["run_id"])
     got = (await client.get(f"/api/chats/{chat['id']}")).json()
     assert [b["type"] for b in got["messages"][0]["blocks"]] == ["text"]
+
+
+async def test_a_pasted_brief_is_read_and_nothing_is_saved(client):
+    text = "In scope\n*.example.com\nOut of scope\nblog.example.com\nSelf-XSS\n"
+    r = await client.post("/api/targets/brief", json={"text": text})
+    assert r.status_code == 200
+    assert r.json() == {"name": "example.com", "in": ["*.example.com"], "out": ["blog.example.com"], "unplaced": [],
+                        "unsupported": [], "notes": "Out of scope (from the brief):\n- Self-XSS"}
+    assert (await client.get("/api/targets")).json() == []
+
+
+async def test_a_brief_longer_than_the_limit_is_refused(client):
+    from hunterai import brief
+    r = await client.post("/api/targets/brief", json={"text": "a" * (brief.MAX_TEXT + 1)})
+    assert r.status_code == 422 and "longer than" in r.text
+    assert (await client.post("/api/targets/brief", json={})).status_code == 422

@@ -11,7 +11,7 @@ from hunterai.repo import settings
 from hunterai.tools import registry as tools
 from tests.test_engine import setup, use  # noqa: F401 (setup is a fixture)
 from tests.test_subagents import go, result_of
-from tests.toolkit import fake_tool
+from tests.toolkit import fake_tool, slow_connections
 
 
 def task(key, tool="t_echo"):
@@ -119,10 +119,9 @@ async def test_a_swarm_runs_three_subagents_at_a_time_and_judges_each_answer(con
     assert len({s.seq for s in run.steps}) == len(run.steps)       # no two steps share a number
 
 
-async def test_a_swarm_is_refused_for_a_local_chat_model_or_a_local_decision_model(conn, hive):
-    p, run, msg = await hive.run([task("a"), task("b")], provider="ollama")
-    block = next(b for b in msg.blocks if b.type == "tool_result")
-    assert block.is_error and "needs a cloud model" in block.content and "delegate" in block.content and hive.ran == []
+async def test_a_swarm_is_refused_for_a_local_decision_model(conn, hive):
+    """A cloud chat whose decision model is local: no swarm, and `delegate` is named instead. A chat whose own model
+    is local is offered neither tool (tests/test_local_alone.py)."""
     await settings.put(conn, "decision_provider", "ollama")
     await settings.put(conn, "decision_model", "qwen3:8b")
     p, run, msg = await hive.run([task("a"), task("b")])
@@ -156,3 +155,45 @@ async def test_the_owners_setting_decides_how_many_work_at_the_same_time(conn, h
     p, run, msg = await hive.run([task(k) for k in "abcdef"], crowd=peak)
     assert run.status == "done", run.error
     assert (p.peak, [r["status"] for r in result_of(msg)["results"]]) == (peak, ["done"] * 6)
+
+
+async def test_members_that_finish_together_do_not_trip_over_one_connection(conn, hive, monkeypatch):
+    """Six members close their steps one right after the other while another part of the app is writing. Their closings
+    shared one connection and overlapped on it: one member's read was still open when another's update began, and SQLite
+    answers a write that starts from an open read with "database is locked" at once, whatever the busy timeout."""
+    from hunterai import db
+    await settings.put(conn, "swarm_width", 6)
+    other = await db.connect()                              # the rest of the app: another chat, the ingest worker
+    slow_connections(monkeypatch, delay=0, fetch=0.01)      # a busy machine: time passes before the rows of a statement are read
+    waiting, all_here, held = [], asyncio.Event(), asyncio.Event()
+    work = subagents._one
+
+    async def done_one_after_the_other(ctx, args, swarm=False):
+        out = await work(ctx, args, swarm=swarm)
+        place = len(waiting)
+        waiting.append(ctx.step_id)
+        if len(waiting) == 6:
+            all_here.set()
+        await asyncio.wait_for(all_here.wait(), 5)
+        await asyncio.wait_for(held.wait(), 5)              # the other writer has the database now
+        await asyncio.sleep(0.005 * place)                  # each is done while the one before it is half-way through closing
+        return out
+    monkeypatch.setattr(subagents, "_one", done_one_after_the_other)
+
+    async def writes_meanwhile():
+        await all_here.wait()
+        await other.execute("begin immediate")
+        await other.execute("update settings set value_json=value_json where key='swarm_width'")
+        held.set()
+        await asyncio.sleep(0.08)                           # far below the busy timeout: a write that waits gets its turn
+        await other.commit()
+    writer = asyncio.create_task(writes_meanwhile())
+    try:
+        p, run, msg = await hive.run([task(k) for k in "abcdef"], crowd=6)
+    finally:
+        writer.cancel()
+        await asyncio.gather(writer, return_exceptions=True)
+        await other.close()
+    answer = next(b for b in msg.blocks if b.type == "tool_result")
+    assert len(waiting) == 6 and not answer.is_error, answer.content
+    assert run.status == "done" and [r["status"] for r in result_of(msg)["results"]] == ["done"] * 6

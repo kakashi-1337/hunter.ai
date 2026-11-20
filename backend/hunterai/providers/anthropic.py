@@ -8,7 +8,7 @@ import anthropic
 from .. import config
 from .base import (ModelInfo, Options, ProviderError, Stop, TextDelta, ThinkingDelta,
                    ThinkingSeal, ToolCall, ToolSpec, Usage, WireMessage, error_from_status,
-                   render_file_block, rounds, safe_call_id)
+                   render_file_block, rounds, safe_call_id, way_out)
 
 KEY_ENV = "ANTHROPIC_API_KEY"
 DEFAULT_MAX_TOKENS = 64000
@@ -88,19 +88,24 @@ class AnthropicProvider:
     def configured(self) -> bool:
         return bool(config.env(KEY_ENV))
 
-    def _get_client(self):
+    def _get_client(self, via: str | None = None):
+        """`via`: the local hop to the owner's proxy for the model providers (`base.way_out`), when one is set."""
         if self._client is not None:
             return self._client
         key = config.env(KEY_ENV)
         if not key:
             raise ProviderError("auth", f"{KEY_ENV} is not set")
+        if via:
+            return anthropic.AsyncAnthropic(api_key=key, http_client=anthropic.DefaultAsyncHttpxClient(proxy=via))
         return anthropic.AsyncAnthropic(api_key=key)
 
     async def models(self) -> list[ModelInfo]:
         try:
-            client = self._get_client()
+            client = self._get_client(await way_out())
             out = []
             async for m in client.models.list():
+                if is_legacy(m.id):
+                    continue        # the older models have a fifth of the context window; a chat that uses one keeps it
                 out.append(_info(m.id, getattr(m, "display_name", None) or m.id,
                                  getattr(m, "max_input_tokens", None)))
             if out:
@@ -150,7 +155,7 @@ class AnthropicProvider:
 
     async def stream(self, model: str, system: str, messages: list[WireMessage],
                      options: Options, tools: list[ToolSpec] | None = None):
-        client = self._get_client()
+        client = self._get_client(await way_out())
         use_beta, kw = self._request(model, system, messages, options, tools)
         api = client.beta.messages if use_beta else client.messages
         emitted = False

@@ -8,52 +8,44 @@ import { CaidoPanel } from './CaidoPanel'
 import { FindingsPanel } from './FindingsPanel'
 import { confirmBox } from '../dialog'
 import { MachineStatus } from './MachineStatus'
+import { NewChatDialog } from './NewChatDialog'
+import { PROXY_REFUSED, TargetForm } from './TargetForm'
+import { emptyScopeForm, scopeOf, scopeProblemMark, scopeProblemText, type ScopeForm } from '../scope'
 
-const lines = (s: string) => s.split('\n').map((x) => x.trim()).filter(Boolean)
-
-function TargetDialog({ target, onClose }: { target: Target | null; onClose: () => void }) {
+function TargetDialog({ target, onClose }: { target: Target; onClose: () => void }) {
   const refreshLists = useStore((s) => s.refreshLists)
   const setError = useStore((s) => s.setError)
-  const [name, setName] = useState(target?.name ?? '')
-  const [notes, setNotes] = useState(target?.notes ?? '')
-  const [inScope, setInScope] = useState((target?.scope.in ?? []).join('\n'))
-  const [outScope, setOutScope] = useState((target?.scope.out ?? []).join('\n'))
+  const [form, setForm] = useState<ScopeForm>(() => ({
+    ...emptyScopeForm(), name: target.name, notes: target.notes, inScope: target.scope.in.join('\n'), outScope: target.scope.out.join('\n'),
+  }))
+  const [unread, setUnread] = useState(false)
+  const [proxy, setProxy] = useState(target.proxy ?? '')       // as the server shows it: the password is never sent here
+  const [problem, setProblem] = useState(() => scopeProblemText(target.scope_problems))
+  const blocked = !form.name.trim() || unread
   const save = async () => {
+    if (blocked) return
     try {
-      const scope = { in: lines(inScope), out: lines(outScope) }
-      if (target) await api.updateTarget(target.id, { name: name.trim(), notes, scope })
-      else {
-        const t = await api.createTarget(name.trim())
-        await api.updateTarget(t.id, { notes, scope })
-      }
+      await api.updateTarget(target.id, { name: form.name.trim(), notes: form.notes, scope: scopeOf(form), proxy })
       await refreshLists()
       onClose()
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      if (e instanceof api.ApiError && e.status === 422) setProblem(e.message)     // a scope line or a proxy address that is refused: said in the form, beside the field
+      else setError(e instanceof Error ? e.message : String(e))
     }
   }
   return (
     <Modal
-      title={target ? 'Edit target' : 'New target'}
+      title="Edit target"
       onClose={onClose}
       footer={<>
+        {unread && <span className="hint grow">Read the brief first, or clear the box.</span>}
         <button className="btn" onClick={onClose}>Cancel</button>
-        <button className="btn primary" disabled={!name.trim()} onClick={save}>Save</button>
+        <button className="btn primary" disabled={blocked} onClick={() => void save()}>Save</button>
       </>}
     >
-      <label className="field"><span>Name</span>
-        <input autoFocus value={name} onChange={(e) => setName(e.target.value)} placeholder="Program or client name" />
-      </label>
-      <label className="field"><span>Notes</span>
-        <textarea rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Rules of engagement, accounts, anything the model should know" />
-      </label>
-      <label className="field"><span>In scope (one per line)</span>
-        <textarea className="mono" rows={4} value={inScope} onChange={(e) => setInScope(e.target.value)} placeholder={'*.example.com\napi.example.com/v2'} />
-      </label>
-      <label className="field"><span>Out of scope (one per line)</span>
-        <textarea className="mono" rows={3} value={outScope} onChange={(e) => setOutScope(e.target.value)} placeholder="payments.example.com" />
-      </label>
-      <div className="hint">Scope is given to the model as context and checked on every tool call: a host on the out-of-scope list, or one that is not on the in-scope list, always asks you first.</div>
+      <TargetForm form={form} problem={problem} onChange={setForm} onUnread={setUnread} onEnter={() => void save()} focusName
+        proxy={proxy} targetId={target.id} proxyKept={target.proxy_password && proxy.trim() === (target.proxy ?? '')}
+        onProxy={(value) => { setProxy(value); setProblem((said) => (said.startsWith(PROXY_REFUSED) ? '' : said)) }} />
     </Modal>
   )
 }
@@ -94,7 +86,7 @@ function ChatRow({ chat }: { chat: Chat }) {
   )
 }
 
-export function Sidebar({ onSettings }: { onSettings: () => void }) {
+export function Sidebar({ onSettings, onSetup }: { onSettings: () => void; onSetup?: () => void }) {
   const [panel, setPanel] = useState<'findings' | 'caido' | 'activity' | null>(null)
   const { targets, chats, searchResults } = useStore()
   const newChat = useStore((s) => s.newChat)
@@ -104,7 +96,8 @@ export function Sidebar({ onSettings }: { onSettings: () => void }) {
   const runSearch = useStore((s) => s.runSearch)
   const refreshLists = useStore((s) => s.refreshLists)
   const [query, setQuery] = useState('')
-  const [dialog, setDialog] = useState<{ target: Target | null } | null>(null)
+  const [editing, setEditing] = useState<Target | null>(null)
+  const [starting, setStarting] = useState(false)
   const searchRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
@@ -116,11 +109,11 @@ export function Sidebar({ onSettings }: { onSettings: () => void }) {
     const onKey = (e: KeyboardEvent) => {
       const mod = e.ctrlKey || e.metaKey
       if (mod && !e.shiftKey && e.key.toLowerCase() === 'k') { e.preventDefault(); searchRef.current?.focus(); searchRef.current?.select() }
-      if (mod && e.shiftKey && e.key.toLowerCase() === 'o') { e.preventDefault(); void newChat(null) }
+      if (mod && e.shiftKey && e.key.toLowerCase() === 'o') { e.preventDefault(); setStarting(true) }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [newChat])
+  }, [])
 
   const removeTarget = async (t: Target) => {
     if (!(await confirmBox(`Delete target "${t.name}"? Its chats are kept and move to "No target".`))) return
@@ -137,8 +130,7 @@ export function Sidebar({ onSettings }: { onSettings: () => void }) {
       <div className="side-head">
         <div className="row">
           <span className="brand grow">Hunter<b>AI</b></span>
-          <button className="btn" title="New target" onClick={() => setDialog({ target: null })}>+ Target</button>
-          <button className="btn primary" title="New chat (Ctrl+Shift+O)" onClick={() => newChat(null)}>+ Chat</button>
+          <button className="btn primary" title="New chat, with or without a target (Ctrl+Shift+O)" onClick={() => setStarting(true)}>+ New chat</button>
         </div>
         <input ref={searchRef} type="search" placeholder="Search messages (Ctrl+K)" value={query} aria-label="Search messages"
           onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => e.key === 'Escape' && setQuery('')} />
@@ -155,9 +147,10 @@ export function Sidebar({ onSettings }: { onSettings: () => void }) {
           <section key={target?.id ?? 'none'}>
             <div className="group-head">
               <span className="name" title={target?.name}>{target ? target.name : 'No target'}</span>
+              {target && scopeProblemMark(target) && <span className="warn-line" role="img" aria-label={scopeProblemMark(target)} title={scopeProblemMark(target)}>⚠</span>}
               <span className="actions">
                 <button className="icon" title="New chat here" aria-label={`New chat in ${target?.name ?? 'No target'}`} onClick={() => newChat(target?.id ?? null)}>＋</button>
-                {target && <button className="icon" title="Edit target and scope" aria-label={`Edit ${target.name}`} onClick={() => setDialog({ target })}>✎</button>}
+                {target && <button className="icon" title="Edit target and scope" aria-label={`Edit ${target.name}`} onClick={() => setEditing(target)}>✎</button>}
                 {target && <button className="icon" title="Delete target" aria-label={`Delete ${target.name}`} onClick={() => removeTarget(target)}>✕</button>}
               </span>
             </div>
@@ -166,7 +159,7 @@ export function Sidebar({ onSettings }: { onSettings: () => void }) {
         ))}
       </nav>
       <div className="side-foot">
-        <MachineStatus />
+        <MachineStatus onSetup={onSetup} />
         <div className="side-buttons">
           <button className="btn" title="Every finding of every target" onClick={() => setPanel('findings')}>Findings</button>
           <button className="btn" title="What Caido recorded of the agent's requests" onClick={() => setPanel('caido')}>Caido</button>
@@ -178,7 +171,8 @@ export function Sidebar({ onSettings }: { onSettings: () => void }) {
       {panel === 'findings' && <FindingsPanel onClose={() => setPanel(null)} />}
       {panel === 'caido' && <CaidoPanel onClose={() => setPanel(null)} />}
       {panel === 'activity' && <ActivityPanel onClose={() => setPanel(null)} />}
-      {dialog && <TargetDialog target={dialog.target} onClose={() => setDialog(null)} />}
+      {editing && <TargetDialog target={editing} onClose={() => setEditing(null)} />}
+      {starting && <NewChatDialog onClose={() => setStarting(false)} />}
     </aside>
   )
 }

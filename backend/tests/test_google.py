@@ -76,17 +76,47 @@ async def test_request_shape():
     cfg = kw["config"]
     assert cfg["system_instruction"] == "sys"
     assert (cfg["temperature"], cfg["top_p"], cfg["max_output_tokens"]) == (0.2, 0.9, 77)
-    assert cfg["thinking_config"] == {"include_thoughts": True}
+    assert cfg["thinking_config"] == {"include_thoughts": True, "thinking_level": "high"}
     assert "effort" not in str(cfg)
 
 
 async def test_thinking_options():
     c = FakeClient()
-    await run(c, Options(thinking_budget=2048))
+    await run(c, Options(thinking_budget=2048), model="gemini-2.5-flash")
     assert c.calls[0]["config"]["thinking_config"] == {"include_thoughts": True,
                                                        "thinking_budget": 2048}
-    await run(c, Options(thinking=False, thinking_budget=2048))
+    await run(c, Options(thinking=False, thinking_budget=2048), model="gemini-2.5-flash")
     assert c.calls[1]["config"]["thinking_config"] == {"thinking_budget": 0}
+
+
+@pytest.mark.parametrize("model,options,thinking_config", [
+    # Gemini 3 and later take a level; a budget is never sent with it
+    ("gemini-3.1-pro-preview", Options(effort="low"), {"include_thoughts": True, "thinking_level": "low"}),
+    ("gemini-3.1-pro-preview", Options(effort="medium"), {"include_thoughts": True, "thinking_level": "medium"}),
+    ("gemini-3.1-pro-preview", Options(effort="max"), {"include_thoughts": True, "thinking_level": "high"}),
+    ("gemini-3.1-pro-preview", Options(effort="high", thinking_budget=512), {"include_thoughts": True, "thinking_level": "high"}),
+    ("gemini-3.1-pro-preview", Options(thinking_budget=512), {"include_thoughts": True}),
+    ("gemini-3.1-pro-preview", Options(), {"include_thoughts": True}),
+    # a level the model does not have becomes the next one up
+    ("gemini-3-pro-preview", Options(effort="medium"), {"include_thoughts": True, "thinking_level": "high"}),
+    ("gemini-3.1-flash-lite-image", Options(effort="low"), {"include_thoughts": True, "thinking_level": "high"}),
+    # off is the lowest level the model has: these models cannot be switched off with a budget of 0
+    ("gemini-3-pro-preview", Options(thinking=False), {"thinking_level": "low"}),
+    ("gemini-3.6-flash", Options(thinking=False, effort="high"), {"thinking_level": "minimal"}),
+    ("gemini-flash-latest", Options(effort="medium"), {"include_thoughts": True, "thinking_level": "medium"}),
+    # Gemini 2.5 and earlier take a budget: the effort chooses one unless a budget is given
+    ("gemini-2.5-pro", Options(effort="low"), {"include_thoughts": True, "thinking_budget": 1024}),
+    ("gemini-2.5-flash", Options(effort="medium"), {"include_thoughts": True, "thinking_budget": 8192}),
+    ("gemini-2.5-flash", Options(effort="max"), {"include_thoughts": True, "thinking_budget": 24576}),
+    ("gemini-2.5-flash", Options(effort="high", thinking_budget=512), {"include_thoughts": True, "thinking_budget": 512}),
+    ("gemini-2.5-flash", Options(effort="high", thinking=False), {"thinking_budget": 0}),
+    # not a Gemini model: no effort to map
+    ("gemma-3-27b-it", Options(effort="high"), {"include_thoughts": True}),
+])
+async def test_effort_becomes_the_thinking_setting_the_model_takes(model, options, thinking_config):
+    c = FakeClient()
+    await run(c, options, model=model)
+    assert c.calls[0]["config"]["thinking_config"] == thinking_config
 
 
 async def test_roles_images_files_history():
@@ -149,7 +179,19 @@ async def test_models_filtered_to_generators():
     ms = await GoogleProvider(client=FakeClient(model_list=ml)).models()
     assert [(m.id, m.label, m.context_window) for m in ms] == [("gemini-pro-9", "Gemini Pro 9", 1000)]
     assert ms[0].supports_images
-    assert ms[0].options == ["temperature", "top_p", "max_tokens", "thinking", "thinking_budget"]
+    assert ms[0].options == ["temperature", "top_p", "max_tokens", "thinking", "effort"]
+    assert ms[0].efforts == ["low", "medium", "high"]
+
+
+async def test_each_model_offers_the_efforts_it_takes():
+    names = ["gemini-3-pro-preview", "gemini-3.1-flash-lite-image", "gemini-3.6-flash", "gemini-2.5-flash", "gemma-3-27b-it"]
+    ml = [NS(name=f"models/{n}", display_name=n, input_token_limit=1, supported_actions=["generateContent"]) for n in names]
+    by = {m.id: m for m in await GoogleProvider(client=FakeClient(model_list=ml)).models()}
+    base = ["temperature", "top_p", "max_tokens", "thinking"]
+    assert (by["gemini-3-pro-preview"].options, by["gemini-3-pro-preview"].efforts) == (base + ["effort"], ["low", "high"])
+    assert by["gemini-3.1-flash-lite-image"].efforts == ["high"] and by["gemini-3.6-flash"].efforts == ["low", "medium", "high"]
+    assert (by["gemini-2.5-flash"].options, by["gemini-2.5-flash"].efforts) == (base + ["thinking_budget", "effort"], ["low", "medium", "high"])
+    assert (by["gemma-3-27b-it"].options, by["gemma-3-27b-it"].efforts) == (base + ["thinking_budget"], [])
 
 
 async def test_models_empty_on_failure():

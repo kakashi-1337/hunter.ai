@@ -3,7 +3,7 @@ import { create } from 'zustand'
 import * as api from './api'
 import { streamRun } from './sse'
 import { applyEvent, pendingAsks, runningCalls, stepsFromEvents } from './tree'
-import type { QueuedMessage, Persona,
+import type { QueuedMessage, Persona, Skill,
   Chat, Message, Mode, Options, PermissionDecision, PermissionRequest, ProviderInfo, RunDetail, RunEvent, RunSummary, SearchHit, Settings, StartedRun, Step, Target,
 } from './types'
 
@@ -50,6 +50,13 @@ interface State {
   view: 'chat' | 'knowledge'
   personas: Persona[]
   refreshPersonas(): Promise<void>
+  skills: Skill[]
+  refreshSkills(): Promise<void>
+  skillsOpen: boolean
+  setSkillsOpen(open: boolean): void
+  /** The mode a chat was in before a skill's slash command moved it (to plan, say): where /go takes it back. */
+  modeBefore: Record<string, Mode>
+  rememberMode(chatId: string, mode: Mode): void
   choosePersona(id: string | null): Promise<void>
   setView(view: 'chat' | 'knowledge'): void
   loaded: boolean
@@ -73,6 +80,8 @@ interface State {
   remove(messageId: string): Promise<void>
   switchBranch(messageId: string): Promise<void>
   cancel(): Promise<void>
+  /** Put the files a run changed back as they were before it; the list under its answer then says so. */
+  undoRun(runId: string): Promise<void>
   answer(requestId: string, decision: PermissionDecision, note: string): Promise<void>
   patchChat(patch: Parameters<typeof api.updateChat>[1]): Promise<void>
   removeChat(id: string): Promise<void>
@@ -207,6 +216,7 @@ export const useStore = create<State>((set, get) => {
         await get().refreshLists()
         set({ settings: await api.getSettings(), loaded: true })
         await get().refreshPersonas()
+        await get().refreshSkills()
         await get().refreshProviders()
       }),
 
@@ -217,6 +227,10 @@ export const useStore = create<State>((set, get) => {
 
     refreshProviders: async () => set({ providers: await api.listProviders() }),
     refreshPersonas: async () => { try { set({ personas: await api.listPersonas() }) } catch { /* the picker stays as it was */ } },
+    skills: [], skillsOpen: false, modeBefore: {},
+    refreshSkills: async () => { try { set({ skills: await api.listSkills() }) } catch { /* the slash list stays as it was */ } },
+    setSkillsOpen: (skillsOpen) => set({ skillsOpen }),
+    rememberMode: (chatId, mode) => set({ modeBefore: { ...get().modeBefore, [chatId]: mode } }),
 
     choosePersona: async (id) => {
       const persona = get().personas.find((p) => p.id === id) ?? null
@@ -237,6 +251,9 @@ export const useStore = create<State>((set, get) => {
         set({
           view: 'chat', activeChatId: id, chat: null, messages: [], live: null, asks: [], runningCalls: [], workdir: null, runs: [], queued: [],
           selectedRunId: null, runDetail: null,
+          // The choices made before a chat existed end with the chat that is opened: they made this chat, or they
+          // were for one that was never made. Kept, they chose the model of every later new chat as well.
+          ...(id ? { draft: EMPTY_DRAFT } : {}),
         })
         if (!id) return
         await reloadChat(id)
@@ -318,6 +335,13 @@ export const useStore = create<State>((set, get) => {
       guard(async () => {
         const live = get().live
         if (live) await api.cancelRun(live.runId)
+      }),
+
+    undoRun: (runId) =>
+      guard(async () => {
+        const done = await api.undoRun(runId)
+        // Only the blocks changed (the list now says what was put back); the rest of the message stays as the page has it.
+        set({ messages: get().messages.map((m) => (m.id === done.message.id ? { ...m, blocks: done.message.blocks } : m)) })
       }),
 
     answer: (requestId, decision, note) =>

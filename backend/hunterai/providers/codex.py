@@ -22,7 +22,7 @@ import signal
 import tempfile
 
 from .base import (ModelInfo, Options, ProviderError, Stop, TextDelta, ThinkingDelta, Usage,
-                   WireMessage, flatten_text)
+                   WireMessage, flatten_text, cli_env, way_out)
 
 EXECUTABLE = "codex"
 _EFFORTS = {"low", "medium", "high", "xhigh"}
@@ -61,7 +61,8 @@ class CodexProvider:
         usage, emitted, failure = Usage(0, 0), False, None
         try:
             proc = await asyncio.create_subprocess_exec(
-                exe, *args, cwd=workdir, stdin=asyncio.subprocess.PIPE,
+                exe, *args, cwd=workdir, env=cli_env(dict(os.environ), await way_out()),
+                stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
                 limit=16 * 1024 * 1024, start_new_session=True)
             proc.stdin.write(flatten_conversation(system, messages).encode())

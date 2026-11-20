@@ -13,3 +13,6 @@ def register_all() -> None:
     from .. import subagents
     registry.register(subagents.tool())
     registry.register(subagents.swarm_tool())
+    from . import skill_tool
+    for tool in skill_tool.tools():
+        registry.register(tool)

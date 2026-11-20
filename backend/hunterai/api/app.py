@@ -6,14 +6,16 @@ from contextlib import asynccontextmanager
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 
-from .. import config, db, engine, mcp_manager, procs
+from .. import config, db, engine, mcp_manager, problems, procs, stale
 from ..tools import native
 from . import chats, findings, processes, providers, runs, search, settings, system, targets, tools, uploads
 from . import kb as kb_api
 from . import mcp_admin
 from . import personas as personas_api
+from . import skills as skills_api
 from . import memory as memory_api
 
 LOCAL_HOSTS = {"127.0.0.1", "localhost"}
@@ -31,6 +33,8 @@ async def lifespan(app: FastAPI):
     conn = await db.connect()
     try:
         await db.migrate(conn)
+        from .. import upstream
+        await upstream.remember(conn)       # proxy passwords are scrubbed from tool output from the first call on
         await engine.recover(conn)
         await procs.recover(conn)
     finally:
@@ -41,7 +45,8 @@ async def lifespan(app: FastAPI):
         # A server that cannot start does not stop the app; `read` then uses its fallback.
         await mcp_manager.start()
     from .. import caido
-    rerouting = asyncio.create_task(caido.refresh())     # a Caido left running gets this run's filter as its way out
+    # While recording is on, Caido is started with HunterAI; one that runs anyway gets this run's filter as its way out.
+    rerouting = asyncio.create_task(caido.at_start())
     try:
         yield
     finally:
@@ -55,8 +60,11 @@ async def lifespan(app: FastAPI):
                 await procs.shutdown()
             finally:
                 try:
-                    from .. import browser
-                    await browser.shutdown()
+                    from .. import browser, hop
+                    try:
+                        await browser.shutdown()
+                    finally:
+                        await hop.shutdown()      # after the commands and the browser that used a hop are gone
                 finally:
                     try:
                         from .. import caido
@@ -87,8 +95,19 @@ def create_app() -> FastAPI:
             return JSONResponse({"detail": "forbidden origin"}, status_code=403)
         return await call_next(request)
 
+    @app.exception_handler(RequestValidationError)
+    async def refused_input(request, exc):
+        # FastAPI's own answer is a list the page shows the first message of, without the name of the field.
+        return JSONResponse({"detail": problems.invalid(exc.errors(), stale.restart_needed())}, status_code=422)
+
+    @app.exception_handler(Exception)
+    async def own_fault(request, exc):
+        # Without this the page gets the words "Internal Server Error" and nothing to go on.
+        return JSONResponse({"detail": problems.own_failure(exc, f"answering {request.method} {request.url.path}")},
+                            status_code=500)
+
     for module in (targets, chats, runs, uploads, search, settings, providers, tools,
-                   processes, findings, kb_api, mcp_admin, personas_api, memory_api, system):
+                   processes, findings, kb_api, mcp_admin, personas_api, skills_api, memory_api, system):
         app.include_router(module.router)
 
     @app.get("/{path:path}", include_in_schema=False)

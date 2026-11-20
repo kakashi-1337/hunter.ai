@@ -5,7 +5,8 @@ import { branchLabel, callDurations, cardStatus, messageText, renderItems, sibli
 import type { AnswerCheckBlock, Block, Message } from '../types'
 import { copyText, Markdown } from './Markdown'
 import { SourcesList } from './SourcesList'
-import { answerCheckLine, answerCheckOf, sourcesOf, visible } from '../tree'
+import { answerCheckLine, answerCheckOf, changesOf, runningCheck, sourcesOf, visible } from '../tree'
+import { RunChanges } from './RunChanges'
 import { confirmBox } from '../dialog'
 import { ToolCard } from './ToolCard'
 
@@ -69,6 +70,9 @@ export function MessageItem({ message }: { message: Message }) {
   const durations = callDurations(steps ?? [])
   const items = message.role === 'assistant' ? renderItems(message) : []
   const streaming = message.status === 'streaming'
+  // The check of the folder runs inside the run, before its first change and after its answer: say so while it does.
+  const liveSteps = useStore((s) => (s.live && s.live.target === message.id ? s.live.steps : null))
+  const checking = streaming && liveSteps ? runningCheck(liveSteps) : null
   const { index, count } = siblingPosition(message)
   const isUser = message.role === 'user'
 
@@ -136,12 +140,16 @@ export function MessageItem({ message }: { message: Message }) {
               <Markdown key={i} text={item.text} />
             ) : item.kind === 'note' ? (
               <div key={i} className="owner-note"><div className="k">You, while the agent worked (read here)</div><div className="bubble">{item.text}</div></div>
+            ) : item.kind === 'notice' ? (
+              <div key={i} className={`answer-notice ${item.level}`} role="note">{item.text}</div>
             ) : (
               <ToolCard key={item.card.call.id} card={item.card} status={cardStatus(item.card, asks, running, !streaming)}
                 durationMs={durations[item.card.call.id]} steps={item.card.call.name === 'swarm' ? steps : undefined} />
             ))}
           {items.length === 0 && (streaming ? <span className="muted cursor">Waiting for the model</span> : <span className="muted">No output.</span>)}
           {streaming && items.length > 0 && items[items.length - 1].kind === 'text' && <span className="cursor" />}
+          {checking && <div className="run-changes" role="status">{visible(checking.text)}</div>}
+          {changesOf(message) && <RunChanges block={changesOf(message)!} />}
           {sourcesOf(message) && <SourcesList block={sourcesOf(message)!} answer={text} />}
           {answerCheckOf(message) && <AnswerCheck block={answerCheckOf(message)!} />}
         </>

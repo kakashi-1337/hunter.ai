@@ -31,3 +31,12 @@ def test_target_lines_follow_the_tool_lines():
     s = build_system("pentesting", t, ["read"], Path("/w"))
     assert s.index("Tools available now: read.") < s.index("Current target: acme")
     assert s.startswith(SYSTEM_PROMPTS["pentesting"])
+
+
+def test_the_model_is_told_which_scope_list_wins():
+    both = Target(id="t", name="acme", notes="", scope={"in": ["shop.acme.test"], "out": ["*.acme.test"]},
+                  created_at="x")
+    assert modes.SCOPE_PRECEDENCE in build_system("pentesting", both)
+    for scope in ({"in": [], "out": ["*.acme.test"]}, {"in": ["shop.acme.test"], "out": []}):
+        one = Target(id="t", name="acme", notes="", scope=scope, created_at="x")
+        assert modes.SCOPE_PRECEDENCE not in build_system("pentesting", one)

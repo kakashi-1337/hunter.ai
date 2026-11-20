@@ -25,6 +25,9 @@ FALLBACK_LINE_CHARS = 2_000
 MAX_WRITE_BYTES = 2 * 1024**2
 MAX_EDIT_BYTES = 2 * 1024**2
 PREVIEW_CHARS = 4_000
+LARGE_LINES = 30            # a change that takes this many lines out of a file asks the owner first, whatever the settings say
+LARGE_SHARE_FROM = 10       # ... and so does one that takes out half or more of a file of this many lines or more
+LARGE_REASON = "a change that takes away this much of a file always asks first, whatever the settings say"
 
 _INFO_KEYS = ("path:", "size:", "type:", "lines:", "chars:", "note:")
 
@@ -213,6 +216,22 @@ def _diff(old: str, new: str, p: Path) -> str:
                                         fromfile=f"{p} (current)", tofile=f"{p} (new)", n=3))
 
 
+def _removed(diff: str) -> int:
+    """Lines of the current content that a change takes away, counted in the comparison that is shown."""
+    return sum(1 for line in diff.split("\n@@", 1)[-1].splitlines() if line.startswith("-")) if "\n@@" in diff else 0
+
+
+def large_removal(state: dict) -> str | None:
+    """The warning for a change that takes away a large part of a file, from what its prepare step counted;
+    None for any other change. Such a change asks the owner first, whatever the settings say (see the runner)."""
+    if state.get("not_text"):
+        return f"this replaces the whole of {state.get('name')}, which is not text ({state['not_text']:,} bytes)"
+    removes, of = state.get("removes") or 0, state.get("of") or 0
+    if removes >= LARGE_LINES or (of >= LARGE_SHARE_FROM and removes * 2 >= of):
+        return f"this change removes {removes:,} of the {of:,} lines of {state.get('name')}"
+    return None
+
+
 def _text_of(p: Path) -> str | None:
     try:
         return p.read_bytes().decode("utf-8")
@@ -254,15 +273,20 @@ async def _prepare_write(ctx: ToolContext, args: dict) -> Prepared:
     if len(data) > MAX_WRITE_BYTES:
         raise ToolError(f"content is too large: {len(data):,} bytes (limit {MAX_WRITE_BYTES:,})")
     old = _text_of(p) if p.exists() else None
+    state = {"sha256": _sha(p), "tool": "write", "name": p.name}
     if p.exists():
         head = f"overwrite {p} ({p.stat().st_size:,} → {len(data):,} bytes)"
-        body = _diff(old, args["content"], p) if old is not None \
-            else "\n".join(args["content"].splitlines()[:60])
+        if old is not None:
+            body = _diff(old, args["content"], p)
+            state.update(removes=_removed(body), of=len(old.splitlines()))
+        else:
+            body = "\n".join(args["content"].splitlines()[:60])
+            state.update(not_text=p.stat().st_size)
     else:
         head = f"create {p} ({len(data):,} bytes)"
         body = "\n".join(args["content"].splitlines()[:60])
     return Prepared(paths=(PathUse(str(p), "write"),), grant_target=str(p),
-                    preview=_cut(f"{head}\n{body}"), state={"sha256": _sha(p), "tool": "write"})
+                    preview=_cut(f"{head}\n{body}"), state=state)
 
 
 async def _write(ctx: ToolContext, args: dict) -> ToolResult:
@@ -296,9 +320,11 @@ def _edited(p: Path, args: dict) -> tuple[str, int]:
 async def _prepare_edit(ctx: ToolContext, args: dict) -> Prepared:
     p = resolve.resolve_path(args["path"], ctx.workdir)
     new_text, count = _edited(p, args)
-    preview = f"edit {p} ({count} replacement(s))\n" + _diff(_text_of(p), new_text, p)
+    old_text = _text_of(p)
+    diff = _diff(old_text, new_text, p)
     return Prepared(paths=(PathUse(str(p), "write"),), grant_target=str(p),
-                    preview=_cut(preview), state={"sha256": _sha(p), "tool": "edit"})
+                    preview=_cut(f"edit {p} ({count} replacement(s))\n" + diff),
+                    state={"sha256": _sha(p), "tool": "edit", "name": p.name, "removes": _removed(diff), "of": len(old_text.splitlines())})
 
 
 async def _edit(ctx: ToolContext, args: dict) -> ToolResult:

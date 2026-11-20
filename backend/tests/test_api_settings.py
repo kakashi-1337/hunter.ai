@@ -77,6 +77,23 @@ async def test_key_endpoint_rejects_bad_values(client):
                              json={"value": "   "})).status_code == 400
 
 
+async def test_the_webhook_address_is_saved_from_settings(client):
+    hook = "https://discord.com/api/webhooks/123456789012345678/abcDEF_123-xyz"
+    assert (await client.get("/api/settings")).json()["notify_webhook_set"] is False
+    r = await client.put("/api/settings/keys/DISCORD_WEBHOOK_URL", json={"value": f"  {hook} "})
+    assert r.status_code == 204, r.text
+    assert config.env("DISCORD_WEBHOOK_URL") == hook
+    assert (await client.get("/api/settings")).json()["notify_webhook_set"] is True
+    bad = await client.put("/api/settings/keys/DISCORD_WEBHOOK_URL", json={"value": "https://evil.test/api/webhooks/1/a"})
+    assert bad.status_code == 400 and config.env("DISCORD_WEBHOOK_URL") == hook          # a refused value changes nothing
+
+
+def test_every_name_settings_offers_to_save_can_be_written():
+    from hunterai import envfile
+    from hunterai.api import settings as settings_api
+    assert set(settings_api.SECRET_NAMES) <= envfile.ALLOWED
+
+
 async def test_providers_lists_configured_flag_and_models(client):
     ps = {p["name"]: p for p in (await client.get("/api/providers")).json()}
     assert list(ps)[0] == "abliteration" and "mock" in ps
@@ -109,6 +126,32 @@ async def test_slow_or_broken_provider_does_not_break_the_list(client, monkeypat
     assert ps["ollama"]["models"] == [] and ps["mock"]["models"]
 
 
+async def test_the_window_for_local_models_is_16384_tokens_until_the_owner_sets_another(client):
+    from hunterai.api import providers as providers_api
+    from hunterai.providers import ollama
+    assert (await client.get("/api/settings")).json()["local_window"] == 16384
+    providers_api._cache["ollama"] = (1e18, {"name": "ollama", "models": [{"id": "m", "context_window": 16384}]})
+    saved = await client.put("/api/settings", json={"local_window": 32768})
+    assert saved.status_code == 200 and saved.json()["local_window"] == 32768
+    assert ollama.default_num_ctx() == 32768
+    assert "HUNTERAI_OLLAMA_NUM_CTX=32768" in config.env_file().read_text().splitlines()
+    assert "ollama" not in providers_api._cache                # the model list names each model's window: asked again
+    for bad in (100, 2047, 2_000_000, -1):
+        r = await client.put("/api/settings", json={"local_window": bad})
+        assert r.status_code == 400 and "2,048 to 1,048,576" in r.json()["detail"]
+    for not_a_number in ("many", 1.5):
+        assert (await client.put("/api/settings", json={"local_window": not_a_number})).status_code == 422
+    assert (await client.get("/api/settings")).json()["local_window"] == 32768
+    cleared = await client.put("/api/settings", json={"local_window": None})          # back to HunterAI's own
+    assert cleared.json()["local_window"] == 16384 and ollama.default_num_ctx() == 16384
+
+
+async def test_a_window_written_into_the_env_file_by_hand_is_what_settings_shows(client):
+    config.env_file().write_text("HUNTERAI_OLLAMA_NUM_CTX=24576\n")
+    assert (await client.get("/api/settings")).json()["local_window"] == 24576
+    assert (await client.put("/api/settings", json={"max_turns": 10})).json()["local_window"] == 24576    # another save leaves it
+
+
 async def test_kb_redact_is_on_by_default_and_can_be_switched(client):
     assert (await client.get("/api/settings")).json()["kb_redact"] is True
     assert (await client.put("/api/settings", json={"kb_redact": False})).json()["kb_redact"] is False
@@ -122,3 +165,25 @@ async def test_the_swarm_width_is_three_until_the_owner_sets_one_to_six(client):
     for bad in (0, 7, -1):
         assert (await client.put("/api/settings", json={"swarm_width": bad})).status_code == 400
     assert (await client.get("/api/settings")).json()["swarm_width"] == 5
+
+
+# ---- the cloud model for the subagents of a chat on a local model
+
+async def test_no_cloud_model_does_a_local_chats_subagent_work_until_the_owner_chooses_one(client):
+    s = (await client.get("/api/settings")).json()
+    assert s["subagent_provider"] is None and s["subagent_model"] is None
+    # what can be chosen: cloud providers that use tools. Not the local ones, and not the ones that have no tools here.
+    assert {"abliteration", "anthropic", "openai", "google", "xai"} <= set(s["subagent_providers"])
+    assert not {"ollama", "colibri", "codex", "claude_code"} & set(s["subagent_providers"])
+    r = await client.put("/api/settings", json={"subagent_provider": "anthropic", "subagent_model": "claude-sonnet-5-5"})
+    assert r.status_code == 200 and (r.json()["subagent_provider"], r.json()["subagent_model"]) == ("anthropic", "claude-sonnet-5-5")
+    r = await client.put("/api/settings", json={"subagent_provider": "", "subagent_model": ""})
+    assert r.status_code == 200 and r.json()["subagent_provider"] is None and r.json()["subagent_model"] is None
+
+
+@pytest.mark.parametrize("name", ["ollama", "colibri", "codex", "claude_code", "nope"])
+async def test_a_provider_that_cannot_do_subagent_work_is_refused_and_nothing_is_written(client, name):
+    r = await client.put("/api/settings", json={"subagent_provider": name, "subagent_model": "m", "max_turns": 7})
+    assert r.status_code == 400 and name in r.json()["detail"] and "cloud provider that uses tools" in r.json()["detail"]
+    s = (await client.get("/api/settings")).json()
+    assert s["subagent_provider"] is None and s["max_turns"] != 7

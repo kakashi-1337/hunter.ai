@@ -29,10 +29,11 @@ export function answer(value: boolean | string | null): void {
   current.resolve(value)
 }
 
-/** Resolves true when the owner agrees. A question that starts with Delete, Remove, Clear or Forget gets a red button. */
-export function confirmBox(message: string): Promise<boolean> {
+/** Resolves true when the owner agrees. A question that starts with Delete, Remove, Clear or Forget gets a red button,
+ * and so does one the caller marks as dangerous. */
+export function confirmBox(message: string, danger = false): Promise<boolean> {
   return new Promise((resolve) => open({
-    kind: 'confirm', message, initial: '', danger: /^(delete|remove|clear|forget)\b/i.test(message.trim()),
+    kind: 'confirm', message, initial: '', danger: danger || /^(delete|remove|clear|forget)\b/i.test(message.trim()),
     resolve: (v) => resolve(v === true),
   }))
 }

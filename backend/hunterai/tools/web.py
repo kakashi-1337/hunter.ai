@@ -25,6 +25,7 @@ TIMEOUT = httpx.Timeout(60.0, connect=10.0)     # per read
 FETCH_DEADLINE = 120                            # seconds, for a whole call
 DOWNLOAD_DEADLINE = 1800
 DEFAULT_DOWNLOAD_MB = 200
+RECORDED_DOWNLOAD_BYTES = 25 * 1024**2
 MAX_DOWNLOAD_MB = 2048
 FREE_DISK_FLOOR = procs.FREE_DISK_FLOOR
 USER_AGENT = "HunterAI/0.2"
@@ -131,7 +132,7 @@ def _redirect_target(ctx: ToolContext, current: str, location: str, ips: tuple[s
     if nxt.host != cur.host or not same_port:
         return new, cur.host
     verdict = resolve.scope_verdict(ctx.target, (HostUse(nxt.host, nxt.port, ips),), path)
-    if verdict.out or verdict.not_in:
+    if verdict.out or verdict.not_in or verdict.unread:     # an exclusion that cannot be read may cover where this leads
         return new, "this target's scope"
     return new, None
 
@@ -145,16 +146,18 @@ class _NotFollowed(Exception):
 async def _via_caido(ctx: ToolContext | None) -> tuple[tuple[str, int] | None, str]:
     """(Caido's proxy, "") when the owner switched on recording in Caido and it can be used;
     (None, why it is not recorded) when it is switched on and Caido cannot be used; else (None, "")."""
-    from .. import caido, db
-    from ..repo import settings
+    from .. import caido, db, upstream
     if not caido.available():
         return None, ""
     conn = await db.connect()
     try:
-        on = bool(await settings.get(conn, "browser_via_caido", False))
+        how = await caido.mode(conn)
+        target_id = ctx.target.id if ctx is not None and ctx.target is not None else None
+        if how == "default" and await upstream.of_target(conn, target_id) is not None:
+            how = "off"                  # nobody chose Caido, and this target has a proxy of its own: that one carries
     finally:
         await conn.close()
-    if not on:
+    if how == "off":
         return None, ""
     try:
         return await caido.proxy_address(), ""
@@ -170,24 +173,70 @@ def _named(method: str, url: str, headers: dict, body: bytes | None):
     return {"method": method, "url": url, "headers": send, "content": body}
 
 
+async def _own_proxy(ctx: ToolContext | None, caido_carries: bool = False):
+    """The owner's proxy for this call: the target's own, else the default from Settings. A target with a
+    proxy of its own is never carried by Caido instead: the program asked for that proxy, so the call stops."""
+    from .. import db, upstream
+    target_id = ctx.target.id if ctx is not None and ctx.target is not None else None
+    conn = await db.connect()
+    try:
+        if not caido_carries:
+            return await upstream.in_effect(conn, target_id)
+        if await upstream.of_target(conn, target_id) is not None:
+            raise ToolError("this target has a proxy of its own, and recording in Caido is switched on. The two are not "
+                            "combined: switch Caido's recording off in Settings for this work, or clear the target's "
+                            "proxy. Nothing was sent.")
+        return None
+    finally:
+        await conn.close()
+
+
+async def _proxied(up) -> httpx.AsyncClient:
+    """A client that sends everything to the owner's proxy, through the local hop that holds its login.
+    The site's certificate is checked unless the owner said the proxy reads https, and then only for a
+    proxy on this machine."""
+    from .. import hop
+    return httpx.AsyncClient(follow_redirects=False, trust_env=False, timeout=TIMEOUT, proxy=await hop.address(up),
+                             verify=not up.presents_its_own_certificates)
+
+
+def _proxy_failed(up, host: str, why: str) -> ToolError:
+    return ToolError(f"the proxy at {up.address} did not carry the request to {host}: {why}. Nothing was sent "
+                     "directly. Check the proxy, or change it in Settings or in the target.")
+
+
+_PROXY_SAYS = ("proxy-status", "x-brd-", "x-luminati-")      # where a proxy service says why it answered itself
+
+
 async def _open(stack, client, ctx: ToolContext, method: str, url: str, headers: dict,
-                body: bytes | None, via: tuple[str, int] | None = None):
+                body: bytes | None, via: tuple[str, int] | None = None, up=None):
     """Send the request, following allowed redirects on the pinned address (or, with `via`,
     through that proxy by name). Returns (response, final url, redirects followed). The
-    response is still streaming."""
+    response is still streaming. `up` is the owner's own proxy when that is the `via`."""
     ips = ctx.prepared.hosts[0].ips
     if not ips:
         raise ToolError("the host was not resolved")
     followed: list[str] = []
     while True:
-        _, host = _origin(url)
+        scheme, host = _origin(url)
+        if via is not None and up is None and scheme == "https":
+            from .. import certs         # Caido is in between, and it passes a bad certificate on: HunterAI looks itself
+            await certs.check(host.host, ips[0], host.port)
         try:
             response = await stack.enter_async_context(client.stream(
                 **(_named(method, url, headers, body) if via else _pinned(method, url, host, ips[0], headers, body))))
         except httpx.TimeoutException:
-            raise ToolError(f"request to {host.host} timed out") from None
+            raise (_proxy_failed(up, host.host, "no answer in time") if up
+                   else ToolError(f"request to {host.host} timed out")) from None
         except httpx.HTTPError as e:
-            raise ToolError(f"request to {host.host} failed: {type(e).__name__}") from None
+            from .. import hop
+            raise (_proxy_failed(up, host.host, hop.why(e)) if up
+                   else ToolError(f"request to {host.host} failed: {type(e).__name__}")) from None
+        if up is not None:             # an answer the hop or the proxy made itself is not the site's answer
+            from .. import hop
+            why = hop.answered_itself(response)
+            if why:
+                raise _proxy_failed(up, host.host, why)
         location = response.headers.get("location")
         if not (300 <= response.status_code < 400 and location):
             return response, url, followed
@@ -239,6 +288,7 @@ async def _fetch(ctx: ToolContext, args: dict) -> ToolResult:
     method = args.get("method") or "GET"
     body = args["body"].encode("utf-8") if args.get("body") is not None else None
     via, note = await _via_caido(ctx)
+    up = await _own_proxy(ctx, caido_carries=via is not None)      # the owner's own proxy, when Caido is not the way
     local, allowed = None, None
     if via is not None:
         from .. import caido
@@ -248,13 +298,14 @@ async def _fetch(ctx: ToolContext, args: dict) -> ToolResult:
         allowed = (await caido.egress()).local_ok.own
     try:
         async with asyncio.timeout(FETCH_DEADLINE), AsyncExitStack() as stack:
-            client = await stack.enter_async_context(_client(via))
+            client = await stack.enter_async_context(await _proxied(up) if up else _client(via))
             if local:
                 allowed.add(local)
                 stack.callback(allowed.discard, local)
             try:
                 response, final, followed = await _open(stack, client, ctx, method, args["url"],
-                                                        dict(args.get("headers") or {}), body, via)
+                                                        dict(args.get("headers") or {}), body,
+                                                        via or (up and (up.host, up.port)), up)
             except _NotFollowed as e:
                 return ToolResult(e.text)
             ctype = response.headers.get("content-type", "")
@@ -291,7 +342,11 @@ async def _fetch(ctx: ToolContext, args: dict) -> ToolResult:
         lines.append("redirects: " + "; ".join(followed))
     if via is not None:
         lines.append("recorded in Caido: the caido tool lists this request and can show it in full")
-    elif note:
+    elif up is not None:
+        lines.append(f"sent through the proxy at {up.address}")
+        if status >= 400 and not args.get("raw"):       # a proxy service that answers itself says so in these
+            lines += [f"{k}: {v}" for k, v in headers.items() if k.lower().startswith(_PROXY_SAYS)]
+    if note:                 # Caido is switched on and could not be used: said whichever way the request went
         lines.append(note)
     return ToolResult("\n".join(lines) + "\n\n" + text)
 
@@ -334,6 +389,32 @@ def _low_disk(free: int) -> ToolError:
     return ToolError(f"not enough free disk: {free / 1024**3:.1f} GiB free, the floor is 10 GiB")
 
 
+def _megabytes(n: int) -> str:
+    return f"{n // _MB} MB" if n >= _MB else f"{n} bytes"
+
+
+async def _recorded_download(ctx: ToolContext, url: str) -> tuple[tuple[str, int] | None, str]:
+    """(Caido's proxy, "") for a download that is to be recorded; (None, why not) while recording is on and this
+    one is not; (None, "") while recording is off. A picture, a font, sound or film is not sent through Caido:
+    its history is for what a site says and does, and such a file would only fill it."""
+    from .. import caido
+    ext = caido.media_extension(url)
+    if not ext:
+        return await _via_caido(ctx)
+    return None, f"not recorded in Caido: a media file ({ext})" if await caido.recording() else ""
+
+
+async def _local_through_caido(ctx: ToolContext, stack) -> None:
+    """A local address the owner allowed for this call is let through Caido's way out while the call runs."""
+    from .. import caido
+    checked = ctx.prepared.hosts[0]
+    if any(resolve.is_local(ip) for ip in checked.ips):
+        allowed = (await caido.egress()).local_ok.own
+        pair = (checked.host, checked.port)
+        allowed.add(pair)
+        stack.callback(allowed.discard, pair)
+
+
 async def _download(ctx: ToolContext, args: dict) -> ToolResult:
     from contextlib import AsyncExitStack
     dest = Path(ctx.prepared.paths[0].path)
@@ -343,49 +424,77 @@ async def _download(ctx: ToolContext, args: dict) -> ToolResult:
         raise _low_disk(_free(dest.parent))
     part = Path(str(dest) + ".part")
     made = False
+    again = "so the file was fetched again without Caido; the first request is in the history"
     try:
-        async with asyncio.timeout(DOWNLOAD_DEADLINE), AsyncExitStack() as stack:
-            client = await stack.enter_async_context(_client())
-            try:
-                response, final, _ = await _open(stack, client, ctx, "GET", args["url"], {}, None)
-            except _NotFollowed as e:
-                return ToolResult(e.text)
-            if response.status_code >= 400:
-                raise ToolError(f"download failed: HTTP {response.status_code} for {final}")
-            length = int(response.headers.get("content-length") or 0)
-            if length > cap_mb * _MB:
-                raise too_big
-            free = _free(dest.parent)
-            if free - length < FREE_DISK_FLOOR:
-                raise _low_disk(free)
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            fd = os.open(part, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
-            made = True
-            digest, size, since_check = hashlib.sha256(), 0, 0
-            with os.fdopen(fd, "wb") as f:
-                try:
-                    async for chunk in response.aiter_bytes():
-                        if ctx.cancel.is_set():
-                            raise asyncio.CancelledError
-                        size += len(chunk)
-                        if size > cap_mb * _MB:
-                            raise too_big
-                        f.write(chunk)
-                        digest.update(chunk)
-                        since_check += len(chunk)
-                        if since_check >= 8 * _MB:
-                            since_check = 0
-                            if _free(dest.parent) < FREE_DISK_FLOOR:
-                                raise _low_disk(_free(dest.parent))
-                except httpx.HTTPError as e:
-                    raise ToolError(f"download failed: {type(e).__name__}") from None
-            ctype = response.headers.get("content-type", "unknown")
+        async with asyncio.timeout(DOWNLOAD_DEADLINE):
+            up = await _own_proxy(ctx)          # the owner's own proxy carries the downloads of its chat, as it always did
+            via, unrecorded = None, ""
+            if up is None:
+                via, unrecorded = await _recorded_download(ctx, args["url"])
+            for way in ((via, None) if via else (None,)):
+                async with AsyncExitStack() as stack:
+                    client = await stack.enter_async_context(await _proxied(up) if up else _client(way))
+                    if way is not None:
+                        await _local_through_caido(ctx, stack)
+                    try:
+                        response, final, _ = await _open(stack, client, ctx, "GET", args["url"], {}, None,
+                                                         way or (up and (up.host, up.port)), up)
+                    except _NotFollowed as e:
+                        return ToolResult(e.text)
+                    if response.status_code >= 400:
+                        raise ToolError(f"download failed: HTTP {response.status_code} for {final}")
+                    length = int(response.headers.get("content-length") or 0)
+                    if length > cap_mb * _MB:
+                        raise too_big
+                    ctype = response.headers.get("content-type", "unknown")
+                    if way is not None:         # what Caido should not hold is left to the next way: the answer is closed unread
+                        from .. import caido
+                        if caido.media_type(ctype):
+                            unrecorded = f"not recorded in Caido: the answer is media ({ctype.split(';')[0].strip().lower()}), {again}"
+                            continue
+                        if length > RECORDED_DOWNLOAD_BYTES:
+                            unrecorded = f"not recorded in Caido: larger than the {_megabytes(RECORDED_DOWNLOAD_BYTES)} that are recorded, {again}"
+                            continue
+                    free = _free(dest.parent)
+                    if free - length < FREE_DISK_FLOOR:
+                        raise _low_disk(free)
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    fd = os.open(part, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                    made = True
+                    digest, size, since_check, outgrew = hashlib.sha256(), 0, 0, False
+                    with os.fdopen(fd, "wb") as f:
+                        try:
+                            async for chunk in response.aiter_bytes():
+                                if ctx.cancel.is_set():
+                                    raise asyncio.CancelledError
+                                size += len(chunk)
+                                if size > cap_mb * _MB:
+                                    raise too_big
+                                if way is not None and size > RECORDED_DOWNLOAD_BYTES:      # it did not say how long it is
+                                    outgrew = True
+                                    break
+                                f.write(chunk)
+                                digest.update(chunk)
+                                since_check += len(chunk)
+                                if since_check >= 8 * _MB:
+                                    since_check = 0
+                                    if _free(dest.parent) < FREE_DISK_FLOOR:
+                                        raise _low_disk(_free(dest.parent))
+                        except httpx.HTTPError as e:
+                            raise ToolError(f"download failed: {type(e).__name__}") from None
+                    if outgrew:
+                        os.unlink(part)
+                        made = False
+                        unrecorded = f"not recorded in Caido: larger than the {_megabytes(RECORDED_DOWNLOAD_BYTES)} that are recorded, {again}"
+                        continue
+                    recorded = way is not None
+                    break
         if resolve.resolve_path(str(dest), ctx.workdir) != dest:
             raise ToolError("the download folder changed during the download")
         os.replace(part, dest)
         made = False
-        return ToolResult(f"saved {dest} ({size} bytes, sha256 {digest.hexdigest()}, "
-                          f"content-type {ctype})")
+        return ToolResult(f"saved {dest} ({size} bytes, sha256 {digest.hexdigest()}, content-type {ctype})"
+                          + ("; recorded in Caido" if recorded else f"; {unrecorded}" if unrecorded else ""))
     except TimeoutError:
         raise ToolError(f"web_download stopped: it took longer than {DOWNLOAD_DEADLINE} s") from None
     finally:

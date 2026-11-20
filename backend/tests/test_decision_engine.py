@@ -124,6 +124,7 @@ async def test_adapters_send_the_schema_natively(monkeypatch):
     assert sent["response_format"] == {"type": "json_schema", "json_schema": {"name": "answer", "schema": schema, "strict": True}}
     route = respx.post("http://127.0.0.1:11434/api/chat").mock(
         return_value=httpx.Response(200, text=json.dumps({"message": {"content": "{}"}, "done": True}) + "\n"))
+    respx.post("http://127.0.0.1:11434/api/show").mock(return_value=httpx.Response(200, json={"capabilities": ["completion"]}))
     [e async for e in ollama.make().stream("qwen3:8b", "s", msgs, Options(json_schema=schema))]
     assert json.loads(route.calls.last.request.content)["format"] == schema
     assert Options(json_schema=schema).only(["temperature"]).json_schema == schema    # never filtered away

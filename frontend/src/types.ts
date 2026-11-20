@@ -8,6 +8,33 @@ export type Block =
   | SourcesBlock
   | AnswerCheckBlock
   | { type: 'owner_note'; text: string }
+  /** Something about the answer the owner has to know and its text does not show: it was cut off at a limit, or the
+   * provider's filter ended it. Never sent to a model. */
+  | { type: 'notice'; kind: string; text: string }
+  | ChangesBlock
+
+/** What a run in coding mode changed in its work folder, with the save points that let the owner put it back.
+ * `reason` says why there is no list (no save point could be kept). Never sent to a model. */
+export interface ChangesBlock {
+  type: 'changes'
+  run_id: string
+  folder: string
+  files: { path: string; change: 'new' | 'changed' | 'deleted' }[]
+  before: string
+  after: string
+  reason: string
+  /** The check of the folder before and after the run, when the owner set one for the folder. */
+  check?: FolderCheck | null
+  /** Every file is as it was before the run again: nothing is left to undo. */
+  undone: boolean
+  /** After an undo: the files that changed after the run and were left as they are. The undo can be asked again. */
+  left: string[]
+}
+
+/** One run of a folder's check: the command the owner set for the folder (the project's tests). */
+export interface CheckResult { passed: boolean; exit_code: number | null; seconds: number; timed_out: boolean; output: string }
+/** `after` is null when no check followed the run; `note` then says why. */
+export interface FolderCheck { command: string; before: CheckResult | null; after: CheckResult | null; note: string }
 
 export type MessageStatus = 'complete' | 'streaming' | 'error' | 'interrupted' | 'cancelled'
 export type Mode = 'plan' | 'pentesting' | 'coding'
@@ -63,6 +90,8 @@ export type Policy = Partial<{
   read_paths: string[]
   write_paths: string[]
   domains: string[]
+  /** A chat's own switch: do not ask where only the mode or a default says "ask". */
+  auto: boolean
 }>
 
 export interface PermissionRequest {
@@ -119,19 +148,46 @@ export interface McpStatus {
   error: string | null
 }
 
+/** A line of a stored scope that the scope check cannot read: it is checked against nothing until it is rewritten. */
+export interface ScopeProblem { side: 'in' | 'out'; line: string; why: string }
+
 export interface Target {
   id: string
   name: string
   notes: string
   scope: { in: string[]; out: string[] }
+  scope_problems?: ScopeProblem[]
+  /** This target's own proxy as it is shown: with the user name, never with the password. "" for none. */
+  proxy?: string
+  proxy_password?: boolean
   created_at: string
+}
+
+/** What the test of a proxy found: whether it carried a request, and the address and country sites see. */
+export interface ProxyTest {
+  ok: boolean
+  through: string
+  ms: number
+  ip: string
+  country: string
+  error: string
+}
+
+/** What a pasted program brief says about scope: read by rules on the server, shown for review, never saved by itself. */
+export interface BriefResult {
+  name: string
+  in: string[]
+  out: string[]
+  unplaced: string[]      // hosts the text names without a side
+  unsupported: string[]   // patterns no scope entry can say, as written
+  notes: string
 }
 
 export interface Step {
   id: string
   run_id: string
   seq: number
-  kind: 'model_call' | 'tool_call' | 'subagent' | 'permission' | 'fallback' | 'decision' | 'retrieval' | 'user_note'
+  kind: 'model_call' | 'tool_call' | 'subagent' | 'permission' | 'fallback' | 'decision' | 'retrieval' | 'user_note' | 'context' | 'check'
   parent_step_id?: string | null
   name: string
   status: string
@@ -172,18 +228,24 @@ export interface ModelInfo {
   supports_images: boolean
   options: string[]
   context_window: number | null
+  /** The effort values this model takes, when they are fewer than the usual five. */
+  efforts?: string[]
 }
 
 export interface ProviderInfo {
   name: string
   configured: boolean
   models: ModelInfo[]
+  /** Why it is set up and offers no model, when it knows (colibri: nothing answers at its address). */
+  note?: string
 }
 
 export interface Settings {
   default_provider: string
   default_model: string
   fallback_model: string
+  /** Tokens of context every call to a local (Ollama) model gets, unless the chat sets its own. */
+  local_window: number
   keys: Record<string, boolean>
   permissions: Policy
   max_turns: number
@@ -206,6 +268,28 @@ export interface Settings {
   notify_min_severity: Severity
   notify_webhook_set: boolean
   caido_available: boolean
+  /** The owner's proxy for the agent's traffic, as it is shown: "http://host:port" or "socks5://user@host:port"; "" for none. */
+  upstream_proxy: string
+  /** A password is stored with it. It is never sent to the page. */
+  upstream_proxy_password: boolean
+  /** It reads https and presents its own certificates (Burp, mitmproxy). Only honoured for a proxy on this machine. */
+  upstream_proxy_intercepts: boolean
+  /** Knowledge crawls go through that proxy too. Off: they connect directly. */
+  upstream_proxy_kb: boolean
+  /** The proxy the model providers are reached through, as it is shown; "" for none. */
+  provider_proxy: string
+  provider_proxy_password: boolean
+  /** Where the owner's colibri server is, as it is reached ("http://127.0.0.1:8000"); "" while colibri is not used.
+   * Absent: the server that answers is from before it knew colibri (it was updated and not started again). */
+  colibri_url?: string
+  /** A key is stored for it. It is never sent to the page. */
+  colibri_key_set?: boolean
+  /** The cloud model that does the subagent work of a chat on a local model. Null: such a chat has no subagents and
+   * its model works alone. `subagent_providers`: the providers that can be chosen, cloud ones that use tools. All
+   * three are absent from a server from before it knew of this. */
+  subagent_provider?: string | null
+  subagent_model?: string | null
+  subagent_providers?: string[]
 }
 
 export interface Goal {
@@ -420,6 +504,41 @@ export interface McpScan { name: string; state: string; report: McpScanReport | 
 
 export interface McpCheck { name: string; state: string; tools: string[]; error: string | null; ping_ms: number | null; log_tail: string; hints: string[] }
 
+/** Instructions for a kind of work. Its name is its slash command; the model follows it as the owner's own words. */
+export interface Skill {
+  id: string
+  name: string
+  description: string
+  body: string
+  mode: Mode | null         // the mode its slash command switches the chat to first
+  source: string
+  folder: string | null
+  files: string[]           // its other files, which the model can read
+  enabled: boolean
+  auto: boolean             // the model may load it by itself
+  builtin: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface SkillFinding { rule: string; severity: 'high' | 'medium' | 'info'; title: string; where: string; excerpt: string }
+
+/** One skill found in a source that was looked at. Nothing is kept until it is added. */
+export interface SkillCandidate {
+  key: string
+  name: string
+  description: string
+  mode: Mode | null
+  body: string
+  files: string[]
+  left_out: string[]        // files that do not come along: links, and whatever is over the limits
+  findings: SkillFinding[]
+  taken: boolean
+  problem: string | null
+}
+
+export interface SkillInspection { id: string; label: string; skills: SkillCandidate[] }
+
 export interface Persona {
   id: string
   name: string
@@ -457,11 +576,54 @@ export interface FindingRow extends Finding {
 export interface SystemStatus {
   cpu_temp: number | null
   cpu_limit: number | null
-  /** null: Ollama does not answer. */
-  local_models: { name: string; vram_mb: number }[] | null
+  /** null: Ollama does not answer. `size_mb`: all of the model in memory; `vram_mb`: the part on the GPU; `processor`:
+   * where it runs, in the words of `ollama ps`; `context`: the window it was loaded with. The last three are absent
+   * from a server that could not tell yet. */
+  local_models: { name: string; vram_mb: number; size_mb?: number; processor?: string; context?: number | null }[] | null
+  /** The model a colibri server holds now, with its context. Null: no address is set, or what is there serves no
+   * model to chat with. Absent: a server from before it asked colibri. */
+  colibri?: { model: string; context: number | null } | null
+  /** The server's code changed on disk after it started. Absent: a server from before it could tell. */
+  restart_needed?: boolean
+  /** The parts that were in use and do not run now: a service beside HunterAI that answered within the last week,
+   * an MCP server that is switched on and gave up. Absent: a server from before it could tell. */
+  stopped?: { id: string; label: string }[]
+  /** The script the built interface starts with now. Null: nothing is built. Absent: a server from before it could tell. */
+  page?: string | null
 }
 
-export interface CheckupItem { id: string; label: string; ok: boolean; required: boolean; detail: string; fix: string }
+/** The local model in use (the fallback model) and its window, for the hint beside the window setting. */
+export interface LocalModel {
+  answers: boolean             // Ollama answers
+  model: string
+  installed: boolean
+  window: number               // what a call to it gets now
+  limit: number | null         // the most tokens the model takes
+  bytes_per_token: number | null   // memory for one token of window, from the layers of the model
+  overhead: { tokens: number; tools: number; on_demand: number }   // what a new chat sends before the conversation
+  enough: number               // the window that leaves room for a chat beside that
+  loaded: { processor: string; context: number | null; size_mb: number } | null
+}
+
+/** What the colibri server at the address in Settings says of itself, for the line under that address. */
+export interface ColibriServer {
+  url: string
+  /** off: no address is set. down: nothing answers. key: it wants a key it was not given. refused: it refused who
+   * asked. odd: what answers is not colibri. nochat: its model does not chat. ok: it serves `model`. */
+  state: 'off' | 'down' | 'key' | 'refused' | 'odd' | 'nochat' | 'ok'
+  said: string                 // why it serves nothing to chat with, in words; '' for off and ok
+  model: string | null
+  context: number | null       // the tokens of context it holds; null when it does not say
+  images: boolean              // the model reads pictures
+  overhead: number | null      // what a new chat sends before the conversation, in tokens
+  enough: number | null        // the context to start it with, when its own leaves no room for a chat
+}
+
+export interface CheckupItem {
+  id: string; label: string; ok: boolean; required: boolean; detail: string; fix: string
+  /** It was in use and does not run now. Absent: a server from before it could tell. */
+  stopped?: boolean
+}
 export interface Checkup { ready: boolean; items: CheckupItem[] }
 
 export interface CaidoStatus {

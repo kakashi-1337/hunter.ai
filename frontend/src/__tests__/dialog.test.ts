@@ -16,6 +16,12 @@ describe('own dialogs', () => {
     answer(false)
     expect(await refused).toBe(false)
   })
+  it('a question the caller marks as dangerous gets the red button whatever its first word', async () => {
+    const asked = confirmBox('Switch auto-approve on for this chat?', true)
+    expect(useDialog.getState().current!.danger).toBe(true)
+    answer(false)
+    expect(await asked).toBe(false)
+  })
   it('a second question waits for the first', async () => {
     const a = confirmBox('Remove the server "x"?')
     const b = promptBox('New name', 'old')

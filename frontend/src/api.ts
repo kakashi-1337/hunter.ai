@@ -1,12 +1,13 @@
+import type { ProxyTest, Skill, SkillInspection } from './types'
 import type {
-  ActivitySummary, QueuedMessage, CaidoExchange, CaidoRow, CaidoStatus, Checkup, FindingRow, SystemStatus,
+  ActivitySummary, QueuedMessage, CaidoExchange, CaidoRow, CaidoStatus, Checkup, ColibriServer, FindingRow, LocalModel, SystemStatus,
   Memory, MemorySettings,
   Persona,
   McpCheck, McpInspection, McpReview, McpScan, McpServer,
   KbChunk,
   ChatKb, Collection, Job, JobAction, KbDocument, KbHealth, KbHit, KbStatus, UploadResult,
   Chat, Finding, Goal, Grant, McpStatus, Message, Mode, Options, PermissionDecision, PermissionRequest, ProcessInfo, ProviderInfo,
-  RunDetail, RunSummary, SearchHit, Settings, StartedRun, Target, ToolInfo, Upload,
+  BriefResult, RunDetail, RunSummary, SearchHit, Settings, StartedRun, Target, ToolInfo, Upload,
 } from './types'
 
 export class ApiError extends Error {
@@ -50,8 +51,11 @@ const q = (params: Record<string, string | null | undefined>) => {
 }
 
 export const listTargets = () => request<Target[]>('GET', '/api/targets')
-export const createTarget = (name: string) => request<Target>('POST', '/api/targets', { name })
-export const updateTarget = (id: string, patch: Partial<Pick<Target, 'name' | 'notes' | 'scope'>>) =>
+export const createTarget = (name: string, notes = '', scope?: Target['scope'], proxy = '') =>
+  request<Target>('POST', '/api/targets', { name, notes, ...(scope ? { scope } : {}), ...(proxy.trim() ? { proxy } : {}) })
+/** What a pasted program brief says about scope. Reads only: nothing is saved. */
+export const readBrief = (text: string) => request<BriefResult>('POST', '/api/targets/brief', { text })
+export const updateTarget = (id: string, patch: Partial<Pick<Target, 'name' | 'notes' | 'scope' | 'proxy'>>) =>
   request<Target>('PATCH', `/api/targets/${id}`, patch)
 export const deleteTarget = (id: string) => request<void>('DELETE', `/api/targets/${id}`)
 
@@ -59,6 +63,10 @@ export const listChats = (targetId?: string) => request<Chat[]>('GET', `/api/cha
 export const createChat = (body: { target_id?: string | null; mode?: Mode; provider?: string; model?: string; options?: Options; persona_id?: string | null }) =>
   request<Chat>('POST', '/api/chats', body)
 export const getChat = (id: string) => request<{ chat: Chat; messages: Message[]; workdir?: string }>('GET', `/api/chats/${id}`)
+/** The check of the chat's working folder: the command HunterAI runs there before and after a coding run. */
+export const getCheck = (chatId: string) => request<{ folder: string; command: string }>('GET', `/api/chats/${chatId}/check`)
+/** Set it for the folder (every chat that works there uses it); an empty command removes it. */
+export const putCheck = (chatId: string, command: string) => request<{ folder: string; command: string }>('PUT', `/api/chats/${chatId}/check`, { command })
 export const updateChat = (
   id: string, patch: Partial<Pick<Chat, 'title' | 'mode' | 'provider' | 'model' | 'options' | 'target_id' | 'workdir' | 'permissions' | 'persona_id'>>,
 ) => request<Chat>('PATCH', `/api/chats/${id}`, patch)
@@ -73,6 +81,8 @@ export const setActiveLeaf = (chatId: string, messageId: string) =>
   request<{ ok: boolean }>('POST', `/api/chats/${chatId}/active-leaf`, { message_id: messageId })
 
 export const cancelRun = (id: string) => request<{ cancelled: boolean }>('POST', `/api/runs/${id}/cancel`)
+/** Put the files a run changed back as they were before it. A file that changed after the run is left and named. */
+export const undoRun = (id: string) => request<{ message: Message; restored: string[]; left: string[] }>('POST', `/api/runs/${id}/undo`)
 export const getRun = (id: string) => request<RunDetail>('GET', `/api/runs/${id}`)
 export const listRuns = (chatId: string) => request<RunSummary[]>('GET', `/api/chats/${chatId}/runs`)
 
@@ -87,8 +97,15 @@ export const uploadUrl = (id: string) => `/api/uploads/${id}`
 export const search = (text: string) => request<SearchHit[]>('GET', `/api/search${q({ q: text })}`)
 export const listProviders = () => request<ProviderInfo[]>('GET', '/api/providers')
 export const getSettings = () => request<Settings>('GET', '/api/settings')
-export const putSettings = (patch: Partial<Pick<Settings, 'default_provider' | 'default_model' | 'fallback_model' | 'permissions' | 'max_turns' | 'swarm_width' | 'decision_provider' | 'decision_model' | 'decision_gate' | 'kb_redact' | 'vision_model' | 'browser_via_caido' | 'answer_check' | 'mcp_on_demand' | 'notify_findings' | 'notify_min_severity' | 'decision_engine'>>) =>
+export const putSettings = (patch: Partial<Pick<Settings, 'default_provider' | 'default_model' | 'fallback_model' | 'permissions' | 'max_turns' | 'swarm_width' | 'subagent_provider' | 'subagent_model' | 'decision_provider' | 'decision_model' | 'decision_gate' | 'kb_redact' | 'vision_model' | 'browser_via_caido' | 'answer_check' | 'mcp_on_demand' | 'notify_findings' | 'notify_min_severity' | 'decision_engine' | 'colibri_url'>> & { local_window?: number | null }) =>
   request<Settings>('PUT', '/api/settings', patch)
+/** The owner's own proxy for the agent's web traffic. The server refuses an address it cannot use and says why. */
+export const putProxy = (proxy: Partial<Pick<Settings, 'upstream_proxy' | 'upstream_proxy_intercepts' | 'upstream_proxy_kb' | 'provider_proxy'>>) =>
+  request<Settings>('PUT', '/api/settings', proxy)
+/** Send one request through a proxy: whether it answers, and the address and country that sites see. `address` is the
+ * field as it stands, saved or not; one shown without its password is tested with the stored password. */
+export const testProxy = (address: string, targetId?: string, providers = false) =>
+  request<ProxyTest>('POST', '/api/settings/proxy/test', { address, ...(targetId ? { target_id: targetId } : {}), ...(providers ? { providers } : {}) })
 export const putKey = (name: string, value: string) => request<void>('PUT', `/api/settings/keys/${name}`, { value })
 
 export const pendingPermissions = (runId: string) => request<PermissionRequest[]>('GET', `/api/runs/${runId}/permissions`)
@@ -179,6 +196,15 @@ export const listPersonas = () => request<Persona[]>('GET', '/api/personas')
 export const createPersona = (body: PersonaBody) => request<Persona>('POST', '/api/personas', body)
 export const changePersona = (id: string, body: PersonaBody) => request<Persona>('PATCH', `/api/personas/${id}`, body)
 export const deletePersona = (id: string) => request<void>('DELETE', `/api/personas/${id}`)
+
+export type SkillBody = Partial<Pick<Skill, 'name' | 'description' | 'body' | 'mode' | 'enabled' | 'auto'>>
+export const listSkills = () => request<Skill[]>('GET', '/api/skills')
+export const writeSkill = (body: SkillBody) => request<Skill>('POST', '/api/skills', body)
+export const changeSkill = (id: string, body: SkillBody) => request<Skill>('PATCH', `/api/skills/${id}`, body)
+export const deleteSkill = (id: string) => request<void>('DELETE', `/api/skills/${id}`)
+/** Brings a source here and lists the skills in it. Nothing is kept and nothing is run. */
+export const inspectSkills = (source: string) => request<SkillInspection>('POST', '/api/skills/inspect', { source })
+export const addSkills = (id: string, picks: { key: string; name?: string }[]) => request<Skill[]>('POST', '/api/skills/add', { id, picks })
 export const personaTools = () => request<string[]>('GET', '/api/personas/tools')
 
 // ---- memory
@@ -194,10 +220,18 @@ export const memorizeChat = (chatId: string) => request<Job>('POST', `/api/chats
 
 export const systemStatus = () => request<SystemStatus>('GET', '/api/system/status')
 export const systemCheckup = () => request<Checkup>('GET', '/api/system/checkup')
+/** The local model in use and its window: what a window costs for it, what the rules and tools take of it. */
+export const systemLocal = () => request<LocalModel>('GET', '/api/system/local')
+/** Asks the colibri server at the address in Settings what it serves. The server makes its list of models anew too. */
+export const systemColibri = () => request<ColibriServer>('GET', '/api/system/colibri')
+/** The parts that do not run now are not announced again until they have run again. */
+export const hideStopped = () => request<{ stopped: { id: string; label: string }[] }>('POST', '/api/system/stopped/hide')
+/** The state of this install as text for a report: versions, what runs and what does not. No key, proxy address, target or message. */
+export const systemDiagnostics = () => request<{ text: string }>('GET', '/api/system/diagnostics')
 export const caidoStatus = () => request<CaidoStatus>('GET', '/api/caido/status')
 export const caidoStart = () => request<CaidoStatus>('POST', '/api/caido/start')
-export const caidoRequests = (filter: string, limit = 50) =>
-  request<{ total: number; rows: CaidoRow[] }>('GET', `/api/caido/requests?limit=${limit}&filter=${encodeURIComponent(filter)}`)
+export const caidoRequests = (filter: string, media = false, limit = 50) =>
+  request<{ total: number; rows: CaidoRow[]; left_out: number }>('GET', `/api/caido/requests?limit=${limit}&media=${media}&filter=${encodeURIComponent(filter)}`)
 export const caidoRequest = (id: string) => request<CaidoExchange>('GET', `/api/caido/requests/${encodeURIComponent(id)}`)
 export const notifyTest = () => request<{ ok: boolean; detail: string }>('POST', '/api/notify/test')
 export const activity = (days: number) => request<ActivitySummary>('GET', `/api/activity?days=${days}`)

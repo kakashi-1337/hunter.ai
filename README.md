@@ -28,8 +28,8 @@ what is missing.
 
 - Chat with streaming, uploads, history grouped by target, search, edit-and-resend,
   retry, delete, and switchable message versions (nothing is overwritten).
-- Models from abliteration.ai (default), Anthropic, OpenAI, Google, xAI, Ollama, and
-  the Codex CLI, with per-model options.
+- Models from abliteration.ai (default), Anthropic, OpenAI, Google, xAI, Ollama, colibri,
+  and the Codex CLI, with per-model options.
 - `claude_code`: Claude through the `claude` CLI and its own login (a Claude subscription),
   for people who have no API key. HunterAI starts `claude -p` in an empty folder with no
   tools, no MCP servers, and none of your Claude Code settings, and never reads the login.
@@ -40,14 +40,24 @@ what is missing.
   be used by a program like this is for you to check in Anthropic's terms.
 - Fallback: if abliteration.ai is unreachable, times out, or keeps rate-limiting before
   it has produced any output, the answer comes from a local Ollama model and is labelled.
+  The chat is shortened to fit that model's window first, so it still knows what the chat
+  was about (see "The context window of local models").
   Bad key, no credits, and policy errors are shown as errors, never papered over.
 - Tools: the model can read, write, edit, run commands, fetch, download, and search.
   Every call passes the permission engine first; "ask" shows you the exact call and
   waits for your answer. Codex chats have no tools.
+- Undo for coding runs: the files a run changed in the working folder are listed under
+  its answer and can be put back with one button, without touching what you changed since
+  (see "Undo what a run changed").
+- A check for a working folder (the project's tests): run before and after each coding
+  run, with both outcomes under the answer (see "A check before and after each coding
+  run").
 - Trajectory per run: duration, turns, calls, tokens, and every model call, permission
   decision, and tool call. Survives restarts.
 - Modes (plan, pentesting, coding) and targets with scope. Scope is enforced on tool
-  calls: a host outside the target's scope always asks first.
+  calls: a host outside the target's scope always asks first. One **New chat** dialog
+  picks the target or makes one from a pasted program brief (see
+  [Targets and scope](#targets-and-scope)).
 
 - Orchestrator: the chat agent keeps a goal record, asks a decision model for
   probabilities instead of guessing, hands large tasks to subagents and checks what they
@@ -83,6 +93,74 @@ what is missing.
   you allowed stays allowed for the browser session of that chat, also after "once". Page
   text is given to the model as untrusted data. Needs the `camoufox` browser
   (`camoufox fetch` once).
+
+## Targets and scope
+
+**+ New chat** (Ctrl+Shift+O) asks one thing: which target the chat is for. No target is
+a normal chat; a target that exists puts the chat inside its scope; **New target…** makes
+one on the spot. The dialog opens on the target of the chat on screen, so another chat
+for the same engagement is one Enter away. The "+" beside a target in the sidebar still
+starts a chat there at once, and the pencil edits the target.
+
+A target has a name, notes for the model, and two lists with one entry a line: a host,
+`*.domain`, an IP or a CIDR, each with an optional `:port` and `/path-prefix`.
+
+A `*` is read in three places: as the first label (`*.example.com`), for any port
+(`example.com:*`), and alone at the end of a path (`example.com/api/*`, everything under
+`/api`; `https://*.example.com/*` is `*.example.com`). A line that fits no form, such as
+`example.*`, `10.0.0.1-10.0.0.50` or `old.example.com (legacy)`, would be checked against
+nothing, so saving it is refused and the form says what is wrong with each such line.
+The brief box below turns an address range into networks for you.
+
+A target saved by an older version may still hold such a line. It gets a warning mark in
+the sidebar, its edit dialog names the lines, and while one of them is on the
+out-of-scope list every call that names a host asks first and no redirect is followed:
+an exclusion that cannot be read may cover any of them.
+
+### Pasting a program brief
+
+Paste the program page from HackerOne, Bugcrowd, YesWeHack or Intigriti, a scope table,
+HackerOne's CSV export, or a plain list of hosts into the brief box of a new or an
+existing target. A paste is read at once (typed text waits for **Read the brief**) and
+what it says lands in the fields for you to check. Nothing is saved until you press
+Start chat or Save, and reading a brief only ever adds to the fields.
+
+Rules on your machine do the reading, not a model: the in-scope list decides which hosts
+a call may reach without a second look, and a brief is somebody else's text. The rules
+lean one way:
+
+- In scope: a table row marked in scope, an item of a list under an in-scope heading
+  (`In scope`, `Scope`, Intigriti's tiers), or a sentence that says so.
+- Out of scope: the same, and also a host a sentence says not to test. An out-of-scope
+  mark on a line beats the heading the line is under; an in-scope mark does not.
+- A host named on both sides is out. A rule about a host ("no automated scans on
+  `api.example.com`") does not take it out when a table or a list has it in scope.
+- A host that is only mentioned ("our status page runs on …") is listed as having no
+  side given, with a button for each side. It is saved only if you place it. So is a
+  listed host with a "no" beside it ("old.example.com - not ours"), and "in scope" has
+  to be said of the host, not merely stand in the same sentence.
+- The bare name of a platform everyone shares (`github.com`, `*.amazonaws.com`,
+  `zendesk.com`) is never put in scope from a brief. A tenant or a path on it is
+  (`example.zendesk.com`, `github.com/example/repo`).
+- A URL keeps its path as a prefix (`https://example.com/app/*` becomes
+  `example.com/app`), a range such as `10.0.0.8-11` becomes networks, and `hxxps://` or
+  `example[.]com` is read without the armor. App identifiers, shop links to apps, mail
+  addresses and file names are not hosts.
+- A pattern no entry can say (`*.example.*`, `api-*.example.com`) is shown as written
+  for you to spell out.
+- Lines of an out-of-scope section that name no host (bug classes, "any domain not
+  listed above") and lines with testing rules (a rate limit, a required header,
+  "do not …") go into the notes, where the model reads them.
+- A brief is at most 400,000 characters; paste the scope part of a longer one.
+
+### Which list wins
+
+A host on the out-of-scope list always asks first, with one exception: a host the
+in-scope list names itself (`shop.example.com`, or a single address) stays in scope
+where only a wildcard or a range on the out-of-scope list covers it. A program that
+excludes `*.example.com` and lists `shop.example.com` means the shop. A wildcard or a
+range on the in-scope list lifts nothing, and a host named on both lists is out. The
+model is told the same rule.
 
 ## Knowledge base
 
@@ -186,6 +264,82 @@ not called again in that run after the eighth; one good answer from it clears th
 call that succeeds can be repeated freely. Only tools that name their host are counted per
 host (`web_fetch`, the browser, `caido_send`); what a shell command does is not looked into.
 
+### Slash commands
+
+A line in the composer that starts with `/` and a command word changes the chat instead
+of being sent. Type `/` to see the list; keep typing to narrow it, Up and Down to move,
+Tab to complete, Enter to take the highlighted row, Escape to close the list.
+
+| Command | What it does |
+|---|---|
+| `/new` | A new chat on the same target. |
+| `/mode plan`, `pentesting`, `coding` | Sets the mode. |
+| `/model <name>` | Sets the model. Part of the name is enough when it fits one model (`/model haiku`). |
+| `/persona <name>`, `/persona none` | Sets who the assistant is for this chat. |
+| `/target <name>`, `/target none` | Sets the target of the chat. |
+| `/effort low`, `medium`, `high`, `xhigh`, `max`, `default` | How hard the model thinks, for a model that has the setting. |
+| `/stop` | Stops the run. |
+| `/go`, `/go coding` | Approves a plan: puts the chat back in the mode the work is done in and tells the model to carry it out. |
+| `/skills` | Opens the list of skills. |
+| `/plan <task>`, `/audit <what>`, `/debug <what>`, `/fix <what>`, and every skill you add | Starts the skill: the line goes to the model together with the skill's instructions. See [Skills](#skills). |
+
+A value that fits nothing, or more than one thing, is not sent: the line under the
+composer says what there is. While the agent works, only `/new` and `/stop` run. A line
+that starts with a slash but not with a command word (`/etc/passwd is readable`) is an
+ordinary message, a command that takes no value is a message as soon as more follows it
+(`/new endpoint is broken`), and a space in front of the slash always makes it a message.
+
+### Skills
+
+A skill is a set of instructions for a kind of work, in the Agent Skills shape: a
+`SKILL.md` with a name, a description and the instructions, and optionally other files
+beside it. Its name is its slash command.
+
+Four come built in. You can edit, switch off or delete each of them.
+
+| Skill | What the model does |
+|---|---|
+| `/plan` | Plans before it acts: says back what is asked, reads first, writes numbered steps with a check for each, lists assumptions and risks, then stops and asks for approval. The command puts the chat in plan mode, where nothing can be written or run, and `/go` approves the plan and returns the chat to the mode it was in. |
+| `/audit` | Audits a codebase or a change: maps entry points and trust boundaries, follows input to where it is used, and reports only findings it can back with a file, a line and a way to reproduce, ordered by severity. |
+| `/debug` | Finds the cause before any fix: reads the whole error, reproduces it, narrows it down, tests one hypothesis at a time, and proves the fix with a test that failed for the reason found. |
+| `/fix` | Fixes a bug or a failing test in steps that can each be taken back: makes the fault visible with a check, changes one thing, runs the check, and takes a change that did not work back out before it tries the next (by editing it back, never with `git checkout`, `reset`, `stash` or `clean`, which would also throw away your own work). It does not make a check pass by weakening it, stops after three changes that did not work, and reports the cause, the change and the output that proves it. The command puts the chat in coding mode, where the list of what the run changed, its Undo, and the folder's check stand under the answer (see [Undo what a run changed](#undo-what-a-run-changed-coding-mode)). |
+
+A built-in skill that is new in a later version arrives once, with the update. One you
+deleted stays deleted, one you rewrote stays as you wrote it, and a skill of your own
+that has the new one's name is kept.
+
+A skill reaches the model in two ways:
+
+- You type its slash command (`/plan map the login flow`). The instructions are part of
+  the run's system prompt for the rest of that chat, on the branch the command is on.
+- The model loads it with the `skill` tool when the task fits the description. The
+  system prompt lists the skills that are on and marked "the model may load it".
+
+**Settings → Manage skills** (or `/skills`) lists them, with a switch for each and a
+second one for whether the model may load it by itself. **Add a skill** takes the
+address of a GitHub or GitLab repository or of one skill's folder in it, an absolute
+folder path, or the pasted text of a `SKILL.md`. The source is brought to your machine
+and every skill in it is shown in full, with its other files listed, before anything is
+kept. Nothing in it is run. A check reads each text for hidden characters, look-alike
+letters, orders to keep something from you, key files and secrets, and hosts that take
+data out; what it finds is shown beside the skill, and a skill with a finding is not
+ticked for you.
+
+What to know before adding somebody else's skill:
+
+- The model follows a skill as your own instructions. That is the point of one and the
+  risk of one: read the text. The check finds known shapes, not intent.
+- A skill cannot change what a tool call is allowed to do. Permissions, the target's
+  scope and the mode decide every call as before.
+- A skill's other files are copied to `~/.hunterai/skills/<name>/` (at most 200 files,
+  1 MiB each, 8 MiB in all; links and hidden folders are left behind). The model reads
+  them with the `read` tool. The `write`, `edit` and download tools are refused there,
+  so a run does not rewrite a skill through them; an approved shell command can do what
+  you can, there as everywhere.
+- Only the repository's default branch is read. `allowed-tools` and other header keys of
+  a skill file are ignored; `mode: plan` (or `pentesting`, `coding`) is HunterAI's own
+  key for the mode the slash command switches to.
+
 ### Sending a message while the agent works
 
 You do not have to stop a run to tell the agent something. While it works, the Send button
@@ -198,6 +352,120 @@ you by imitating it. The hand-over is a step in the trajectory ("message from yo
 the run ends before the agent takes another step, what is still waiting is sent as your
 next message; after a stop or an error it stays in view for you to send or remove. Queued
 messages are text only.
+
+### A chat longer than the model's context window
+
+Every model call sends the whole chat. A chat that has outgrown its model's window is
+refused by the provider, and so is every message after that one. Before a call that comes
+close to the window, HunterAI makes the request smaller, in this order:
+
+1. old tool results are cut down to their first 300 characters, oldest first (the latest
+   four stay whole while there is room for them);
+2. the older turns are replaced by a summary that the chat's own model writes. The summary
+   is kept and used again for the calls after it.
+
+Only the request changes. What is stored, and what you see in the chat, stays whole, and
+the trajectory says on the model call what was done ("made to fit its context: ...").
+The window comes from the provider's model list. Where a provider does not say, the first
+refusal for size teaches it: the request is halved and the call is made once more. A
+summary is a model's account of the earlier part, so it can leave something out; a cut-down
+result says how long it was, and the tool can be run again. Subagents are not covered (they
+stop after 12 turns). The Anthropic list no longer offers the models before Claude 4.6,
+whose window is 200K tokens; a chat that already uses one keeps it.
+
+The system prompt and the tool definitions cannot be made smaller, so the chat is measured
+against the room they leave. With a small window that is most of it: see the next section.
+
+### The context window of local models
+
+A model behind Ollama has the window HunterAI gives it with each call: 16,384 tokens unless
+you set another size under Settings ("Context window for local models"; written to `.env`
+as `HUNTERAI_OLLAMA_NUM_CTX`) or in the chat's own options, and never more than the model
+takes (its `context_length`, read from Ollama). The size is always sent, because Ollama's
+own default follows the machine's memory, from 4,096 tokens to 256,000.
+
+HunterAI's rules and tool definitions alone are 6,000 tokens or more. A chat that does not
+fit beside them is shortened for the call as described above: a summary of its early part,
+and its latest turns as they were said. This is what a local model gets when it answers in
+place of the chat's own model (the fallback) after a long chat with a model whose window is
+far larger.
+
+A larger window keeps more of the chat and costs memory, and how much depends on the model.
+The field in Settings says it for the fallback model of your machine: what each 8,192
+tokens take (worked out from the model's layers as Ollama reports them: for every layer
+and every key-value head, the key and the value at two bytes a number; measured against
+Ollama 0.40.16 this was 2 to 6 percent under what Ollama reported), the most tokens the
+model takes, how many tokens your rules and tools take (the tools of your MCP servers
+included), and how Ollama runs the model now. When the window leaves less than 8,192 tokens
+for the chat beside the rules and tools, the field says which size is enough.
+
+Left to itself, Ollama removes the oldest messages of a request that is larger than the
+window, then tokens from its middle, and answers as if nothing had happened: the model has
+then lost the chat, and can lose part of its rules. So HunterAI asks it not to (`truncate`
+and `shift` are sent as false; Ollama then refuses instead), does not send a request that
+is larger than the window by its own count, and says so: "The request does not fit the
+context window of the local model ...", with the two sizes and where to change the window.
+
+### colibri: large models from memory and storage
+
+[colibri](https://github.com/JustVugg/colibri) is an engine of its own that runs large
+models on an ordinary machine: what fits is held in memory (and on the GPU when it can use
+it), and the rest is read from storage while the model works. It has its own setup, which
+finds the hardware, recommends a model that fits, and starts a server with an
+OpenAI-compatible API. HunterAI talks to that server; it does not install or start it.
+
+```sh
+git clone https://github.com/JustVugg/colibri.git
+cd colibri
+./start-here.sh        # first time: picks and downloads a model; later: starts what is set up
+```
+
+The setup ends by printing its addresses. Enter the one it calls the OpenAI base URL
+(`http://127.0.0.1:8000/v1` unless you chose another) under **Settings → colibri**. It is
+written to `.env` as `HUNTERAI_COLIBRI_URL`. Without an address colibri is not used, and
+nothing is asked anywhere. With one, the line under the field says what answers there, and
+the model is in the model list of every chat.
+
+What HunterAI takes from the server, and nothing else is assumed:
+
+- **One model.** A colibri server serves one model. A chat set to a model it no longer
+  serves is told which one it serves now, and nothing is sent.
+- **Its context window.** It is settled when colibri starts (by the memory there is, or by
+  `--ctx`), and a request and its answer share it. HunterAI makes a chat fit it as
+  described above. When the rules and tools of a new chat leave less than 8,192 tokens of
+  it, Settings and `scripts/smoke.sh` say which context to start colibri with
+  (`./start-here.sh --ctx 65536` in the colibri folder; a larger context needs more
+  memory). A request colibri refuses for its size after all is made smaller and sent once
+  more.
+- **Whether the model reads pictures.** colibri holds one picture for a request: the
+  latest one is sent, and each earlier one becomes a line that says so and names the
+  `look_at_image` tool. A request larger than the 4 MB colibri reads is not sent, with the
+  size of the picture in the words.
+- **Thinking** is a switch (Options → Thinking). There is no "Reasoning effort" for a
+  colibri model: each family of models takes other values and refuses the rest.
+
+It works on one request at a time and lets the others wait, five minutes unless it was
+started with another `--queue-timeout`. HunterAI waits longer than that for a first byte,
+and says "colibri was busy with other requests ..." when colibri gives up on one. A chat
+on a colibri model therefore has no subagents: `delegate` and `swarm` are not offered to
+it, as with an Ollama model, and it does the work itself (see "Orchestrator").
+
+When colibri's engine fails in the middle of an answer, its server sends no error: the
+answer just stops, under a status of success. HunterAI takes an answer that was never
+declared finished for a failure, keeps what came, and says so. The tool calls of such an
+answer are not run.
+
+A key is needed only when colibri was started with one (`COLI_API_KEY`, or `--api-key`):
+enter it beside the address (`COLIBRI_API_KEY` in `.env`). The address may be another
+machine; colibri then has to be told the name it is asked by (`--allowed-host`), and it
+says so itself when it is not. HunterAI asks colibri directly: neither the proxy for the
+model providers nor a proxy variable of the environment is used.
+
+All of this was held against colibri's own server (`c/openai_server.py` at commit
+`0a5504a`) run with a scripted engine in place of a model: its model list, its streams, its
+tool calls for the GLM and Qwen families, its refusals, a queue that is full, and an engine
+that exits in the middle of an answer. `tests/colibri_wire.py` holds what it sent. Not
+tried: a real model, and a real picture.
 
 ### Answer check
 
@@ -226,6 +494,15 @@ unless set; `off` disables it) it waits until the temperature is five degrees un
 then goes on. The entry in the queue says "cooling down" with the temperature meanwhile.
 The job takes longer; the machine does not switch itself off in the middle of it.
 
+The embedding model does not stay loaded behind its work. Ollama would keep it for five
+minutes after every request, and memory recall makes one on each message you send, attached
+collection or not, so it used to sit in memory beside a local chat model for a whole
+conversation. A single request (a search, a recall, a note) now unloads the model with its
+own answer; a job keeps it loaded between its batches and unloads it when it ends, is paused
+or fails. `HUNTERAI_EMBED_KEEP_LOADED` sets the seconds it stays after a single request
+instead (`0` unless set), for a machine with room for it. To have no embedding at all on a
+message, switch "offer notes" off under Settings, "Manage memory".
+
 While a repository is cloned or a site is crawled, the entry says so and how much has been
 downloaded, and an entry that has not started says it is waiting its turn (one job runs at
 a time). A job survives a crash or a reboot: when the worker starts again it takes up every
@@ -247,8 +524,29 @@ line.
 | `focus` | The chat's goal record: objective, success criteria, open items. It is part of every request, and `check` says how far a next step drifts from it. |
 | `critique` | A second look at a claim or plan: assumptions, alternatives, what would disprove it. Labelled as the model's analysis. |
 | `finding_add`, `finding_update`, `finding_list` | Findings for the chat's target. Adding one runs a triage first (severity, false positive, in scope, duplicate), stored with it. |
-| `delegate` | Runs a subagent on a brief with a subset of the chat's tools: at most 12 model turns, 8 subagents per run, one at a time, never nested. Its calls pass the same permission engine and its questions appear in the same chat. |
-| `swarm` | Runs 2 to 6 such subagents on independent briefs, three at a time unless you set another number (Settings, 1 to 6: more load this machine and your provider's rate limit); each answer is judged on its own. Cloud models only: with a local chat model or a local decision model it is refused and `delegate` is the tool, because this kind of machine cannot run two local models at once. A swarm member has no fallback to the local model, no browser (a chat has one), and no `look_at_image`. |
+| `delegate` | Runs a subagent on a brief with a subset of the chat's tools: at most 12 model turns, 8 subagents per run, one at a time, never nested. Its calls pass the same permission engine and its questions appear in the same chat. For a chat on a cloud model, and for a chat on a local model when you chose a cloud model for its subagents (see "A local model works alone" below). |
+| `swarm` | Runs 2 to 6 such subagents on independent briefs, three at a time unless you set another number (Settings, 1 to 6: more load this machine and your provider's rate limit); each answer is judged on its own. Offered where `delegate` is, and the decision model has to be a cloud one too, because it checks every answer: with a local decision model a swarm is refused and `delegate` is the tool. A swarm member has no fallback to the local model, no browser (a chat has one), and no `look_at_image`. |
+
+- **A local model works alone.** A subagent runs on the chat's own model. A local model
+  (Ollama, colibri) that delegates would hand the task to itself: it reads the task once
+  more from an empty context, on a machine that runs one local model at a time, and
+  nothing is won. A chat on a local model is therefore not offered `delegate` or `swarm`
+  and is not told of them: it does the work itself, one part after another. The same
+  holds for a run that went on with the local Ollama model because abliteration.ai did
+  not answer: it was told of both tools before that, and a call to either is refused with
+  the reason, before anything is asked of you.
+- **Unless you give its subagents a cloud model** (Settings, "Cloud model for the subagents
+  of a local chat"; none at the start). You choose among the cloud providers that use tools
+  here and have their key (abliteration.ai, Anthropic, OpenAI, Google, xAI; not the Codex
+  and Claude Code logins, which have no tools in HunterAI). A chat on a local model is then
+  offered `delegate` and `swarm` again, and its subagents work on that model: the local
+  model writes the brief and reads the result. What a subagent reads and does (the brief,
+  the tool results, pages of the target) goes to that provider, which is why nothing is
+  chosen for you. A subagent of this kind is never moved to the local model when the cloud
+  one fails. And a cloud model that does not do the work is not tried again: after a
+  subagent that failed, or that answered without using a single tool, the result says so
+  and no further subagent is started in that run. Without a key for the chosen provider
+  the local model works alone, as if none were chosen.
 
 - **Verification.** When a subagent finishes, the decision model judges its answer against
   the tool output in its own transcript. Only a confident "accept" is reported as
@@ -283,6 +581,7 @@ A decision is a model's estimate. The numbers say how sure the model is, not how
 | `web_download` | network | Saves a URL into `<working folder>/downloads`. 200 MB by default, 2048 MB at most; refuses when free disk would fall under 10 GiB. |
 | `web_search` | network | Searches through the local SearXNG container. |
 | `repo_search` | read | ripgrep under a folder. Files that usually hold credentials are never searched. |
+| `skill` | read | Loads a skill you installed, by name. What it returns is followed as your instructions (see [Skills](#skills)). |
 
 A result longer than 30,000 characters reaches the model as its first 22,000 and last
 8,000 characters, with the path of the file that holds all of it.
@@ -308,6 +607,12 @@ Whatever the setting, these always apply:
   on this machine or the local network, a path that usually holds credentials, and
   arguments with invisible characters each force an ask with a warning.
 - A tool can never call HunterAI's own API. A shell command that names it always asks.
+- A `write` or `edit` that takes away a large part of a file asks first: 30 lines or more,
+  or half or more of a file of 10 lines or more, or a file that is not text written over
+  whole. The prompt says how many lines go and shows them. No setting, grant, or
+  auto-approve answers it, and "Allow for this chat" is not offered: the answer covers
+  that one call. Lines removed by a command (`sed -i`, `rm`) are not counted; in coding
+  mode the save point below still covers them.
 
 "Allow for this chat" covers one tool and one target: `execute` the exact command in
 the same folder; `web_fetch` and `web_download` one method, scheme, host, and port;
@@ -316,14 +621,106 @@ tool the identical arguments. It is not offered for `process_input`, for a host 
 out-of-scope list, or for a command that addresses HunterAI's own API. Changing the
 chat's mode or target clears these, and any file write clears the ones for commands.
 
+**Auto-approve** (the button in the chat header) is one chat's switch for "stop asking".
+With it on, a call runs where only the mode preset or a global setting says ask. It lifts
+no deny, and no ask you set for that chat (set one tool to ask in its Permissions panel to
+keep a question for it). Everything in the list above still applies, the risk gate still
+screens calls when it is on, and one more rule comes with it: a host a call names is
+covered only when the chat's target lists what is in scope. With no target, or a target
+with an empty in-scope list, every named host still asks. Subagents follow the chat's
+switch. Switching it on shows what it means and asks you to confirm; a command can reach
+hosts it does not name, so this is for work you are authorised to do and are watching.
+
 The **working folder** of a chat is where relative paths, commands, and downloads go:
 `~/.hunterai/work/<chat id>` unless you set another absolute folder in the chat's
 Permissions panel. Deleting a chat removes the default folder, never a custom one.
 
+### Undo what a run changed (coding mode)
+
+In coding mode the model may change files in the working folder without asking. Before
+the first call of a run that can change anything (a file tool, a command), HunterAI keeps
+the folder as it is: a **save point**. When the run ends, however it ends, the files that
+differ are listed under its answer, each as new, changed, or deleted, with **Undo these
+changes**.
+
+Undo puts those files back as they were before the run, file by file:
+
+- A file you changed after the run is left as it is and named. So is a file where your
+  later work is in the way (a folder you put files into where a file used to be).
+- A file that is already as it was needs nothing. Files the run did not change are never
+  touched, whatever happened to them since.
+- While files were left, the button stays: asking again goes on with whatever is as the
+  run left it by then. Once every file is as it was, the undo is done.
+- It does not work while a run of the same chat is going.
+
+What a save point holds, and what it does not:
+
+- It is kept in a git folder of HunterAI's own under `~/.hunterai/save/` (readable by you
+  alone), one per working folder. Your own repository is never touched: no commit, no
+  stash, no staged file. It needs `git` on the machine.
+- Files the folder ignores (`.gitignore`) are neither kept nor put back, so a `.env` and
+  build output stay out of it. `node_modules`, `.venv`, `venv`, `__pycache__`, `target`
+  and the caches of Python tools are left out as well, ignored or not.
+- A repository inside the working folder (a project you cloned into it) is kept file by
+  file like any other folder; its own `.git` is not read and not written.
+- Changes made by commands count like changes made by the file tools. What a command
+  does outside the working folder is not covered: installed packages, a database, a file
+  written elsewhere, anything sent over the network. Nor is what a background process
+  writes after the run has ended.
+- The whole folder is compared, so the list of a run holds whatever changed in it while
+  the run was going: also what you changed by hand in that time, and what a run of
+  another chat did in the same folder.
+- A folder with more than 50,000 files that are not ignored, or more than 1 GB in them,
+  gets no save point; neither does your home folder or a folder above it. The run goes on
+  either way, and the line under its answer says that there was no save point and why.
+- Nothing is removed from `~/.hunterai/save/` by HunterAI. It grows by what runs change
+  (the first save point of a folder holds a compressed copy of it). Deleting it is safe
+  at any time; the undo of earlier runs goes with it.
+
+Other modes keep no save point.
+
+### A check before and after each coding run
+
+A working folder can have a **check**: one command that ends with exit code 0 when all
+is well, usually the project's tests (`pytest -q`, `npm test`, `cargo test`). Set it in
+the chat's Permissions panel, under the working folder. It is kept for the folder, so
+every chat that works there uses it.
+
+In coding mode HunterAI then runs it by itself:
+
+- before the first call of a run that can change anything, on the folder as it is;
+- after the run, when the run ended by itself and changed a file.
+
+The line under the answer, beside the list of changes, says what the check said both
+times. "passed before the run, fails after it (exit code 1)" is a run that broke
+something: what the check wrote is shown with it, and the Undo button is next to it.
+You do not have to take the model's word for "all tests pass".
+
+To know before you set one:
+
+- **Setting a check means this command runs in that folder without a question**, files
+  the model has just written included (a test file is code). That is the point of it,
+  and it differs from the rest of coding mode, where a command asks first. Set it for a
+  folder where that is what you want. Only you can set it; no tool can.
+- The first change of a run waits until the check before it has ended. A folder that is
+  as the last check saw it is not checked again, so from the second run on, the check
+  before a run is usually the one from after the run before it. Files the folder
+  ignores do not count for that.
+- A check that runs longer than 5 minutes is stopped and counts as failed: for a long
+  suite, set a quick part of it. Stopping the run stops the check; the answer stays.
+- No check follows a run that failed or was stopped, or one that changed nothing.
+- It needs the save point: a folder that cannot have one (see above) is not checked.
+- What the check writes is shown to you (the end of it, at most 4,000 characters, with
+  HunterAI's keys taken out) and is never sent to the model. What the check writes into
+  the folder is not counted as the run's change.
+- The command runs like a command of the chat: in the working folder, without
+  HunterAI's keys in its environment, through the target's proxy when the chat has one.
+  A command that addresses HunterAI's own API, or holds one of its keys, is not taken.
+
 ### Known limits
 
 - An approved `execute` command runs with the owner's full rights. It can read files, call HunterAI's own API with `curl`, or `setsid` away from its process group. The guard is the ask that shows the exact command and cwd; host and path detection on a command string is a heuristic that only adds warnings or denials.
-- Scrubbing covers HunterAI's five keys. Other variables in the same `.env` file are never read, so their values cannot be scrubbed; the file tools hard-deny the env file instead. Variables of other tools in the process environment are kept from commands when you list their prefixes in `HUNTERAI_PRIVATE_ENV` (for example `MYTOOL_,INTERNAL_`).
+- Scrubbing covers HunterAI's five keys, and the login of each proxy you set where it stands as a login (`user:password@` in an address, and the `Proxy-Authorization` value). Other variables in the same `.env` file are never read, so their values cannot be scrubbed; the file tools hard-deny the env file instead. Variables of other tools in the process environment are kept from commands when you list their prefixes in `HUNTERAI_PRIVATE_ENV` (for example `MYTOOL_,INTERNAL_`).
 - Path and host detection for MCP tools is by argument name and URL shape. An MCP tool can touch things its arguments do not name; that is why unknown servers default to `execute` = ask.
 - A grant remembers only that a warning was shown with it, not which one. Within one call the runner asks again for a warning the owner has not seen, and a change of mode or target clears the grants; between those, a call granted under one warning can pass a different warning later (for example a granted host name that starts resolving to a local address). HunterAI's own API stays denied in every case.
 - `read` checks the path and then hands it to the chunker, which opens it itself. A symlink swapped in between is not caught (`write` and `edit` do re-check).
@@ -337,6 +734,7 @@ Permissions panel. Deleting a chat removes the default folder, never a custom on
 - A host on a domain allowlist is not flagged as outside the target's scope. Loopback is never a scope matter, but it does ask as a local address.
 - A host name on a domain allowlist still asks when it resolves to this machine or the local network; only an IP, a CIDR, or `localhost` entry stops that prompt.
 - Out-of-scope path entries match without regard to case or doubled slashes, so a near miss still warns.
+- `*.example.com` on a scope list covers the subdomains, not `example.com` itself; list both when both are meant. A scope entry that fits no form (`*.example.*`, free text) is shown to the model but matches no host.
 - `web_search` is not checked against scope: the query goes to search engines, not to the target.
 - A background process ends when its shell exits, when you kill it, when its chat is deleted, or when the app stops. A foreground command shows its output when it ends.
 - A run stops after 25 model turns (Settings), after 3 invalid tool calls in a row, and runs at most 20 tool calls per turn.
@@ -496,13 +894,19 @@ power at the processor's critical temperature without a line in any log.
 
 HunterAI runs its own [Caido](https://caido.io) (the `caido-cli` program, found on the PATH,
 at `~/.hunterai/bin/caido-cli`, or where `HUNTERAI_CAIDO_BIN` says) on
-`http://127.0.0.1:8791` (`HUNTERAI_CAIDO_PORT`), started the first time a tool needs it and
-left running. Open that address in a browser and continue as a guest to watch the traffic.
+`http://127.0.0.1:8791` (`HUNTERAI_CAIDO_PORT`), started with HunterAI while recording is on
+(otherwise the first time a tool needs it) and left running. Open that address in a browser and continue as a guest to watch the traffic.
 Its data is in `~/.hunterai/caido`, its output in `~/.hunterai/caido.log`.
 
 - `caido` (a read): `status`; `requests`, the recorded requests, newest first, filtered
   with HTTPQL (`req.host.cont:"acme.com" AND resp.code.eq:403`); `request`, the raw request
-  and response of one.
+  and response of one. The list leaves out pictures, fonts, sound and film (they are
+  recorded all the same, and the list says how many it left out; `media: true` lists
+  them). A body is shown for what it is, not for what it was sent as: text is shown as
+  text whatever its content type says, a certificate is read out (subject, issuer,
+  validity, names), another binary body is one line that says what it looks like (a zip
+  archive, a PDF, a serialized Java object) with the words found in it, and media is one
+  line. The Caido panel reads the same list and the same bodies.
 - `caido_send` (a network call, asked about and checked against the target's scope like
   `web_fetch`): one raw HTTP request, sent by Caido, answered with the raw response. The
   model reads a recorded request, edits the text, and sends it.
@@ -511,11 +915,196 @@ The same port is the proxy: `curl -x http://127.0.0.1:8791 -k <url>` in a comman
 recorded too. With "Send the browser and web_fetch through Caido" switched on in Settings,
 the browser tools and `web_fetch` go through it as well: every request a page makes and
 every page the agent fetches is in the history, and a `web_fetch` result says that it was
-recorded. Caido reads https by answering with its own certificates, so the browser and
-`web_fetch` stop checking a site's certificate while that is on. When Caido cannot be
-reached, `web_fetch` goes out directly as before and its result says it was not recorded.
-`web_download` and commands of the shell tool are not recorded. With the `caido` tool on
-offer, the model is told to read the history after it browsed or fetched pages of a target.
+recorded. When Caido cannot be reached, `web_fetch` goes out directly as before and its
+result says it was not recorded.
+
+**Recording is on from the start** where there is a Caido on the machine and you have set
+no proxy of your own: what the agent sends to a target can then be seen in Caido without
+anything having been switched. Switch it off in Settings and it stays off. Where nobody
+chose it, a proxy goes before it: set one in Settings and recording is off, and a chat
+whose target has a proxy of its own uses that proxy, unrecorded. Only when you switched
+recording on yourself are the two said to clash (see below). By default the knowledge
+crawler is not recorded, and a Caido that does not come up does not stop the browser.
+
+**A site's certificate is checked by HunterAI, not by Caido.** Caido reads https by
+answering with its own certificates, so the tool that asks sees Caido's and not the
+site's, and Caido takes the site's much as it comes: against badssl.com a real Caido
+answered 200 for a site whose certificate no authority signed, and for one whose
+certificate had expired. So before `web_fetch`, `web_download`, `caido_send` or the browser
+hand an https request to Caido, HunterAI makes a TLS handshake with the site itself, at
+the address it checked, and goes by that. Nothing is sent in it. A certificate that does
+not verify stops the call and says why, as it would without Caido, and so does a site
+whose certificate cannot be seen. The two are told apart: "is not valid" is a fact about
+the site, "could not be checked" is not, and that answer says to send the call again
+rather than how to get round the check. A handshake that the other side cuts short before
+it showed anything is made once more first, since that is a passing fault as often as
+not. One found good is not asked for again for ten minutes.
+In the browser the check is made on each TLS connection before Caido gets it; a
+connection with a bad certificate is closed, and the reason is in the session's log. A
+scanner in a command does not check certificates, with or without Caido; to work with a
+site whose certificate is not valid, use `curl -k` in a command.
+With the `caido` tool on offer, the model is told to read the history after it browsed or
+fetched pages of a target.
+
+`web_download` goes through Caido as well, and its result says whether the file was
+recorded. Two kinds of file are not: a picture, a font, sound or film (by the end of the
+address, or by what the answer says it is), and a file larger than 25 MB. When that only
+shows in the answer, the download is made again without Caido, and the first request stays
+in the history as the record of it. A chat whose target has a proxy of its own downloads
+through that proxy, as before.
+
+**Commands** of the shell tool are recorded when they are sent through Caido, and not
+otherwise. While the switch is on, every command has the variable `CAIDO_PROXY` with the
+address of Caido's proxy, and the model is told to hand it to the proxy switch of each
+program that sends HTTP requests to the target:
+
+| Program | Its switch |
+|---|---|
+| httpx | `-http-proxy "$CAIDO_PROXY"` |
+| nuclei, katana | `-proxy "$CAIDO_PROXY"` |
+| ffuf | `-replay-proxy "$CAIDO_PROXY"` (only what matched) or `-x "$CAIDO_PROXY"` (every request) |
+| sqlmap | `--proxy="$CAIDO_PROXY"` |
+| curl | `-k -x "$CAIDO_PROXY"` |
+
+Nothing else about a command changes. `HTTP_PROXY` and `HTTPS_PROXY` are left alone on
+purpose: Caido answers https with its own certificate, and with those set every install
+and download in a command (pip, npm, git, apt) would fail on it. So a scan goes through
+Caido because its command says so, and HunterAI sees to it that it does: **a scanner from
+your tool folder (httpx, nuclei, katana, ffuf, sqlmap) whose command does not name
+`CAIDO_PROXY` is not run.** The model is told which switch is missing and sends the
+command again. The command is never changed for it, so what the Trajectory shows is what
+ran. The scanner asked about itself (`-h`, `-version`, an update) runs as it is, and so
+does any other program.
+
+- Not recorded this way: programs that do not speak HTTP (naabu, dnsx, nmap), and a target
+  on this machine or the local network, which Caido's way out refuses for a command. For
+  such a target the scanner is run with `CAIDO_PROXY=` in front of it, unrecorded.
+- The hold reads the command's text. A scanner started in a way it does not see (from a
+  script, through `xargs`, by a name of your own) runs unrecorded; a program is only held
+  when it is in your tool folder under its usual name.
+- subfinder asks other services about the target, not the target: the model is told to
+  run it without the proxy, so that those requests, with your keys for those services,
+  stay out of the history.
+- A chat whose target has a proxy of its own keeps that proxy for its commands and gets
+  no `CAIDO_PROXY`.
+- When Caido cannot be reached, the variable is not set and the result of each command
+  ends with a line that says so. Caido is asked again after a minute, or as soon as
+  something else reached it (the Caido panel, the browser, `web_fetch`).
+
+### Your own proxy
+
+Settings → Proxy takes the address of a proxy for the agent's traffic: Burp, mitmproxy,
+ZAP, a tunnel, or a proxy service a bug bounty program asks its hunters to come through.
+That one is the default. A target can have a proxy of its own, set in the target's form
+(**Proxy for this target**); chats on that target use it instead of the default. The
+chat header shows which proxy a chat goes through (`via host:port`).
+
+An address is one of:
+
+```
+http://127.0.0.1:8080
+http://user:password@host:port
+socks5://user:password@host:port
+```
+
+An HTTP proxy carries https too; its own address still starts with `http://`. A proxy
+service that picks the country in the user name is written the same way, for example
+`http://brd-customer-<id>-zone-<zone>-country-fr:<password>@brd.superproxy.io:33335`
+(take the real address from the service's own panel).
+
+What goes through it:
+
+- `web_fetch`, `web_download` and the browser tools.
+- Commands of the shell tool. A command runs with `HTTP_PROXY`, `HTTPS_PROXY` and
+  `ALL_PROXY` (and the lower-case names) set to an address on `127.0.0.1` that leads to
+  the proxy. curl, wget and most HTTP libraries follow them without being told, and the
+  model is told to hand `"$HTTP_PROXY"` to a scanner that wants a flag (`ffuf -x`,
+  `nuclei -proxy`, `sqlmap --proxy`). A program that ignores the variables, or cannot
+  speak through an HTTP proxy at all (nmap, masscan, ping, dig, ssh), connects from this
+  machine's own address: the model is told to ask you before it runs one against the
+  target.
+- Web sources of the knowledge base, when you tick **Send knowledge crawls through it
+  too**. Off by default: a crawl reads public pages and is not work on a target.
+
+What does not: the model providers (they have a setting of their own, below),
+`web_search` (SearXNG fetches the results; give it a proxy in its own settings, below),
+the `cve` and `profundis` lookups, MCP servers, and the Discord webhook.
+
+How it behaves:
+
+- Every host is still resolved and checked first: scope, local addresses, HunterAI's
+  own API. The proxy is then asked for the host by name, so where the proxy connects is
+  the proxy's own doing. That is the one check HunterAI gives up here: it no longer
+  connects to the address it checked itself.
+- When the proxy does not carry a connection, nothing is sent directly, and the tool
+  result says why (nothing answers at its address, it refused the user name or the
+  password, it could not reach the host). A proxy set to hide where requests come from
+  must not fall back to showing it.
+- **Test** sends one request through the proxy to a page that says where it came from
+  (`https://www.cloudflare.com/cdn-cgi/trace`, then `https://api.ipify.org`) and shows
+  the address and the country that sites see. `HUNTERAI_PROXY_TEST_URL` names other
+  pages, comma-separated.
+- The password is stored with the address in HunterAI's database, in clear text, like
+  the rest of the data in `~/.hunterai`. It is never shown again, never sent to the
+  page, and never given to the model: a command sees only the address on `127.0.0.1`.
+  Should a tool ever print a stored address, the password in it is masked, and a call
+  whose arguments carry the login is refused. That local address asks for no login, so
+  while HunterAI runs, any program on this machine can use the proxy through it.
+- A site's certificate is checked as usual. Tick "It reads https" for a proxy that
+  answers with its own certificates (Burp, mitmproxy, ZAP), and only then, and only for
+  a proxy on this machine, are its certificates accepted. A proxy elsewhere has to pass
+  https through untouched. A proxy service that signs https again with a certificate of
+  its own is refused with a certificate error: use a zone or plan of that service that
+  does not (with Bright Data: Datacenter and ISP zones, or Residential after its
+  identity check).
+- A browser session ends when its chat's proxy changes (you set or cleared one, or
+  moved the chat to another target): the next `browser_navigate` starts a new session
+  on the new way out. A background process keeps the variables it was started with.
+- It is not combined with the Caido switch: Settings refuses to have both, and in a
+  chat whose target has a proxy of its own, the browser and `web_fetch` stop and say so
+  while Caido's recording is on. The commands of such a chat keep the target's proxy.
+
+**The model providers** have a proxy of their own, in the same section of Settings
+(`HUNTERAI_PROVIDER_PROXY` in `.env`). It is separate on purpose: what you send to a
+model should not go through a proxy that a program asked for. Anthropic, Gemini, the
+OpenAI-compatible providers, and the Claude and Codex programs use it; Ollama on this
+machine and your colibri server never do.
+
+**SearXNG** takes a proxy in `~/.hunterai/searxng/settings.yml`:
+
+```yaml
+outgoing:
+  proxies:
+    all://:
+      - socks5h://user:password@host:1080
+```
+
+Then `scripts/searxng.sh stop` and `scripts/searxng.sh start`. It runs in a container,
+so `127.0.0.1` there is the container itself, not this machine.
+
+### Effort and thinking, per model
+
+The **Options** button in the chat header shows what the chat's model takes. "Reasoning
+effort" is there for every provider that has such a setting, and it lists the values
+the model itself has:
+
+- **Ollama**: what the model reports in `thinking.values` of `/api/show`. A model with
+  named levels (gpt-oss: low, medium, high) gets the effort list, a model with a switch
+  gets "Thinking" on or off, and a model that reports `[false]` gets neither. An Ollama
+  that reports nothing keeps the Thinking switch as before.
+- **colibri**: a Thinking switch and no effort list (see "colibri: large models from memory
+  and storage").
+- **Gemini 3 and later**: the effort is sent as the model's thinking level. A level the
+  model does not have becomes the next one up (medium on a model with low and high is
+  sent as high), "Thinking: off" is the lowest level the model has, and a thinking
+  budget is never sent with a level, which the API refuses. The levels per model are a
+  table in `providers/google.py`, taken from Google's documentation; a model that is
+  not in it gets low, medium and high.
+- **Gemini 2.5 and earlier**: the effort chooses a thinking budget (low 1,024 tokens,
+  medium 8,192, high 24,576) unless you give a budget yourself.
+
+An effort the model does not have (xhigh or max where high is the top) is sent as its
+highest.
 
 ### Programs for the rea server
 
@@ -557,11 +1146,17 @@ shell tool's permissions decide whether it runs. That also keeps requests small:
 costs its name in the prompt, where an MCP server costs every one of its tool definitions
 in every request. The setup check lists what the folders hold.
 
+To see what these programs send to a target, switch Caido's recording on: the model is
+then told how to send each of them through Caido (see [Caido](#caido)).
+
 ### Web search
 
 `scripts/start.sh` starts the container `hunterai-searxng` on `127.0.0.1:8888` with its
 settings in `~/.hunterai/searxng/settings.yml`. It is left running when HunterAI stops;
-`scripts/searxng.sh stop` stops it. `scripts/check-tools.sh` lists what the tools need.
+`scripts/searxng.sh stop` stops it. A container that cannot be reached (it publishes
+another address than `127.0.0.1:8888`, or none) or that was made from another version of
+the image is made again: it holds nothing, its settings are in that folder. One that does
+not stay up says why, with its last lines. `scripts/check-tools.sh` lists what the tools need.
 
 ### Variables
 
@@ -573,7 +1168,8 @@ chunker file. `HUNTERAI_SEARXNG_URL` points at another SearXNG. `HUNTERAI_DEV=1`
 ## Requirements
 
 Python 3.12 via [uv](https://docs.astral.sh/uv/), [Bun](https://bun.sh), and optionally
-[Ollama](https://ollama.com) for local models and the fallback.
+[Ollama](https://ollama.com) for local models and the fallback, and
+[colibri](https://github.com/JustVugg/colibri) for models larger than this machine's memory.
 
 ## Run
 
@@ -585,17 +1181,110 @@ scripts/dev.sh     # development: hot reload on http://127.0.0.1:5173
 The server listens on 127.0.0.1 only. Set `HUNTERAI_PORT` to use another port.
 
 On a start with no model to talk to (no API key, and no chat model in Ollama) the interface
-opens a **setup check**: one line per part (a model, Ollama, the embedding model, Qdrant,
-SearXNG, Caido, Camoufox) with what was found and the command or place that fixes it. Only
-the model is required; each other line switches one feature on. It is under Settings →
-"Setup check" at any time.
+opens a **setup check**: one line per part (a model, Ollama, colibri when it has an address, the embedding model, Qdrant,
+SearXNG, Caido, Camoufox, your tool folder, the MCP servers) with what was found and the
+command or place that fixes it. Only the model is required; each other line switches one
+feature on. It is under Settings → "Setup check" at any time.
+
+### When a part stops working
+
+A part that was in use and does not run now is said on the page, above the machine line at
+the bottom of the sidebar: **Not working: SearXNG (web_search)**, with a button that opens
+the setup check, where the line of that part says how to start it again. Two kinds of parts
+are watched:
+
+- **Ollama, Qdrant and SearXNG**, the services that run beside HunterAI. One of them counts
+  as in use when it answered within the last seven days, so a service you never set up stays
+  "optional, missing" and is not announced. They are looked at once a minute.
+- **MCP servers** that are switched on and gave up starting. The model then works with fewer
+  tools than you think it has. The reason stands in Settings → "Manage MCP servers".
+
+The ✕ on the notice is for a part you stopped yourself (Ollama closed to free memory, Docker
+not started today): the page stops saying it until that part has run again, and the setup
+check keeps marking it "not working".
+
+**Copy diagnostics** in the setup check puts the state of the install on the clipboard as
+text for a bug report: the version of the code and how many files differ from it, when the
+server started and whether it has to be restarted, the system, the models in use, the
+context window of local models, every line of the setup check, the MCP servers and the
+number of tools. It holds no key (only whether one is set), no proxy address, no target and
+no message; the home folder is written `~`, and an address loses its login and what follows
+its `?`. When the browser refuses to copy, the text is shown to copy by hand.
+
+### When something goes wrong
+
+An error says what is wrong and what to do about it.
+
+- **A model call that failed** keeps the provider's own words and adds the next step for
+  its kind: a key that is not set or was refused (Settings), no credit, a rate limit (with
+  the wait the provider named), no answer in time, a provider that cannot be reached (the
+  connection, the proxy for model providers), Ollama that does not answer (`ollama serve`,
+  `ollama ps`), colibri that does not answer (`./start-here.sh` in its folder, the address
+  under Settings), a request the provider did not accept (the model list, Options).
+- **An answer that did not end by itself** has a line under it: cut off at the "Max output
+  tokens" of the chat, at the model's own limit for one answer, by the full context window
+  of a local model (which holds the request and the answer together), or ended by the
+  provider's content filter. The line stays with the answer and is never sent to a model.
+- **A value the server refuses** is named with what is wrong with it, for example
+  `"risk.read": input should be 'allow', 'ask' or 'deny'`. A setting the server does not
+  know, on a server that still runs the code from before an update, says to restart it.
+- **A page that is older than the server** (a tab left open through an update) says
+  **Reload this page** above the machine line, with a button.
+- **A fault of HunterAI itself** is said as one ("This is a fault in HunterAI, not in what
+  you sent"), in a run and in any request. Its traceback goes to
+  `~/.hunterai/logs/errors.log` (keys scrubbed; started anew at 2 MB, the file before it
+  kept as `errors.log.1`). Send that part of the file with the diagnostics when you report
+  it.
 
 The bottom of the sidebar shows the processor temperature and the local models Ollama holds
-in memory, asked again every ten seconds. The line turns yellow within ten degrees of
-`HUNTERAI_MAX_CPU_TEMP` and red at it. **Findings** next to it lists every finding of every
+in memory, asked again every ten seconds: `gemma3:12b loaded (9.8 GB, 60% GPU)`. The line
+turns yellow within ten degrees of `HUNTERAI_MAX_CPU_TEMP` and red at it. It also turns
+yellow when a model is partly on the processor, which makes it slow; pointing at the line
+says how Ollama runs each model (in the words of `ollama ps`) and with which window. The
+model a colibri server holds stands in the same line, marked `(colibri)`: it is loaded in
+colibri's own process, so Ollama does not list it. **Findings** next to it lists every finding of every
 target, with filters, and exports what is shown as Markdown (evidence included: read it
 before you send it anywhere). A `swarm` call shows one line per subagent in the chat: its
 brief, whether it waits, works, or is finished, and whether its answer was verified.
+
+## Update
+
+```sh
+scripts/update.sh
+```
+
+One command stops HunterAI if it runs, fetches the newest version (the `main` branch of this
+folder's `origin`, or of GitHub when the folder has none), changes the files, and runs
+`scripts/start.sh`, which installs what changed, builds the interface, and starts HunterAI
+in this terminal. It needs git 2.38 or newer.
+
+What you changed in the folder is kept. A file that you changed and that the update changes
+too is merged when the two changes do not meet, and your version from before is copied to
+`~/.hunterai/updates/<time>/`. When a file cannot be merged, nothing at all is changed and
+the files are named: settle them yourself, or run the update with `--aside`. Files that are
+not part of HunterAI (your programs in `bin/`, your notes) are never read. Afterwards
+`git status` and `git diff` show your own changes and nothing else.
+
+| Switch | What it does |
+|---|---|
+| `--check` | Says what an update would bring, and changes nothing |
+| `--no-start` | Does not start HunterAI afterwards |
+| `--aside` | Where a file of yours cannot be merged with its new version: takes the new one and keeps yours beside it as `<file>.mine` |
+| `--branch NAME` | Follows another branch than `main` |
+| `--from URL` | Fetches from another place than `origin` |
+| `--reanchor` | For a folder that was updated by hand and has commits of its own that mirror GitHub: puts it on GitHub's history and keeps every difference of yours as an uncommitted change. Refused for a folder that is no copy of the branch |
+
+A folder that was downloaded, not cloned with git, cannot be updated in place: download the
+new version and copy your `.env` over.
+
+If you update by hand instead (`git pull`), stop HunterAI first and start it again afterwards.
+A server that is left running goes on with the code it started with, while the interface is
+built from the new files and asks it for things it does not know. HunterAI notices this: the
+server compares its own code on disk with what it loaded at its start, and the bottom of the
+sidebar then says **Restart HunterAI** until you do. The same notice appears after you edit
+one of its files, and goes away when the edit is undone. A part of the page that cannot be
+drawn (a dialog that needs something the old server does not send) shows what went wrong in
+its own place, with a way to draw it again; the rest of the page stays as it is.
 
 ## Configuration
 
@@ -609,12 +1298,47 @@ shows a key again.
 | `ANTHROPIC_API_KEY` | Claude models |
 | `OPENAI_API_KEY`, `XAI_API_KEY`, `GEMINI_API_KEY` | OpenAI, xAI, Google |
 | `OLLAMA_HOST` | Ollama address (default `http://127.0.0.1:11434`) |
+| `HUNTERAI_OLLAMA_NUM_CTX` | Context window of local models in tokens (default 16384; Settings writes it) |
+| `HUNTERAI_COLIBRI_URL` | Address of your colibri server (Settings writes it); empty: colibri is not used |
+| `COLIBRI_API_KEY` | Its key, only when colibri was started with one |
 | `HUNTERAI_PORT` | Port (default 8790) |
 | `HUNTERAI_HOME` | Data folder (default `~/.hunterai`) |
+| `HUNTERAI_PROVIDER_PROXY` | Proxy the model providers are reached through (see "Your own proxy") |
 
 Codex needs no key: it is used when the `codex` CLI is installed and logged in.
 
 Chats, uploads, and settings live in `~/.hunterai/` (`hunterai.db` and `uploads/`).
+
+## Smoke check
+
+```sh
+scripts/smoke.sh                  # every check that costs nothing
+scripts/smoke.sh --deep           # and a long chat answered by the local model
+scripts/smoke.sh --calls          # and one short request to each cloud provider that is ready, and to colibri
+scripts/smoke.sh --only local,proxy
+```
+
+The tests of HunterAI run against stand-ins. This asks the real services of your install,
+after an update or when something does not work. Nothing is sent to a target and nothing of
+yours is changed. One line per thing found: `ok`, `FAIL` with what to do, `skip` for what
+is not in use here, `note` for what you may want to know. The exit code is 1 when a check
+failed.
+
+| Check | What it asks |
+| --- | --- |
+| `server` | Does a running HunterAI run the code that is on disk? What does it say is not working? |
+| `ollama` | Does Ollama answer? Its version and models. |
+| `local` | The fallback model is told a word and asked for it two messages later, through HunterAI's own code. Also: the window it gets, and where Ollama runs it (CPU, GPU, both). |
+| `window` | How many tokens of rules and tool definitions a new chat sends before the conversation, against the window for local models. With a running HunterAI the tools of your MCP servers are counted too. |
+| `colibri` | Only with an address in Settings: does it answer, which model does it serve, with which context, and does that leave room for a chat beside the rules and tools? With `--calls` it is sent "Reply with the word OK". One that does not answer is a `FAIL` when new chats are set to use it, otherwise a `note`. |
+| `embeddings` | Does the embedding model answer with numbers? |
+| `qdrant`, `searxng` | Do they answer? SearXNG is asked a real search in the format the tool needs. |
+| `proxy` | Your proxy carries a request: the address sites see through it, the one they see without it, and whether a command started with the proxy variables comes out at the same place. |
+| `providers` | Which cloud providers are ready. With `--calls`, each is sent "Reply with the word OK" (a few tokens). |
+| `chat` (`--deep`) | A chat of 27 messages whose own model cannot be reached: the local model answers in its place and has to know a word from two turns before and what was found in the first message. It runs in a database of its own that is thrown away. Minutes on a slow machine. |
+
+A service that does not answer is a `FAIL` only when it answered here within the last
+seven days; otherwise it is skipped.
 
 ## Tests
 

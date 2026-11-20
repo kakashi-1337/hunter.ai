@@ -90,6 +90,7 @@ a { color: var(--info); }
 .chat-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--panel); flex-wrap: wrap; }
 .chat-head .title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 34ch; }
 .chat-head select { padding: 3px 6px; max-width: 30ch; }
+.chat-head .via-proxy { font-size: 12px; padding: 2px 8px; border: 1px solid var(--line); border-radius: 999px; color: var(--accent); white-space: nowrap; max-width: 36ch; overflow: hidden; text-overflow: ellipsis; }
 .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
 .seg button { border-radius: 0; border: 0; padding: 3px 10px; color: var(--muted); }
 .seg button.on { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
@@ -149,6 +150,15 @@ details.thinking pre { white-space: pre-wrap; word-break: break-word; font: 12.5
 .composer .box { border: 1px solid var(--line); border-radius: 10px; background: var(--bg); padding: 8px; }
 .composer .box.drag { border-color: var(--accent); background: #0f1a17; }
 .composer textarea { width: 100%; border: 0; background: none; resize: none; padding: 2px 4px; max-height: 40vh; outline: none; }
+.slash { display: flex; flex-direction: column; max-height: 232px; overflow-y: auto; margin: 0 0 6px; border: 1px solid var(--line);
+  border-radius: 6px; background: var(--raised); }
+.slash button { display: flex; gap: 10px; align-items: baseline; text-align: left; border: 0; border-radius: 0; padding: 4px 8px; }
+.slash button.on { background: var(--hover); }
+.slash button .mono { white-space: nowrap; }
+.slash button .hint { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.slash > .hint { padding: 6px 8px; }
+.skill-text { max-height: 320px; overflow: auto; white-space: pre-wrap; word-break: break-word; margin: 6px 0 0; padding: 8px;
+  border: 1px solid var(--line); border-radius: 6px; background: var(--bg); font-family: var(--mono); font-size: 12px; }
 .composer .bar { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
 .composer .note { color: var(--faint); font-size: 12px; }
 
@@ -176,6 +186,7 @@ details.thinking pre { white-space: pre-wrap; word-break: break-word; font: 12.5
 .dot.done { background: var(--accent); } .dot.error { background: var(--bad); }
 .dot.running { background: var(--info); } .dot.cancelled, .dot.interrupted { background: var(--warn); }
 .keyrow { display: grid; grid-template-columns: 1fr auto; gap: 6px; align-items: end; }
+.colibri { display: flex; flex-direction: column; gap: 12px; }      /* its rows stand apart as the rows around it do */
 .state-on { color: var(--accent); } .state-off { color: var(--faint); }
 
 @media (max-width: 1100px) { .traj { position: fixed; right: 0; top: 0; bottom: 0; z-index: 30; box-shadow: -12px 0 36px #000a; } }
@@ -292,6 +303,11 @@ details.thinking pre { white-space: pre-wrap; word-break: break-word; font: 12.5
 /* machine state, panels of the sidebar */
 .machine { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .machine.warn { color: var(--warn); } .machine.bad { color: var(--bad); font-weight: 600; }
+.restart-notice { background: #3a2f12; border: 1px solid var(--warn); color: #ffe7b0; border-radius: 6px; padding: 6px 8px; margin-bottom: 8px; font-size: 12px; line-height: 1.4; }
+.down-notice { display: flex; align-items: center; gap: 8px; } .down-notice span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.diagnostics { width: 100%; min-height: 180px; font-family: var(--mono); font-size: 12px; white-space: pre; }
+.draw-failed { background: #3a2f12; border: 1px solid var(--warn); color: #ffe7b0; border-radius: 6px; padding: 10px 12px; margin: 8px; display: flex; flex-direction: column; gap: 6px; }
+.draw-failed .mono { word-break: break-word; }
 .side-buttons { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
 .side-buttons .btn { padding: 4px 4px; font-size: 12.5px; }
 .modal.wide { width: min(980px, 100%); }
@@ -325,7 +341,22 @@ button.link:hover:not(:disabled) { background: none; color: var(--text); }
 
 /* answer check under an assistant message */
 .answer-check { border: 1px solid var(--line); border-left: 3px solid var(--faint); border-radius: 6px; padding: 6px 10px; margin-top: 8px; font-size: 12.5px; color: var(--muted); display: flex; flex-direction: column; gap: 4px; }
+.answer-notice { border: 1px solid var(--line); border-left: 3px solid var(--warn); border-radius: 6px; padding: 6px 10px; margin-top: 8px; font-size: 12.5px; color: var(--text); }
 .answer-check.warn { border-left-color: var(--warn); color: var(--text); }
+/* what a run changed in its work folder, with the button that puts it back */
+.run-changes { border: 1px solid var(--line); border-left: 3px solid var(--faint); border-radius: 6px; padding: 6px 10px; margin-top: 8px; font-size: 12.5px; color: var(--text); }
+.run-changes.warn { border-left-color: var(--warn); }
+.run-changes .row { align-items: center; gap: 10px; }
+.run-changes details { margin-top: 4px; color: var(--muted); }
+.run-changes ul { list-style: none; margin: 4px 0 0 0; padding: 0; max-height: 220px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.run-changes li .badge { margin-right: 6px; }
+.run-changes li .mono { overflow-wrap: anywhere; }
+/* what the check of the folder said before and after the run */
+.run-check { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--line); }
+.run-check.ok .verdict { color: var(--accent); }
+.run-check.warn .verdict { color: var(--warn); }
+.run-check.bad .verdict { color: var(--bad); font-weight: 600; }
+.run-check pre { margin: 4px 0 0 0; padding: 6px 8px; max-height: 240px; overflow: auto; background: var(--panel); border-radius: 4px; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--text); }
 .answer-check.bad { border-left-color: var(--bad); color: var(--text); }
 .answer-claim .badge { margin-right: 6px; }
 
@@ -368,3 +399,7 @@ button.link:hover:not(:disabled) { background: none; color: var(--text); }
 .dialog input { width: 100%; }
 .btn.danger-solid { background: var(--bad); border-color: var(--bad); color: #2a0b0e; font-weight: 600; }
 .btn.danger-solid:hover:not(:disabled) { background: #f58a90; }
+
+.unplaced { display: flex; flex-direction: column; gap: 4px; border: 1px dashed var(--line); border-radius: 6px; padding: 8px; }
+.unplaced .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scope-problem { white-space: pre-line; overflow-wrap: anywhere; }

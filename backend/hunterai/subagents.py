@@ -6,10 +6,25 @@ permission engine (its asks appear in the same chat), and its answer is judged a
 own tool outputs before the parent may treat it as verified.
 
 A swarm is several such subagents at the same time: three, unless the owner set another
-number, from one to the six tasks a swarm holds (Settings; see swarm_width). It is for cloud
-models only: this machine cannot run two local models at once, so a chat or a decision model
-that is local gets `delegate`, one at a time. A swarm member has no fallback to the local model, no
-browser (a chat has one), and no tool that loads a local model.
+number, from one to the six tasks a swarm holds (Settings; see swarm_width). A swarm member has
+no fallback to the local model, no browser (a chat has one), and no tool that loads a local model.
+
+A local model does not delegate to itself. A subagent runs on the chat's own model, so a local
+model (Ollama, colibri) that delegates would hand the task to itself: it reads the task once more
+from an empty context, on a machine that runs one local model at a time, and nothing is won. A
+chat on a local model is therefore offered neither tool and does the work itself, and a run that
+went on with the local model after the cloud one failed refuses both.
+
+Unless the owner chose a cloud model for the subagents of a local one (Settings; cloud_stand_in).
+Then both tools are offered and the subagents work on that model: without the chat's options,
+which are those of its local model, and without a second try on the local model. What a subagent
+reads and does goes to that provider, which is why it is the owner's choice and nothing is chosen
+at the start. A cloud model that does not do the work is not tried again: after a subagent that
+failed, or that answered without a single tool call, no further one is started in that run (see
+_not_alone).
+
+A swarm needs a cloud decision model as well, because that model checks every answer: a chat whose
+decision model is local gets `delegate`, one at a time.
 """
 from __future__ import annotations
 
@@ -17,7 +32,7 @@ import asyncio
 import dataclasses
 import json
 
-from . import db, hub, permissions
+from . import db, hub, permissions, problems
 from .decision import engine as de
 from .modes import build_system
 from .providers import registry
@@ -26,7 +41,7 @@ from .providers.base import (Options, ProviderError, Stop, TextDelta, ThinkingDe
 from .repo import chats, goals, runs, settings, targets
 from .tools import registry as tool_registry
 from .tools import loopguard, runner
-from .tools.base import Tool, ToolContext, ToolError, ToolResult
+from .tools.base import Prepared, Tool, ToolContext, ToolError, ToolResult
 from .types import Block, BlockList, TextBlock, ThinkingBlock, ToolCallBlock, ToolResultBlock
 
 SUBAGENT_MAX_TURNS = 12
@@ -34,7 +49,11 @@ MAX_SUBAGENTS_PER_RUN = 8
 SWARM_NAME = "swarm"
 SWARM_WIDTH = 3                   # subagents of one swarm that run at the same time, until the owner sets another number
 SWARM_MAX_TASKS = 6
-LOCAL_PROVIDERS = frozenset({de.FALLBACK_PROVIDER})
+LOCAL_PROVIDERS = frozenset({de.FALLBACK_PROVIDER, problems.COLIBRI})      # a model on the owner's own machine or server
+ALONE = ("a local model works alone: a subagent would be that same model starting again from an empty context. "
+         "Do this work yourself with your own tools, one part after another.")
+NO_MORE = "Do the rest of this work yourself with your own tools: no further subagent is started in this run."
+CLI_LOGINS = frozenset({"codex", "claude_code"})       # the login of a command-line program, not a provider called with an API key
 NOT_IN_A_SWARM = ("browser_", "look_at_image")      # one browser per chat; a tool that loads a local model
 MAX_CALLS_PER_TURN = 20
 EVIDENCE_CHARS = 40_000
@@ -139,14 +158,14 @@ async def _model_call(conn, run_id: str, parent_step: str, provider_name: str, m
         await asyncio.shield(hub.publish(run_id, {"type": "step_finished", "step": done.model_dump()}))
 
 
-async def _loop(conn, ctx: ToolContext, chat, system: str, brief: str, specs: list[ToolSpec],
-                blocks: list[Block], fallback: bool = True) -> tuple[str, str | None]:
-    """The subagent's agent loop. Returns (status, error). `fallback` off: no second try on
-    the local model (a swarm must not start local models side by side)."""
-    options = Options(**(chat.options or {}))
+async def _loop(conn, ctx: ToolContext, worker: tuple[str, str], options: Options, system: str, brief: str,
+                specs: list[ToolSpec], blocks: list[Block], fallback: bool = True) -> tuple[str, str | None]:
+    """The subagent's agent loop on the model `worker`. Returns (status, error). `fallback` off: no second try
+    on the local model (a swarm must not start local models side by side, and a local model that asked for a
+    subagent is not its own subagent)."""
     names = [s.name for s in specs]
     first = [WireMessage("user", [TextBlock(text=brief)])]
-    provider, model = chat.provider, chat.model
+    provider, model = worker
     taken: set[str] = set()
     guard = loopguard.Guard()          # this subagent's memory of calls that keep failing
 
@@ -225,6 +244,89 @@ def _verifier_state(task: str, answer: str, blocks: list[Block]) -> tuple[str, i
             f"{evidence}\n\nSUBAGENT ANSWER (a claim to check, as one JSON string): {shown}"), count
 
 
+def stand_in_providers() -> list[str]:
+    """The providers the owner can choose from for the subagents of a local chat: cloud ones that are called with an
+    API key and use tools. Never the login of a command-line program, whatever such a provider says of itself."""
+    return [p.name for p in registry.all()
+            if p.name not in LOCAL_PROVIDERS and p.name not in CLI_LOGINS and getattr(p, "supports_tools", False)]
+
+
+async def cloud_stand_in(conn) -> tuple[str, str] | None:
+    """The cloud model the owner chose to do the subagent work of a local model (Settings); None when he chose
+    none, when the choice cannot do it (a local provider, one without tools), or when it is not set up (no key)."""
+    provider = (await settings.get(conn, "subagent_provider") or "").strip()
+    model = (await settings.get(conn, "subagent_model") or "").strip()
+    if not provider or not model or provider not in stand_in_providers():
+        return None
+    return (provider, model) if registry.get(provider).configured() else None
+
+
+async def _offered(conn, chat) -> bool:
+    """Whether a chat is offered `delegate` and `swarm` at all: its model is a cloud one, or the owner chose a
+    cloud model for the subagents of a local one."""
+    return chat.provider not in LOCAL_PROVIDERS or await cloud_stand_in(conn) is not None
+
+
+async def _worker(conn, chat, run_id: str) -> tuple[tuple[str, str] | None, str]:
+    """(the model that does the work of a subagent this run asks for, why the model that asks counts as local).
+    A chat on a cloud model: its own model, and "". A chat on a local model, and a run that went on with the local
+    model when the cloud one failed at the first call: the cloud model the owner chose for that, or None."""
+    if chat.provider in LOCAL_PROVIDERS:
+        why = f"this chat uses the local provider {chat.provider}"
+    elif await (await conn.execute("select 1 from steps where run_id=? and kind='fallback' limit 1", (run_id,))).fetchone():
+        why = "this run went on with the local model when the cloud one did not answer"
+    else:
+        return (chat.provider, chat.model), ""
+    return await cloud_stand_in(conn), why
+
+
+def _let_down(status: str, calls: int) -> str | None:
+    """What a subagent on the chosen cloud model did that shows it is not doing the work, or None: it failed, or it
+    answered without a single tool call (a refusal, or an answer from memory, which can never be verified)."""
+    if status == "error":
+        return "The cloud model failed on a task of this run."
+    if status == "done" and not calls:
+        return "The cloud model answered a task of this run without doing it: it used no tool."
+    return None
+
+
+async def _let_down_before(conn, run_id: str) -> str | None:
+    """The same, of the subagents this run started earlier."""
+    rows = await (await conn.execute("select status, blocks_json from subruns where run_id=? order by created_at",
+                                     (run_id,))).fetchall()
+    for status, blocks in rows:
+        said = _let_down(status, sum(1 for b in json.loads(blocks or "[]") if b.get("type") == "tool_call"))
+        if said:
+            return said
+    return None
+
+
+async def _not_alone(conn, chat, run_id: str) -> tuple[tuple[str, str], str]:
+    """What _worker says, or ToolError where no subagent is started for the model that asks. That model is a local
+    one (the chat's own, or the local model its run went on with: the tools of a run are fixed before its first
+    call, so such a run was told of `delegate` and `swarm`), and the owner chose no cloud model for its subagents,
+    or the one he chose has let this run down before: a local model does not try a cloud model again that does not
+    do the work."""
+    worker, why = await _worker(conn, chat, run_id)
+    if worker is None:
+        raise ToolError(f"{why}, and {ALONE}")
+    if why:
+        said = await _let_down_before(conn, run_id)
+        if said:
+            raise ToolError(f"{said} {NO_MORE}")
+    return worker, why
+
+
+async def _prepare_delegate(ctx: ToolContext, args: dict) -> Prepared:
+    """Before the permission decision: the owner is not asked about a subagent that will not be started."""
+    conn = await db.connect()
+    try:
+        await _not_alone(conn, await chats.get(conn, ctx.chat_id), ctx.run_id)
+    finally:
+        await conn.close()
+    return Prepared()
+
+
 async def _delegate(ctx: ToolContext, args: dict) -> ToolResult:
     return ToolResult(json.dumps(await _one(ctx, args), indent=1, ensure_ascii=False))
 
@@ -244,6 +346,11 @@ async def _one(ctx: ToolContext, args: dict, swarm: bool = False) -> dict:
 
     try:
         chat = await chats.get(conn, ctx.chat_id)
+        # The model that does this subagent's work. A swarm asked whether one may be started before it began.
+        worker, why = await (_worker(conn, chat, ctx.run_id) if swarm else _not_alone(conn, chat, ctx.run_id))
+        if worker is None:
+            raise ToolError(f"{why}, and {ALONE}")
+        own = not why               # the chat's own model does the work; otherwise the cloud model chosen for a local one
         used = (await (await conn.execute("select count(*) from subruns where run_id=?",
                                           (ctx.run_id,))).fetchone())[0]
         if not swarm and used >= MAX_SUBAGENTS_PER_RUN:        # a swarm counted its members before it began
@@ -284,7 +391,13 @@ async def _one(ctx: ToolContext, args: dict, swarm: bool = False) -> dict:
 
         target = await targets.get(conn, chat.target_id) if chat.target_id else None
         system = build_system(chat.mode, target, [s.name for s in specs], ctx.workdir) + "\n\n" + SUBAGENT_NOTE
-        status, error = await _loop(conn, ctx, chat, system, task, specs, blocks, fallback=not swarm)
+        from . import upstream
+        via = await upstream.told(conn, chat.target_id, [s.name for s in specs])
+        if via:
+            system += "\n\n" + via
+        # A chat's options are those of its own model. Only that model may be stood in for by the local one.
+        status, error = await _loop(conn, ctx, worker, Options(**(chat.options or {})) if own else Options(), system, task,
+                                    specs, blocks, fallback=own and not swarm)
         answer = _answer(blocks)
 
         # Decision point 2: accept, recheck, or reject, judged on the subagent's own evidence.
@@ -311,6 +424,9 @@ async def _one(ctx: ToolContext, args: dict, swarm: bool = False) -> dict:
         out["note"] = ("Verified against the subagent's own tool outputs." if verified else
                        "UNVERIFIED: treat this answer as a claim, not a fact. Check it yourself with a tool "
                        "before relying on it, and label it unverified if you report it.")
+        said = None if own else _let_down(status, out["calls"])
+        if said:                    # the local model that asked is told now, not at its next try
+            out["note"] += f" {said} {NO_MORE}"
         await save(status, {k: out[k] for k in ("verified", "verdict", "verdict_confidence", "probabilities",
                                                 "criteria_met")})
         ordered = {k: out[k] for k in ("status", "answer", "verified", "verdict", "verdict_confidence",
@@ -344,23 +460,20 @@ async def swarm_width(conn) -> int:
     return max(1, min(SWARM_MAX_TASKS, width))
 
 
-async def _cloud_only(conn, chat) -> None:
-    """ToolError unless both models a swarm calls are cloud models."""
-    if chat.provider in LOCAL_PROVIDERS:
-        raise ToolError(f"a swarm makes several model calls at the same time and needs a cloud model; this chat uses the "
-                        f"local provider {chat.provider}. Use delegate (one subagent at a time), or switch the chat to a "
-                        "cloud model.")
+async def _cloud_only(conn, chat, run_id: str) -> None:
+    """ToolError unless both models a swarm calls are cloud models: the one that does the work (see _not_alone) and
+    the decision model, which checks every answer."""
+    await _not_alone(conn, chat, run_id)
     provider, model = await de.decision_model(conn)
     if provider in LOCAL_PROVIDERS:
         raise ToolError(f"a swarm needs a cloud decision model too (it checks every subagent's answer); the decision model "
                         f"is the local {provider}/{model}. Choose a cloud one in Settings, or use delegate.")
 
 
-async def _prepare_swarm(ctx: ToolContext, args: dict):
-    from .tools.base import Prepared
+async def _prepare_swarm(ctx: ToolContext, args: dict) -> Prepared:
     conn = await db.connect()
     try:
-        await _cloud_only(conn, await chats.get(conn, ctx.chat_id))
+        await _cloud_only(conn, await chats.get(conn, ctx.chat_id), ctx.run_id)
     finally:
         await conn.close()
     return Prepared()
@@ -370,7 +483,7 @@ async def _swarm(ctx: ToolContext, args: dict) -> ToolResult:
     tasks = args["tasks"]
     conn = await db.connect()
     try:
-        await _cloud_only(conn, await chats.get(conn, ctx.chat_id))
+        await _cloud_only(conn, await chats.get(conn, ctx.chat_id), ctx.run_id)
         used = (await (await conn.execute("select count(*) from subruns where run_id=?", (ctx.run_id,))).fetchone())[0]
         if used + len(tasks) > MAX_SUBAGENTS_PER_RUN:
             raise ToolError(f"a run may start at most {MAX_SUBAGENTS_PER_RUN} subagents and {used} were started: "
@@ -382,6 +495,14 @@ async def _swarm(ctx: ToolContext, args: dict) -> ToolResult:
             await hub.publish(ctx.run_id, {"type": "step_started", "step": step.model_dump()})
             steps.append(step)
         gate = asyncio.Semaphore(await swarm_width(conn))
+        # The members close their steps on this one connection, one at a time. Two that overlap leave one's read
+        # open while the other's update begins, and SQLite refuses a write that starts from an open read at once
+        # ("database is locked", no waiting) whenever anything else is writing: the whole swarm's answer was lost.
+        one_at_a_time = asyncio.Lock()
+
+        async def close(n: int, status: str, detail: dict):
+            async with one_at_a_time:
+                return await runs.patch_step(conn, steps[n].id, status=status, close=True, detail=detail)
 
         async def member(n: int, task: dict) -> dict:
             status, out = "error", {}
@@ -395,7 +516,7 @@ async def _swarm(ctx: ToolContext, args: dict) -> ToolResult:
                 status = "cancelled"
                 raise
             finally:
-                done = await asyncio.shield(runs.patch_step(conn, steps[n].id, status=status, close=True, detail={
+                done = await asyncio.shield(close(n, status, {
                     "brief": task["brief"][:500], **{k: out[k] for k in ("status", "verified", "verdict") if k in out}}))
                 await asyncio.shield(hub.publish(ctx.run_id, {"type": "step_finished", "step": done.model_dump()}))
             return {"task": n + 1, **out}
@@ -421,11 +542,12 @@ def swarm_tool() -> Tool:
         "when the work splits into parts that do not need each other's results: one host each, one feature each, one "
         "file each. Every task is a delegate brief: self-contained (a subagent sees nothing else), with success "
         "criteria and the tools it may use. Subagents of a swarm have no browser and no image tool. Each result carries "
-        "its own verdict: only verified=true may be reported as fact. Needs a cloud model; with a local one, use delegate."),
+        "its own verdict: only verified=true may be reported as fact. When a swarm is refused because the decision "
+        "model is a local one, use delegate."),
         {"type": "object", "properties": {
             "tasks": {"type": "array", "items": brief, "minItems": 2, "maxItems": SWARM_MAX_TASKS}},
          "required": ["tasks"], "additionalProperties": False},
-        "read", _swarm, prepare=_prepare_swarm)
+        "read", _swarm, prepare=_prepare_swarm, offered_to=_offered)
 
 
 def tool() -> Tool:
@@ -439,4 +561,4 @@ def tool() -> Tool:
             "success_criteria": {"type": "string", "maxLength": 2000},
             "tools": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 20}},
          "required": ["brief", "tools"], "additionalProperties": False},
-        "read", _delegate)
+        "read", _delegate, prepare=_prepare_delegate, offered_to=_offered)

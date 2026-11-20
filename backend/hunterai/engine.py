@@ -7,18 +7,20 @@ to SQLite so it survives a restart.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import dataclasses
 import time
 from typing import Awaitable, Callable
 
-from . import hub, permissions, secrets
+from . import checks, context, hub, permissions, problems, savepoint, secrets
 from .modes import build_system
 from .providers import registry
 from .providers.base import (Options, ProviderError, Stop, TextDelta, ThinkingDelta,
                              ThinkingSeal, ToolCall, ToolSpec, Usage, WireMessage, safe_call_id)
 from .repo import chats, goals, messages, runs, settings, targets
 from .tools import loopguard, runner
-from .types import NOT_FOR_MODELS, Block, OwnerNoteBlock, TextBlock, ThinkingBlock, ToolCallBlock, ToolResultBlock
+from .types import (NOT_FOR_MODELS, Block, ChangesBlock, NoticeBlock, OwnerNoteBlock, TextBlock, ThinkingBlock, ToolCallBlock,
+                    ToolResultBlock)
 
 DEFAULT_PROVIDER = "abliteration"
 FALLBACK_PROVIDER = "ollama"
@@ -56,14 +58,19 @@ class _Attempt:
         self.sources = None               # what the knowledge base gave this run, if anything
         self.check = None                 # the answer check of this run, once it is made
         self.callable: list[str] = []     # every tool this run may call: the listed ones and the ones loaded on demand
+        self.stop: str | None = None      # why the last model call ended, in the provider's word
+        self.produced = 0                 # output tokens of the last model call
+        self.notice: NoticeBlock | None = None    # what the owner has to know about how the answer ended
+        self.changes: ChangesBlock | None = None  # what the run changed in the work folder (coding mode)
 
     @property
     def started(self) -> bool:
         return bool(self.items)
 
     def blocks(self) -> list[Block]:
-        """What is stored: the run's blocks, then the knowledge-base sources when there are any."""
-        return [*self.items, *(b for b in (self.sources, self.check) if b is not None)]
+        """What is stored: the run's blocks, then the word about how the answer ended, what the run changed in the
+        work folder, the knowledge-base sources and the answer check, when there are any."""
+        return [*self.items, *(b for b in (self.notice, self.changes, self.sources, self.check) if b is not None)]
 
     def wire_blocks(self) -> list[Block]:
         """What goes back to the model: never a block that is only the owner's to read."""
@@ -177,8 +184,52 @@ async def _context(conn, chat, user_message_id: str, load_bytes: LoadBytes) -> l
                 except Exception:
                     pass  # adapter renders a missing image as a placeholder
         out.append(WireMessage(role=m.role, blocks=[b for b in m.blocks if b.type not in NOT_FOR_MODELS],
-                               images=images))
+                               images=images, id=m.id))
     return out
+
+
+async def _fitted(conn, run_id: str, provider, provider_name: str, model: str, system: str,
+                  wire: list[WireMessage], options: Options, specs: list[ToolSpec] | None, note: dict):
+    """The provider's events for one call, with the request made to fit the model's context
+    window first (see context.py). When the provider refuses the request for its size before it
+    has sent anything, the request is made smaller once more and the call is made again, once.
+    `note` gets what was done to the request, for the trajectory."""
+    async def fit(hard: bool = False) -> list[WireMessage]:
+        try:
+            fitted, done = await context.fit(conn, run_id, provider_name, model, system, wire, options, specs, hard=hard)
+        except Exception as e:      # a fault in the shortening must not break a chat that would have worked
+            fitted, done = wire, {"error": f"{type(e).__name__}: {e}"[:300]}
+        if done:
+            note["context"] = done
+        return fitted
+
+    def events(fitted: list[WireMessage]):
+        if specs and getattr(provider, "supports_tools", False):
+            return provider.stream(model, system, fitted, options, tools=specs)
+        return provider.stream(model, system, fitted, options)   # the Phase 1 call
+
+    fitted, sent = await fit(), False
+    try:
+        async with contextlib.aclosing(events(fitted)) as stream:
+            async for ev in stream:
+                sent = True
+                yield ev
+        return
+    except ProviderError as e:
+        if sent or not context.is_overflow(e):
+            raise
+        refused = e
+    smaller = await fit(hard=True)
+    if smaller is fitted or smaller is wire:
+        raise ProviderError(refused.kind, refused.message + context.TOO_LONG, refused.status, complete=True)
+    try:
+        async with contextlib.aclosing(events(smaller)) as stream:
+            async for ev in stream:
+                yield ev
+    except ProviderError as e:
+        if context.is_overflow(e):
+            raise ProviderError(e.kind, e.message + context.TOO_LONG, e.status, complete=True) from None
+        raise
 
 
 async def _attempt(conn, run_id: str, mid: str, provider_name: str, model: str, system: str,
@@ -190,15 +241,11 @@ async def _attempt(conn, run_id: str, mid: str, provider_name: str, model: str, 
     step = await runs.add_step(conn, run_id, "model_call", f"{provider_name}/{model}", {})
     await hub.publish(run_id, {"type": "step_started", "step": step.model_dump()})
     usage = Usage(0, 0)
-    status, detail = "error", {}
-    acc.output, acc.calls = False, []
+    status, detail, fit = "error", {}, {}
+    acc.output, acc.calls, acc.stop, acc.produced = False, [], None, 0
     try:
         provider = registry.get(provider_name)
-        if specs and getattr(provider, "supports_tools", False):
-            stream = provider.stream(model, system, wire, options, tools=specs)
-        else:
-            stream = provider.stream(model, system, wire, options)   # the Phase 1 call
-        async for ev in stream:
+        async for ev in _fitted(conn, run_id, provider, provider_name, model, system, wire, options, specs, fit):
             flush = False
             if isinstance(ev, TextDelta):
                 acc.text(ev.text)
@@ -225,27 +272,31 @@ async def _attempt(conn, run_id: str, mid: str, provider_name: str, model: str, 
                 flush = True
             elif isinstance(ev, Usage):
                 usage = ev
+                acc.produced = ev.output_tokens
             elif isinstance(ev, Stop):
                 detail = {"stop_reason": ev.reason}
+                acc.stop = ev.reason
             if acc.started and (flush or time.monotonic() - acc.last_flush >= FLUSH_SECONDS):
                 await messages.update(conn, mid, blocks=acc.blocks())
                 acc.last_flush = time.monotonic()
         status = "done"
     except ProviderError as e:
         detail = {"error": e.message, "kind": e.kind}
+        e.provider, e.model = provider_name, model      # which call it was: the fallback's error is not the first model's
         raise
     except asyncio.CancelledError:
         status = "cancelled"
         raise
     except KeyError as e:
         detail = {"error": f"unknown provider {provider_name}"}
-        raise ProviderError("bad_request", f"Unknown provider: {provider_name}") from e
+        raise ProviderError("bad_request", f"This chat is set to the provider \"{provider_name}\", which this HunterAI does "
+                            "not have. Pick a model from the list for this chat.", complete=True) from e
     except Exception as e:  # an adapter bug must not leave the run hanging
         detail = {"error": f"{type(e).__name__}: {e}"}
-        raise ProviderError("bad_request", f"{type(e).__name__}: {e}") from e
+        raise ProviderError("bad_request", problems.own_failure(e, f"calling {provider_name}/{model}"), complete=True) from e
     finally:
         done = await asyncio.shield(runs.finish_step(
-            conn, step.id, status, usage.input_tokens, usage.output_tokens, detail))
+            conn, step.id, status, usage.input_tokens, usage.output_tokens, {**detail, **fit}))
         await asyncio.shield(hub.publish(run_id, {"type": "step_finished",
                                                   "step": done.model_dump()}))
 
@@ -433,6 +484,10 @@ async def _execute(conn_factory, run_id: str, chat_id: str, user_message_id: str
             system = build_system(chat.mode, target, [s.name for s in specs],
                                   chats.resolve_workdir(chat), goal=await goals.get(conn, chat_id),
                                   persona=persona)
+            from . import upstream
+            via = await upstream.told(conn, chat.target_id, [s.name for s in specs])
+            if via:
+                system += "\n\n" + via
             if later:
                 from .tools import on_demand
                 system += "\n\n" + on_demand.index(later)
@@ -442,6 +497,10 @@ async def _execute(conn_factory, run_id: str, chat_id: str, user_message_id: str
             system = build_system(chat.mode, target, persona=persona)
         wire = await _context(conn, chat, user_message_id, load_bytes)
         acc.taken = {b.id for m in wire for b in m.blocks if b.type == "tool_call"}
+        from . import skills
+        about_skills = await skills.system_block(conn, wire, [s.name for s in specs])
+        if about_skills:
+            system += "\n\n" + about_skills
         provider, model = chat.provider, chat.model
         # Knowledge-base reference goes into the outgoing request only: `system` and `wire`
         # keep their values (the chat title below is taken from the user's own words).
@@ -456,15 +515,18 @@ async def _execute(conn_factory, run_id: str, chat_id: str, user_message_id: str
                                                          wire_out, acc, specs)
         await _tool_loop(conn, run_id, mid, chat, provider, model, system_out, wire_out, acc, specs)
         status = "done"
+        acc.notice = await _ending(chat, provider, model, acc)
         if specs:                 # a chat with tools: its answer can claim things the tool results do not show
             await _check_answer(conn, run_id, acc)
         if chat.title == "New chat":
             first = next((b.text for m in wire if m.role == "user" for b in m.blocks
                           if b.type == "text" and b.text), "")
+            first = await skills.title_text(conn, first)        # "/plan map the login" is titled by the task
             if _title_from(first):
                 await chats.update(conn, chat_id, title=_title_from(first))
+        await _folder_check(conn, run_id, chat, acc)        # last: stopping it stops nothing else of the run
     except ProviderError as e:
-        error = e.message
+        error = problems.model_call(e)
     except _Stopped as e:
         error = str(e)
     except permissions.Interrupted:
@@ -472,11 +534,27 @@ async def _execute(conn_factory, run_id: str, chat_id: str, user_message_id: str
     except asyncio.CancelledError:
         status = "cancelled"
     except Exception as e:
-        error = f"{type(e).__name__}: {e}"
+        error = problems.own_failure(e, "working on this message")
     finally:
         _finalizing.add(run_id)
         await asyncio.shield(_finalize(conn_factory, conn, run_id, mid, acc, status, error,
                                        provider, model, fallback_from))
+
+
+async def _ending(chat, provider_name: str, model: str, acc: _Attempt) -> NoticeBlock | None:
+    """The word for the owner when the last model call did not end by itself: cut off at a limit, or ended by the
+    provider's filter. The answer looks finished otherwise, and stops in the middle of a sentence."""
+    try:
+        options = Options(**(chat.options or {}))
+        window = None
+        window_for = getattr(registry.get(provider_name), "window_for", None)
+        if window_for is not None and problems.at_limit(acc.stop):
+            window = await window_for(model, options)
+        said = problems.cut_off(acc.stop, provider=provider_name, max_tokens=options.max_tokens,
+                                output_tokens=acc.produced, window=window)
+        return NoticeBlock(kind=said[0], text=said[1]) if said else None
+    except Exception:  # noqa: BLE001 - the run is done; a word that cannot be made is left out
+        return None
 
 
 async def _check_answer(conn, run_id: str, acc: _Attempt) -> None:
@@ -506,11 +584,42 @@ async def _check_answer(conn, run_id: str, acc: _Attempt) -> None:
         pass
 
 
+async def _folder_check(conn, run_id: str, chat, acc: _Attempt) -> None:
+    """For a run that ended by itself: the list of what it changed, and the check of its folder after it, when
+    the owner set one. The run is done and stays done, whatever happens here; stopping the run ends the check."""
+    try:
+        acc.changes = await _changes(run_id)
+        acc.changes = await checks.after(conn, run_id, chat, acc.changes)
+    except asyncio.CancelledError:
+        pass
+    except Exception:  # noqa: BLE001
+        pass
+
+
+async def _changes(run_id: str) -> ChangesBlock | None:
+    """What this run changed in its work folder, when a save point was taken for it (coding mode): the list the
+    owner sees under the answer and can undo. Runs for every outcome, a failed or stopped run included, and never
+    raises: a fault here must not cost the run its recorded outcome."""
+    try:
+        found = await savepoint.after_run(run_id)
+        if found and (found["files"] or found["reason"]):
+            return ChangesBlock(run_id=run_id, **found)
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
 async def _finalize(conn_factory, conn, run_id, mid, acc, status, error, provider, model,
                     fallback_from):
     """Record the outcome and tell subscribers. The database writes are best effort;
     run_finished is published whatever happens, or the chat's viewers would wait for ever."""
     msg, totals = None, {}
+    if acc.changes is None:                 # a run that did not end by itself: its list is made here, and no check follows it
+        acc.changes = await _changes(run_id)
+    try:
+        acc.changes = checks.unfinished(run_id, acc.changes)
+    except Exception:  # noqa: BLE001
+        pass
     try:
         try:
             if conn is None:

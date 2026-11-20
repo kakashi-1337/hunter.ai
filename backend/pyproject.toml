@@ -16,6 +16,7 @@ dependencies = [
     "pydantic>=2.14.3",
     "pypdf>=7.1.0",
     "python-multipart>=0.0.33",
+    "pyyaml>=6.0",
     "qdrant-client>=1.20.0",
     "uvicorn[standard]>=0.54.0",
 ]
@@ -33,4 +34,7 @@ asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
 addopts = "-rfE"            # name every failure and error at the end, also in a quiet run
 pythonpath = ["."]
-filterwarnings = ["error", "ignore::SyntaxWarning:google.genai.*"]
+# A warning from the compiler carries the path of the file it compiled where a module name would be, so the
+# package is named by its folder. google-genai has an invalid escape in a docstring: without this line the first
+# run in a new environment, when nothing is compiled yet, fails to import it and every later run passes.
+filterwarnings = ["error", 'ignore::SyntaxWarning:.*[/\\]google[/\\]genai[/\\].*']

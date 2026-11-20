@@ -26,7 +26,7 @@ import signal
 import tempfile
 
 from .. import procs
-from .base import ModelInfo, Options, ProviderError, Stop, TextDelta, ThinkingDelta, Usage, WireMessage
+from .base import ModelInfo, Options, ProviderError, Stop, TextDelta, ThinkingDelta, Usage, WireMessage, cli_env, way_out
 from .codex import flatten_conversation
 
 EXECUTABLE = "claude"
@@ -42,7 +42,8 @@ _LIMIT = ("usage limit", "rate limit", "limit reached", "overloaded")
 def _failure(text: str) -> ProviderError:
     low = text.lower()
     if any(s in low for s in _LOGIN):
-        return ProviderError("auth", "the claude CLI is not logged in: run `claude` in a terminal and log in, then try again")
+        return ProviderError("auth", "the claude CLI is not logged in: run `claude` in a terminal and log in, then try again",
+                             complete=True)
     if any(s in low for s in _LIMIT):
         return ProviderError("rate_limit", f"claude: {text[:300]}")
     return ProviderError("unavailable", f"claude failed: {text[:300]}")
@@ -76,7 +77,8 @@ class ClaudeCodeProvider:
         usage, partial, emitted, failure = Usage(0, 0), False, False, None
         try:
             proc = await asyncio.create_subprocess_exec(
-                exe, *args, cwd=workdir, env=procs.child_env(),      # no API key of ours: the CLI uses its own login
+                exe, *args, cwd=workdir,
+                env=cli_env(procs.child_env(), await way_out()),     # no API key of ours: the CLI uses its own login
                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
                 limit=16 * 1024 * 1024, start_new_session=True)
             proc.stdin.write(prompt.encode())

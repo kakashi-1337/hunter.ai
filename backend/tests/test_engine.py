@@ -402,3 +402,28 @@ def test_no_offered_tools_means_the_no_tools_notice():
         prompt = build_system(mode, None)
         assert "cannot run commands" in prompt
         assert "Never say you ran" in prompt
+
+
+async def test_a_run_that_announced_its_end_is_waited_for_before_its_test_ends(conn, setup, monkeypatch):
+    """A test may stop looking at a run once `run_finished` is published. The run is then still closing its
+    database connection. If the event loop closed under it, the connection's thread would fail with "Event loop
+    is closed", and a later test would be blamed for it."""
+    import time
+
+    import aiosqlite
+
+    from tests.toolkit import runs_have_ended
+    real = aiosqlite.Connection.close
+
+    async def slow_close(self):
+        if self is not conn:                         # the run's own connection, on a slow disk
+            await self._execute(time.sleep, 0.3)
+        return await real(self)
+    use(abliteration=Scripted("abliteration"))
+    chat, user = await setup()
+    run_id, _ = await engine.start_run(db.connect, chat.id, user.id, no_bytes)
+    monkeypatch.setattr(aiosqlite.Connection, "close", slow_close)
+    assert [e["type"] async for e in hub.subscribe(run_id)][-1] == "run_finished"
+    assert engine.is_active(run_id)                  # announced, and not done yet
+    await runs_have_ended()                          # what every test does when it ends (conftest)
+    assert not engine.is_active(run_id)

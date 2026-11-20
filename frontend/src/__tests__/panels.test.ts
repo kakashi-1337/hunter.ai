@@ -46,13 +46,13 @@ describe('swarmMembers', () => {
 
 describe('machineLine', () => {
   it('says the temperature and what is loaded, and warns near the limit', () => {
-    expect(machineLine({ cpu_temp: 63.4, cpu_limit: 90, local_models: [] })).toEqual({ text: 'CPU 63°C · no local model loaded', level: '' })
+    expect(machineLine({ cpu_temp: 63.4, cpu_limit: 90, local_models: [] })).toEqual({ text: 'CPU 63°C · no local model loaded', level: '', about: '' })
     expect(machineLine({ cpu_temp: 82, cpu_limit: 90, local_models: [{ name: 'mimo:9b', vram_mb: 9216 }] }))
-      .toEqual({ text: 'CPU 82°C · mimo:9b loaded (9.0 GB)', level: 'warn' })
-    expect(machineLine({ cpu_temp: 93, cpu_limit: 90, local_models: null })).toEqual({ text: 'CPU 93°C · Ollama is not running', level: 'bad' })
+      .toEqual({ text: 'CPU 82°C · mimo:9b loaded (9.0 GB)', level: 'warn', about: '' })
+    expect(machineLine({ cpu_temp: 93, cpu_limit: 90, local_models: null })).toEqual({ text: 'CPU 93°C · Ollama is not running', level: 'bad', about: '' })
     expect(machineLine({ cpu_temp: 93, cpu_limit: null, local_models: [] }).level).toBe('')
     expect(machineLine({ cpu_temp: null, cpu_limit: 90, local_models: [{ name: 'a', vram_mb: 0 }, { name: 'b', vram_mb: 512 }] }).text)
-      .toBe('a, b loaded (0.5 GB)')
+      .toBe('a (0.0 GB), b (0.5 GB) loaded')
   })
 })
 

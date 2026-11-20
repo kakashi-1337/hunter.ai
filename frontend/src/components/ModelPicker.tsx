@@ -1,5 +1,5 @@
 import { useChatView, useStore } from '../store'
-import { pruneOptions } from '../tree'
+import { providerGroup, pruneOptions } from '../tree'
 import type { ModelInfo } from '../types'
 
 export function useModelInfo(): ModelInfo | null {
@@ -29,15 +29,18 @@ export function ModelPicker() {
   return (
     <select aria-label="Model" value={current} disabled={busy} onChange={(e) => choose(e.target.value)} title={`${provider}/${model}`}>
       {!listed && <option value={current}>{provider}/{model}</option>}
-      {providers.map((p) => (
-        <optgroup key={p.name} label={p.configured ? p.name : p.name === 'codex' ? 'codex — install the codex CLI' : p.name === 'claude_code' ? 'claude_code — install the claude CLI and log in' : `${p.name} — add key in settings`}>
-          {p.configured && p.models.length === 0 && <option disabled>no models available</option>}
-          {p.models.map((m) => (
-            <option key={m.id} value={`${p.name}\u0000${m.id}`}>{m.label === m.id ? m.id : `${m.label} (${m.id})`}</option>
-          ))}
-          {!p.configured && <option disabled>not configured</option>}
-        </optgroup>
-      ))}
+      {providers.map((p) => {
+        const { label, empty } = providerGroup(p)
+        return (
+          <optgroup key={p.name} label={label}>
+            {p.configured && empty && <option disabled>{empty}</option>}
+            {p.models.map((m) => (
+              <option key={m.id} value={`${p.name}\u0000${m.id}`}>{m.label === m.id ? m.id : `${m.label} (${m.id})`}</option>
+            ))}
+            {!p.configured && <option disabled>{empty}</option>}
+          </optgroup>
+        )
+      })}
     </select>
   )
 }

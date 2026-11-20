@@ -99,10 +99,34 @@ class OwnerNoteBlock(BaseModel):
     text: str
 
 
-NOT_FOR_MODELS = ("sources", "answer_check", "owner_note")     # block types that are the owner's to read only
+class NoticeBlock(BaseModel):
+    """Something about the answer that the owner has to know and the text does not show: it was cut off at a
+    limit, or the provider's filter ended it. Shown under the answer; never sent to a model."""
+    type: Literal["notice"] = "notice"
+    kind: str                    # "cut_off" | "filtered"
+    text: str
+
+
+class ChangesBlock(BaseModel):
+    """What a run in coding mode changed in the work folder, with the save points from before its first change
+    and from its end, so that the owner can put it back. Shown under the answer; never sent to a model."""
+    type: Literal["changes"] = "changes"
+    run_id: str
+    folder: str                  # the work folder the save points are of
+    files: list[dict] = []       # {"path", "change": "new" | "changed" | "deleted"}
+    before: str = ""
+    after: str = ""
+    reason: str = ""             # why there is no list although the run may have changed files, in words for the owner
+    check: dict | None = None    # the folder's check before and after the run, when the owner set one (see checks.py)
+    undone: bool = False         # every file is as it was before the run again: nothing is left to undo
+    left: list[str] = []         # after an undo: files the owner changed since the run, left as they are
+
+
+NOT_FOR_MODELS = ("sources", "answer_check", "owner_note", "notice", "changes")     # block types that are the owner's to read only
 
 Block = Annotated[
-    Union[TextBlock, ThinkingBlock, ImageBlock, FileBlock, ToolCallBlock, ToolResultBlock, SourcesBlock, AnswerCheckBlock, OwnerNoteBlock],
+    Union[TextBlock, ThinkingBlock, ImageBlock, FileBlock, ToolCallBlock, ToolResultBlock, SourcesBlock, AnswerCheckBlock,
+          OwnerNoteBlock, NoticeBlock, ChangesBlock],
     Field(discriminator="type"),
 ]
 BlockList = TypeAdapter(list[Block])
@@ -170,7 +194,8 @@ class Step(BaseModel):
     id: str
     run_id: str
     seq: int
-    kind: Literal["model_call", "tool_call", "subagent", "permission", "fallback", "decision", "retrieval", "user_note"]
+    kind: Literal["model_call", "tool_call", "subagent", "permission", "fallback", "decision", "retrieval", "user_note", "context",
+                  "check"]
     name: str
     status: str
     started_at: str

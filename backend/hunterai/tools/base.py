@@ -5,9 +5,9 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
-from ..types import Risk, Target
+from ..types import Chat, Risk, Target
 
 
 @dataclass(frozen=True)
@@ -80,6 +80,8 @@ class Tool:
     writes_files: bool = False    # writes a file although its risk class is not "write"
     grant_as: str | None = None   # tools sharing this name share "allow for this chat" answers
     available: Callable[[], bool] | None = None   # asked on every offer; False: not offered now
+    # Asked on every offer, with a database connection and the chat; False: not offered to that chat.
+    offered_to: Callable[[Any, Chat], Awaitable[bool]] | None = None
 
     @property
     def grant_name(self) -> str:

@@ -1,7 +1,10 @@
 import os
 
 from hunterai import config, modes, procs, toolbox
+from hunterai.providers.base import TextDelta
 from tests.test_api import client  # noqa: F401 (client is a fixture)
+from tests.test_engine import go, setup, use  # noqa: F401 (setup is a fixture)
+from tests.toolkit import Turns
 
 
 def program(name: str, executable: bool = True):
@@ -29,12 +32,26 @@ def test_commands_find_the_tool_folder_first(monkeypatch):
 
 
 def test_the_model_is_told_which_programs_it_has_only_with_a_shell():
-    assert "tool folder" not in modes.build_system("pentesting", None, ["shell"])
+    from hunterai.tools import shell
+    runs_commands = shell.tools()[0].name                  # the tool as the app offers it to a model
+    assert runs_commands == "execute"
+    assert "tool folder" not in modes.build_system("pentesting", None, [runs_commands])
     program("nuclei"); program("mytool")
-    told = modes.build_system("pentesting", None, ["shell", "read"])
+    told = modes.build_system("pentesting", None, [runs_commands, "read"])
     assert "nuclei (vulnerability scanner driven by templates)" in told and "mytool" in told
-    assert "nuclei" not in modes.build_system("pentesting", None, ["read"])
+    assert "nuclei" not in modes.build_system("pentesting", None, ["read", "process_output"])
     assert "nuclei" not in modes.build_system("pentesting", None, [])
+
+
+async def test_a_run_tells_the_model_its_programs(conn, setup):
+    from hunterai.tools import registry, shell
+    for t in shell.tools():
+        registry.register(t)
+    program("nuclei")
+    p = Turns("abliteration", [TextDelta("ok")])
+    use(abliteration=p)
+    await go(conn, *await setup())
+    assert "Programs in the owner's tool folder" in p.calls[0]["system"] and "nuclei (vulnerability scanner" in p.calls[0]["system"]
 
 
 async def test_the_checkup_names_the_tool_folder(client, monkeypatch):
@@ -66,4 +83,4 @@ def test_the_bin_folder_next_to_the_code_comes_first(monkeypatch):
     assert [t["name"] for t in got] == ["gitleaks", "mytool", "nuclei"] and "secrets" in got[0]["about"]
     monkeypatch.setenv("PATH", f"/usr/bin:{toolbox.folder()}:/bin")
     assert procs.child_env()["PATH"] == f"{project}:{toolbox.folder()}:/usr/bin:/bin"              # both first, the project's before the other
-    assert "gitleaks (finds secrets" in modes.build_system("pentesting", None, ["shell"])
+    assert "gitleaks (finds secrets" in modes.build_system("pentesting", None, ["execute"])

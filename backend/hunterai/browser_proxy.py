@@ -6,15 +6,19 @@ local network (unless the owner allowed that exact host and port), refuses Hunte
 API, and connects to the address it checked. The browser never resolves a name on its own,
 so a name cannot answer one thing to the check and another to the connection.
 
-With `via` set, a checked connection is handed to another proxy (Caido, which records it)
-by name instead of being made here. That proxy's own way out is a second Proxy of this
-kind, which checks again and connects to the address it checked: see `caido.egress`."""
+With `via` set, a checked connection is handed to another proxy by name instead of being made
+here: Caido, which records it, or the owner's own proxy, with its login. Caido's own way out is
+a second Proxy of this kind, which checks again and connects to the address it checked: see
+`caido.egress`. When the proxy in `via` does not carry a connection, the answer says why and
+nothing is connected from here instead."""
 from __future__ import annotations
 
 import asyncio
+import re
 from collections.abc import Callable
 from urllib.parse import urlsplit
 
+from . import upstream as owners_proxy
 from .tools import resolve
 from .tools.base import HostUse, ToolError
 
@@ -22,6 +26,7 @@ MAX_HEAD = 64 * 1024
 CONNECT_TIMEOUT = 15.0
 IDLE_TIMEOUT = 300.0
 _HOP = {"proxy-connection", "proxy-authorization", "connection", "keep-alive"}
+REFUSED = "X-HunterAI-Refused"       # on every answer this proxy makes itself: why, so it is not taken for the site's
 
 
 async def _resolve(host: str) -> tuple[str, ...]:
@@ -37,8 +42,9 @@ class Proxy:
     although they are local; `on_block(text)` is told about every refused connection."""
 
     def __init__(self, on_block: Callable[[str], None] | None = None):
-        self.via: tuple[str, int] | None = None      # the proxy that carries what this one let through
+        self.via: owners_proxy.Upstream | None = None      # the proxy that carries what this one let through
         self.local_ok: set[tuple[str, int]] = set()
+        self.verify_sites = False        # set while `via` is Caido: a site's certificate is checked here, before Caido gets it
         self.on_block = on_block or (lambda text: None)
         self._server: asyncio.AbstractServer | None = None
         self._tasks: set[asyncio.Task] = set()
@@ -80,6 +86,7 @@ class Proxy:
         task = asyncio.current_task()
         self._tasks.add(task)
         upstream = None
+        granted = False                  # the tunnel was granted: from then on nothing of this proxy's own may be written into it
         try:
             head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 30)
             if len(head) > MAX_HEAD:
@@ -89,29 +96,50 @@ class Proxy:
             if method.upper() == "CONNECT":
                 host, _, port = target.rpartition(":")
                 ip = await self.check(host, int(port) if port.isdigit() else 0)
+                first = b""
+                if self.verify_sites:
+                    # Caido takes a site's certificate as it comes. So the tunnel is granted first, and what the
+                    # browser says next decides: a TLS hello is held until HunterAI has seen the certificate itself.
+                    # What is no TLS (a plain WebSocket) has no certificate, and goes on.
+                    writer.write(b"HTTP/1.1 200 Connection established\r\n\r\n")
+                    await writer.drain()
+                    granted = True
+                    first = await asyncio.wait_for(reader.read(65536), 30)
+                    if not first:
+                        return
+                    if first[:1] == b"\x16" and first[1:2] in (b"", b"\x03"):
+                        from . import certs
+                        await certs.check(host.strip("[]"), ip, int(port))
                 if self.via is None:
                     upstream = await asyncio.wait_for(asyncio.open_connection(ip, int(port)), CONNECT_TIMEOUT)
-                else:
-                    upstream = await asyncio.wait_for(asyncio.open_connection(*self.via), CONNECT_TIMEOUT)
-                    upstream[1].write(f"CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n".encode("latin-1"))
+                else:           # the carrying proxy is asked for the host by name, with its login if it has one
+                    upstream = await owners_proxy.open_tunnel(self.via, host.strip("[]"), int(port), CONNECT_TIMEOUT)
+                if granted:
+                    upstream[1].write(first)
                     await upstream[1].drain()
-                    answer = await asyncio.wait_for(upstream[0].readuntil(b"\r\n\r\n"), CONNECT_TIMEOUT)
-                    if answer.split(b"\r\n", 1)[0].split(b" ")[1:2] != [b"200"]:
-                        raise OSError("the carrying proxy refused the tunnel")
-                writer.write(b"HTTP/1.1 200 Connection established\r\n\r\n")
-                await writer.drain()
+                else:
+                    writer.write(b"HTTP/1.1 200 Connection established\r\n\r\n")
+                    await writer.drain()
             else:
                 parts = urlsplit(target)
                 if parts.scheme != "http" or not parts.hostname:
                     raise ToolError("only http and https are carried")
                 port = parts.port or 80
                 ip = await self.check(parts.hostname, port)
-                upstream = await asyncio.wait_for(asyncio.open_connection(*(self.via or (ip, port))), CONNECT_TIMEOUT)
                 path = (parts.path or "/") + (f"?{parts.query}" if parts.query else "")
-                if self.via is not None:        # a proxy is asked with the whole address
+                login = None
+                if self.via is None:
+                    upstream = await asyncio.wait_for(asyncio.open_connection(ip, port), CONNECT_TIMEOUT)
+                elif self.via.scheme == "socks5":       # a tunnel to the site, and the request as the site takes it
+                    upstream = await owners_proxy.open_tunnel(self.via, parts.hostname, port, CONNECT_TIMEOUT)
+                else:                                   # an HTTP proxy is asked with the whole address
+                    upstream = await owners_proxy.reach(self.via, CONNECT_TIMEOUT)
                     path = f"http://{parts.netloc.rpartition('@')[2]}{path}"
+                    login = owners_proxy.basic(self.via)
                 upgrade = any(line.lower().startswith("upgrade:") for line in lines[1:])
                 kept = [line for line in lines[1:] if line and line.split(":", 1)[0].strip().lower() not in _HOP]
+                if login:
+                    kept.append(f"Proxy-Authorization: {login}")
                 # One request per connection: the next one may be for another host and must be checked too.
                 kept.append("Connection: Upgrade" if upgrade else "Connection: close")
                 upstream[1].write((f"{method} {path} {version or 'HTTP/1.1'}\r\n" + "\r\n".join(kept) + "\r\n\r\n").encode("latin-1"))
@@ -119,9 +147,15 @@ class Proxy:
             await self._pipe(reader, writer, *upstream)
         except ToolError as e:
             self.on_block(str(e))
-            await self._refuse(writer, str(e))
+            if not granted:              # into a granted tunnel nothing is written: the browser takes it for the site
+                await self._refuse(writer, str(e))
+        except owners_proxy.ProxyFailed as e:           # only ever raised for the proxy in `via`
+            self.on_block(f"the proxy at {self.via.address}: {e}")
+            if not granted:
+                await self._refuse(writer, str(e), 502)
         except (asyncio.IncompleteReadError, asyncio.LimitOverrunError, asyncio.TimeoutError, OSError, ValueError):
-            await self._refuse(writer, "upstream unavailable", 502)
+            if not granted:
+                await self._refuse(writer, "upstream unavailable", 502)
         except asyncio.CancelledError:
             pass
         finally:
@@ -135,10 +169,11 @@ class Proxy:
 
     @staticmethod
     async def _refuse(writer: asyncio.StreamWriter, why: str, status: int = 403) -> None:
-        body = f"Blocked by HunterAI: {why}".encode()
-        try:
-            writer.write(f"HTTP/1.1 {status} Blocked\r\nContent-Type: text/plain\r\nContent-Length: {len(body)}\r\n"
-                         f"Connection: close\r\n\r\n".encode() + body)
+        body = f"Blocked by HunterAI: {why}\n".encode()     # a whole line: a command prints it as it comes
+        said = re.sub(r"[^\x20-\x7e]", "?", why)[:300]      # one line of plain characters: it travels in the head
+        try:                 # a failed proxy is named in the status line too: that is all a client shows of a refused tunnel
+            writer.write(f"HTTP/1.1 {status} {said if status == 502 else 'Blocked'}\r\nContent-Type: text/plain; charset=utf-8\r\n"
+                         f"{REFUSED}: {said}\r\nContent-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode() + body)
             await writer.drain()
         except (OSError, ConnectionError):
             pass
