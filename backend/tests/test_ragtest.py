@@ -44,7 +44,7 @@ async def test_a_test_of_identifiers_needs_no_model_and_says_where_the_search_pu
     assert all(i["source"].endswith(".md") and i["chunk_id"] for i in test["items"])
     result = await ragtest.run(conn, test)
     got = result["kinds"]["identifier"]
-    assert got["asked"] == len(test["items"]) > 0 and got["first"] == got["top"] == got["pool"] == got["asked"] and got["missed"] == 0
+    assert got["asked"] == len(test["items"]) > 0 and got["first"] == got["sent"] == got["pool"] == got["asked"] and got["missed"] == 0
     assert result["misses"] == [] and sum(result["found_by"].values()) == got["asked"]
 
 
@@ -78,8 +78,8 @@ async def test_a_passage_the_search_does_not_bring_is_counted_and_named(conn, co
         {"kind": "identifier", "query": "CVE-2024-11111", "chunk_id": kb.chunk_id(docs["sqli.md"].id, 0), "source": "sqli.md"},
         {"kind": "question", "query": "something no passage is about", "chunk_id": "f" * 32, "source": "gone.md"}]}
     result = await ragtest.run(conn, test)
-    assert result["kinds"]["identifier"] == {"asked": 1, "first": 1, "top": 1, "pool": 1, "missed": 0}
-    assert result["kinds"]["question"] == {"asked": 1, "first": 0, "top": 0, "pool": 0, "missed": 1}
+    assert result["kinds"]["identifier"] == {"asked": 1, "first": 1, "sent": 1, "pool": 1, "missed": 0}
+    assert result["kinds"]["question"] == {"asked": 1, "first": 0, "sent": 0, "pool": 0, "missed": 1}
     assert result["misses"] == [{"kind": "question", "query": "something no passage is about", "source": "gone.md"}]
     said = ragtest.report(test, result)
     assert "identifiers" in said and "questions" in said and "gone.md" in said and "something no passage is about" in said
@@ -105,3 +105,61 @@ async def test_the_command_builds_a_test_once_keeps_it_and_compares_the_next_run
 async def test_in_a_data_folder_that_was_never_used_the_command_says_there_is_no_collection(capsys):
     """As the other commands do, it sets the database up before it reads from it: no "no such table"."""
     assert await ragtest.main([]) == 0 and "none yet" in capsys.readouterr().out
+
+
+# ---- what the first real run showed
+
+def hit(chunk_id, text, dense=1, keyword=None):
+    from hunterai.types import Hit
+    return Hit(chunk_id=chunk_id, document_id="d", collection_id="c", source_uri=f"{chunk_id}.md", ordinal=0, text=text,
+               line_start=1, line_end=2, score=0.5, dense_rank=dense, keyword_rank=keyword)
+
+
+async def test_in_the_message_means_what_fits_a_message_not_the_first_eight(conn, monkeypatch):
+    """A message gets 8 passages at most and 6,000 characters of whole passages: of passages of full size, about
+    three. The run counted "among the first 8", which the second of two long passages is, and a message does not get it."""
+    async def found(conn, collections, query, limit=8, **kw):
+        return [hit("long", "x" * 5000), hit("wanted", "y" * 2000, dense=2)]
+    monkeypatch.setattr(ragtest.search, "search", found)
+    test = {"collection": "c", "name": "n", "created": "t", "written_by": None,
+            "items": [{"kind": "identifier", "query": "q", "chunk_id": "wanted", "source": "wanted.md"},
+                      {"kind": "identifier", "query": "q", "chunk_id": "long", "source": "long.md"}]}
+    result = await ragtest.run(conn, test)
+    assert result["kinds"]["identifier"] == {"asked": 2, "first": 1, "sent": 1, "pool": 2, "missed": 0}
+    said = ragtest.report(test, result)
+    assert "in the message" in said and "1 stood among the 40 but not in the message" in said
+
+
+async def test_a_decision_model_that_writes_no_question_is_named_with_its_reason_and_not_asked_thirty_times(conn, col, tmp_path):
+    """The first real run asked a model thirty times, got nothing usable, and said nothing of it."""
+    from hunterai.providers.base import ProviderError
+    await ingest_texts(conn, col, tmp_path, TEXTS)
+    await settings.put(conn, "decision_provider", "decider")
+    await settings.put(conn, "decision_model", "d")
+    d = Json("decider", *[ProviderError("unavailable", "the model did not answer")] * 6)
+    registry.override("decider", d)
+    test = await ragtest.build(conn, col, identifiers=0, questions=4)
+    assert test["items"] == [] and len(d.calls) == 3                    # three in a row with none written: it stops asking
+    assert test["no_questions"]["asked"] == 3 and "the model did not answer" in test["no_questions"]["why"]
+    assert test["no_questions"]["by"] == "decider/d"
+    said = ragtest.report({**test, "name": col.name}, {"at": "t", "kinds": {}, "found_by": {"both": 0, "vectors": 0, "keywords": 0}, "misses": []})
+    assert "No question was written" in said and "decider/d" in said and "the model did not answer" in said and "--new" in said
+
+
+async def test_a_reply_without_a_question_in_it_is_a_reason_too(conn, col, tmp_path):
+    await ingest_texts(conn, col, tmp_path, TEXTS)
+    await settings.put(conn, "decision_provider", "decider")
+    await settings.put(conn, "decision_model", "d")
+    registry.override("decider", Json("decider", "{}", "not json", json.dumps({"question": "  "})))
+    test = await ragtest.build(conn, col, identifiers=0, questions=3)
+    assert test["no_questions"]["asked"] == 3 and "no question in its reply" in test["no_questions"]["why"]
+
+
+def test_a_run_from_before_the_message_was_counted_is_not_compared_with():
+    test = {"name": "n", "written_by": None, "items": []}
+    now = {"at": "t", "kinds": {"identifier": {"asked": 30, "first": 9, "sent": 12, "pool": 25, "missed": 5}},
+           "found_by": {"both": 9, "vectors": 0, "keywords": 16}, "misses": []}
+    old = {"at": "t", "kinds": {"identifier": {"asked": 30, "first": 9, "top": 25, "pool": 25, "missed": 5}}}
+    assert "counted the first 8" in ragtest.report(test, now, old)
+    same = ragtest.report(test, now, now)
+    assert "the same as in the run before" in same

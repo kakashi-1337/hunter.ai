@@ -522,8 +522,10 @@ file is never read.
 ### What the search finds, measured
 
 `scripts/rag-test.sh "NAME"` asks the search of a collection for things that stand in exactly
-one passage, and says where that passage stood: first, among the 8 a message gets, among the
-40 the search chooses from, or nowhere. Nothing of the collection is changed.
+one passage, and says where that passage stood: first, in the message, among the 40 the search
+chooses from, or nowhere. "In the message" is counted as a message is filled: 8 passages at
+most, and whole passages while they fit 6,000 characters, which is about three passages of
+full size. Nothing of the collection is changed.
 
 ```sh
 scripts/rag-test.sh                          # the collections
@@ -542,8 +544,10 @@ A test asks two kinds of things, 30 of each unless you say otherwise:
 The test is kept with its runs (`rag-tests/` in the data folder). The next run asks the same
 test and compares with the run before, so a change to the search, to the embedding model or
 to how the texts are cut is measured with the same questions. How to read it: what stood
-among the 40 and not among the 8 is what a reranker could bring up; what was not among the
-40 was found by neither half of the search, and no reranker brings that up. The questions
+among the 40 and was not in the message is what a reranker could bring up; what was not among
+the 40 was found by neither half of the search, and no reranker brings that up. When the
+decision model writes no question that can be used, the test says which model was asked and
+why nothing came of it, and stops asking after three in a row. The questions
 are a model's and the answer counted as right is the passage they were written from:
 another passage that answers as well counts as a miss, so read the list of misses before
 you conclude from the numbers.
