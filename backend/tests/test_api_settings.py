@@ -187,3 +187,15 @@ async def test_a_provider_that_cannot_do_subagent_work_is_refused_and_nothing_is
     assert r.status_code == 400 and name in r.json()["detail"] and "cloud provider that uses tools" in r.json()["detail"]
     s = (await client.get("/api/settings")).json()
     assert s["subagent_provider"] is None and s["max_turns"] != 7
+
+
+# ---- where the embedding model runs
+
+async def test_the_embedding_model_runs_where_ollama_puts_it_until_the_owner_keeps_it_on_the_processor(client):
+    from hunterai.kb import embed
+    assert (await client.get("/api/settings")).json()["embed_on_cpu"] is False
+    r = await client.put("/api/settings", json={"embed_on_cpu": True})
+    assert r.status_code == 200 and r.json()["embed_on_cpu"] is True
+    assert embed.on_cpu() is True and config.env(embed.CPU_ENV) == "1"      # in the env file: the worker that ingests reads it too
+    r = await client.put("/api/settings", json={"embed_on_cpu": False})
+    assert r.json()["embed_on_cpu"] is False and embed.on_cpu() is False

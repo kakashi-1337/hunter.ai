@@ -8,6 +8,7 @@ from typing import Literal
 from pydantic import BaseModel, StrictInt, ValidationError
 
 from .. import answer_check, caido, config, engine, envfile, notify, permissions, problems, stale, subagents
+from ..kb import embed
 from ..tools import on_demand
 from ..providers import colibri, ollama, registry
 from . import providers as providers_api
@@ -51,6 +52,7 @@ class SettingsIn(BaseModel):
     provider_proxy: str | None = None       # the proxy the model providers are reached through; "" for none
     colibri_url: str | None = None          # where the owner's colibri server is; "" for none (colibri is then not used)
     decision_engine: bool | None = None     # the built-in decide_* tools and the risk gate (off: another engine is used)
+    embed_on_cpu: bool | None = None        # the embedding model runs on the processor, not on the graphics card
     subagent_provider: str | None = None    # the cloud model that does the subagent work of a chat on a local model;
     subagent_model: str | None = None       # "" or null: such a chat has no subagents
 
@@ -110,6 +112,7 @@ async def _view(conn) -> dict:
         "provider_proxy_password": bool(models_via and models_via.password),
         "colibri_url": colibri.address() or "",
         "colibri_key_set": bool(config.env(colibri.KEY_ENV)),
+        "embed_on_cpu": embed.on_cpu(),
         "subagent_provider": await settings.get(conn, "subagent_provider") or None,
         "subagent_model": await settings.get(conn, "subagent_model") or None,
         "subagent_providers": subagents.stand_in_providers(),     # the ones that can be chosen: cloud, with tools
@@ -195,6 +198,9 @@ async def put_settings(body: SettingsIn, conn=Depends(get_conn)):
                                      f"{ollama.MIN_NUM_CTX:,} to {ollama.MAX_NUM_CTX:,} tokens")
         envfile.set_var(config.env_file(), ollama.NUM_CTX_ENV, "" if size is None else str(size))
         providers_api.clear_cache()      # the model list names the window of each local model
+    if fields.get("embed_on_cpu") is not None:
+        envfile.set_var(config.env_file(), embed.CPU_ENV, "1" if fields["embed_on_cpu"] else "")
+    fields.pop("embed_on_cpu", None)
     if "max_turns" in fields:
         turns = fields.pop("max_turns")
         if not isinstance(turns, int) or not 1 <= turns <= engine.MAX_TURNS_LIMIT:

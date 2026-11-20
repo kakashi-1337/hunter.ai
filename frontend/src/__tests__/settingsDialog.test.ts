@@ -181,3 +181,22 @@ describe('the cloud model for the subagents of a local chat', () => {
     expect(provider()).toBeUndefined()
   })
 })
+
+describe('where the embedding model runs', () => {
+  const box = () => [...host.querySelectorAll('label.check')].find((l) => /embedding model on the processor/.test(l.textContent ?? ''))?.querySelector<HTMLInputElement>('input')
+
+  it('is a switch that is off at the start, and is saved when it is set', async () => {
+    const knows: Settings = { ...SETTINGS, embed_on_cpu: false }
+    useStore.setState({ settings: knows, providers: [] })
+    vi.spyOn(api, 'getSettings').mockResolvedValue(knows)
+    await open()
+    expect(box()!.checked).toBe(false)
+    await act(async () => { box()!.click() })
+    expect(put).toHaveBeenLastCalledWith({ embed_on_cpu: true })
+  })
+
+  it('is left out for a server from before it knew of it', async () => {
+    await open()
+    expect(box()).toBeUndefined()
+  })
+})

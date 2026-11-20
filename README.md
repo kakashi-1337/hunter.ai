@@ -503,6 +503,15 @@ or fails. `HUNTERAI_EMBED_KEEP_LOADED` sets the seconds it stays after a single 
 instead (`0` unless set), for a machine with room for it. To have no embedding at all on a
 message, switch "offer notes" off under Settings, "Manage memory".
 
+Where the embedding model runs is Ollama's choice: on the graphics card when there is room.
+Beside a local chat model the two then share that card's memory, and when a program outside
+Ollama holds the card (colibri), the embedding model can fail to load. "Run the embedding
+model on the processor" (Settings, Knowledge base; `HUNTERAI_EMBED_ON_CPU=1`) asks Ollama for
+no layer on the card (`num_gpu` 0): the card stays with the chat model and searches find
+the same passages. Embedding is slower there, which shows when a large folder or repository
+is indexed. An Ollama that may hold only one model at a time (`OLLAMA_MAX_LOADED_MODELS=1`)
+still unloads the chat model for each embedding: allow two.
+
 While a repository is cloned or a site is crawled, the entry says so and how much has been
 downloaded, and an entry that has not started says it is waiting its turn (one job runs at
 a time). A job survives a crash or a reboot: when the worker starts again it takes up every
