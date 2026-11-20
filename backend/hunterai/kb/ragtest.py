@@ -27,6 +27,8 @@ from .embed import EmbedError
 IDENTIFIERS = 30                # identifiers a new test asks
 QUESTIONS = 30                  # questions a new test has written
 SCAN = 5000                     # passages of a collection that are looked at when a test is built
+SPARE = 4                       # times as many identifiers are looked at as are asked: some stand outside that part too
+HOLDERS_SHOWN = 50              # passages that hold a missed identifier are counted up to this
 TOP = retrieve.RETRIEVE_LIMIT   # passages a message gets at most
 ROOM = retrieve.DEFAULT_BUDGET_CHARS    # and the characters of whole passages it has room for
 POOL = search.CANDIDATES        # passages each half of the search brings, which a reranker could choose from
@@ -121,8 +123,16 @@ async def build(conn, collection, *, identifiers: int = IDENTIFIERS, questions: 
     """A new test for a collection. `questions` 0: no model is asked."""
     passages = await _passages(conn, collection.id)
     source = {cid: uri for cid, _, uri in passages}
-    items = [{"kind": "identifier", "query": word, "chunk_id": cid, "source": source[cid]}
-             for word, cid in _identifiers([(cid, text) for cid, text, _ in passages], identifiers).items()] if identifiers > 0 else []
+    items = []
+    if identifiers > 0:
+        # What is looked at is SCAN passages, which can be a part of the collection. One passage of that part holding
+        # an identifier is not one passage of the collection holding it: each is asked of the whole collection.
+        candidates = _identifiers([(cid, text) for cid, text, _ in passages], identifiers * SPARE)
+        for word, cid in candidates.items():
+            if len(items) >= identifiers:
+                break
+            if await holders(conn, collection.id, word, 2) == 1:
+                items.append({"kind": "identifier", "query": word, "chunk_id": cid, "source": source[cid]})
     written_by, by, failed, why = None, "", 0, ""
     worth = sorted((p for p in passages if len(p[1]) >= MIN_QUESTION_CHARS), key=lambda p: _order(p[0]))[:max(questions, 0)]
     for n, (cid, text, uri) in enumerate(worth, 1):
@@ -137,10 +147,16 @@ async def build(conn, collection, *, identifiers: int = IDENTIFIERS, questions: 
         if written_by is None and failed >= GIVE_UP:        # a model that answers nothing is not asked thirty times
             break
     test = {"collection": collection.id, "name": collection.name, "created": db.now(), "passages": len(passages),
-            "written_by": written_by, "items": items}
+            "of": (await kb.counts(conn, collection.id))["chunks"], "written_by": written_by, "items": items}
     if worth and written_by is None:
         test["no_questions"] = {"asked": failed, "by": by, "why": why}
     return test
+
+
+async def holders(conn, collection_id: str, word: str, limit: int = HOLDERS_SHOWN + 1) -> int:
+    """In how many passages of the collection an identifier stands letter for letter, counted up to `limit`."""
+    phrase = '"' + word.replace('"', '""') + '"'
+    return len(await kb.exact_ids(conn, [collection_id], phrase, word, limit))
 
 
 async def run(conn, test: dict, say=lambda text: None) -> dict:
@@ -162,7 +178,10 @@ async def run(conn, test: dict, say=lambda text: None) -> dict:
         at = next(((place, hit) for place, hit in enumerate(hits, 1) if hit.chunk_id == item["chunk_id"]), None)
         if at is None:
             count["missed"] += 1
-            misses.append({"kind": item["kind"], "query": item["query"], "source": item["source"]})
+            miss = {"kind": item["kind"], "query": item["query"], "source": item["source"]}
+            if item["kind"] == "identifier":            # why: is it one passage that holds it, or many, or none now?
+                miss["holders"] = await holders(conn, test["collection"], item["query"])
+            misses.append(miss)
             continue
         place, hit = at
         count["first"] += int(place == 1)
@@ -180,6 +199,8 @@ def report(test: dict, result: dict, before: dict | None = None) -> str:
     parts = [f"{c['asked']} {KINDS.get(k, k)}" for k, c in kinds.items()]
     by = f", the questions written by {test['written_by']}" if test.get("written_by") else ""
     lines = [f'Collection "{test["name"]}": asked {" and ".join(parts) or "nothing"}{by}.']
+    if test.get("of", 0) > test.get("passages", 0):
+        lines.append(f"The test was built from {test['passages']:,} of the {test['of']:,} passages of the collection.")
     none = test.get("no_questions")
     if none:
         lines.append(f"No question was written: {none['by']} was asked {none['asked']} times and gave nothing usable "
@@ -218,9 +239,29 @@ def report(test: dict, result: dict, before: dict | None = None) -> str:
             lines += ["", "Against the run before: " + ("; ".join(changed) + "." if changed else
                                                         "in the message and in the first place, the same as in the run before.")]
     if result["misses"]:
+        many = sum(1 for m in result["misses"] if m.get("holders", 1) > 1)
+        if many:
+            lines += ["", f"{many} of the identifiers that were not found {'stands' if many == 1 else 'stand'} in more "
+                          "than one passage of the collection: there is no single right passage, and such a miss says "
+                          "nothing about the search. (The test took each for the mark of one passage: it was built "
+                          "from a part of the collection, or the collection has grown since.) A new test leaves them "
+                          f'out: scripts/rag-test.sh "{test["name"]}" --new']
         lines += ["", f"Not found ({min(len(result['misses']), MISSES_SHOWN)} of {len(result['misses'])}):"]
-        lines += [f"- {m['kind']}: {m['query']}   (from {m['source']})" for m in result["misses"][:MISSES_SHOWN]]
+        lines += [f"- {m['kind']}: {m['query']}   (from {m['source']}){_why(m)}" for m in result["misses"][:MISSES_SHOWN]]
     return "\n".join(lines)
+
+
+def _why(miss: dict) -> str:
+    """What is known of an identifier that was not found: in how many passages of the collection it stands."""
+    n = miss.get("holders")
+    if n is None:
+        return ""
+    if n == 0:
+        return ": no passage of the collection holds it any more"
+    if n == 1:
+        return ": one passage holds it, and the search did not bring it"
+    count = f"more than {HOLDERS_SHOWN}" if n > HOLDERS_SHOWN else str(n)
+    return f": it stands in {count} passages of the collection, so there is no single right passage"
 
 
 async def main(argv: list[str]) -> int:
