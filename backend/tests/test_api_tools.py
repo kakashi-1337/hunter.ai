@@ -25,7 +25,8 @@ async def wait_for_ask(client, run_id, timeout=5.0):
 NATIVE = sorted(["kb_search", "cve", "mcp_find", "mcp_call", "profundis", "look_at_image", "caido", "caido_send", "browser_navigate", "browser_click", "browser_type", "browser_read", "browser_screenshot", "browser_network", "browser_console", "browser_close", "edit", "execute", "process_input", "process_kill", "process_output", "read", "repo_search",
                  "web_download", "web_fetch", "web_search", "write",
                  "decide_check", "decide_classify", "decide_decide", "decide_gate", "decide_rank", "decide_score",
-                 "focus", "critique", "finding_add", "finding_update", "finding_list", "delegate", "swarm", "skill"])
+                 "focus", "critique", "finding_add", "finding_update", "finding_list", "delegate", "swarm", "skill",
+                 "encode_decode"])
 
 async def test_native_tools_are_registered_and_filtered_by_mode(client):
     assert [t["name"] for t in (await client.get("/api/tools")).json()] == NATIVE
@@ -34,6 +35,7 @@ async def test_native_tools_are_registered_and_filtered_by_mode(client):
     assert not tools["execute"]["offered"] and tools["execute"]["rule"] == "mode" and not tools["write"]["offered"]
     assert not tools["web_download"]["offered"] and tools["web_download"]["rule"] == "mode"      # it writes a file
     assert tools["read"]["decision"] == "allow" and tools["web_fetch"]["decision"] == "ask"
+    assert tools["encode_decode"]["decision"] == "allow"      # it converts a text and touches nothing
 
 async def test_mock_chat_runs_a_real_native_tool_end_to_end(client):
     chat = await new_chat(client)

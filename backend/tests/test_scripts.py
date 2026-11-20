@@ -26,7 +26,7 @@ def test_start_scripts_sync_and_start_search():
 def test_readme_states_the_known_limits_and_the_tools():
     text = (ROOT / "README.md").read_text()
     for tool in ("read", "write", "edit", "execute", "process_output", "process_input",
-                 "process_kill", "web_fetch", "web_download", "web_search", "repo_search"):
+                 "process_kill", "web_fetch", "web_download", "web_search", "repo_search", "encode_decode"):
         assert f"`{tool}`" in text
     assert "runs with the owner's full rights" in text and "mcp.json" in text
     assert "HUNTERAI_MCP" in text and "hunterai-searxng" in text
