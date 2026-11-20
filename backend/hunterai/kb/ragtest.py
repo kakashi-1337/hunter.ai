@@ -27,7 +27,7 @@ from .embed import EmbedError
 IDENTIFIERS = 30                # identifiers a new test asks
 QUESTIONS = 30                  # questions a new test has written
 SCAN = 5000                     # passages of a collection that are looked at when a test is built
-SPARE = 4                       # times as many identifiers are looked at as are asked: some stand outside that part too
+SPARE = 10                      # times as many identifiers are looked at as are asked: many stand outside that part too
 HOLDERS_SHOWN = 50              # passages that hold a missed identifier are counted up to this
 TOP = retrieve.RETRIEVE_LIMIT   # passages a message gets at most
 ROOM = retrieve.DEFAULT_BUDGET_CHARS    # and the characters of whole passages it has room for
@@ -89,23 +89,9 @@ _identifiers = identifiers          # `build` takes how many of them it should a
 
 
 async def _passages(conn, collection_id: str) -> list[tuple[str, str, str]]:
-    """(passage id, text, where it came from) of the documents that finished ingesting, SCAN at most."""
-    out: list[tuple[str, str, str]] = []
-    skip = 0
-    while len(out) < SCAN:
-        _, docs = await kb.list_documents(conn, collection_id, status="ok", limit=200, offset=skip)
-        if not docs:
-            break
-        skip += len(docs)
-        for doc in docs:
-            at = 0
-            while len(out) < SCAN:
-                total, chunks = await kb.list_chunks(conn, doc.id, limit=500, offset=at)
-                out += [(c.id, c.text, doc.source_uri) for c in chunks]
-                at += len(chunks)
-                if not chunks or at >= total:
-                    break
-    return out[:SCAN]
+    """(passage id, text, where it came from) of the documents that finished ingesting: SCAN at most, spread evenly
+    over the collection. Its first SCAN passages would be what was indexed last: of a large collection, one book."""
+    return await kb.spread_chunks(conn, collection_id, SCAN)
 
 
 async def _question(conn, text: str) -> tuple[str | None, str, str]:
@@ -200,7 +186,8 @@ def report(test: dict, result: dict, before: dict | None = None) -> str:
     by = f", the questions written by {test['written_by']}" if test.get("written_by") else ""
     lines = [f'Collection "{test["name"]}": asked {" and ".join(parts) or "nothing"}{by}.']
     if test.get("of", 0) > test.get("passages", 0):
-        lines.append(f"The test was built from {test['passages']:,} of the {test['of']:,} passages of the collection.")
+        lines.append(f"The test was built from {test['passages']:,} of the {test['of']:,} passages of the collection, "
+                     "spread evenly over it.")
     none = test.get("no_questions")
     if none:
         lines.append(f"No question was written: {none['by']} was asked {none['asked']} times and gave nothing usable "

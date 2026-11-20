@@ -561,8 +561,9 @@ A test asks two kinds of things, 30 of each unless you say otherwise:
 
 - **Identifiers** that occur in one passage only: a CVE number, a path, a parameter name.
   They need no model, and they are what a search by meaning alone is weak at. A test is built
-  from 5,000 passages at most, so each identifier is then asked of the whole collection: one
-  that stands in a second passage anywhere has no single right passage and is left out.
+  from 5,000 passages at most, spread evenly over the collection (every k-th in the order
+  they were indexed), so each identifier is then asked of the whole collection: one that
+  stands in a second passage anywhere has no single right passage and is left out.
 - **Questions** the decision model writes, each about one passage, in the words of someone
   who has not read it. That is one model call for a question, when the test is built.
 

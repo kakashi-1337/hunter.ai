@@ -304,6 +304,19 @@ async def set_chat_kb(conn, chat_id: str, *, collection_ids: builtins.list[str] 
 
 # ---- index browser: one chunk at a time
 
+async def spread_chunks(conn, collection_id: str, limit: int) -> list[tuple[str, str, str]]:
+    """(chunk id, text, where it came from) of `limit` chunks at most, spread evenly over the collection: every k-th
+    in the order they were indexed, so that every part of a large collection is among them. A collection that fits
+    is given whole. Always the same chunks for the same collection. Only chunks of `ok` documents."""
+    total = (await (await conn.execute("select count(*) from kb_chunks where collection_id=?", (collection_id,))).fetchone())[0]
+    step = max(1, -(-total // max(limit, 1)))               # rounded up: never more than `limit` of them
+    rows = await (await conn.execute(
+        "select c.id, c.text, d.source_uri from kb_chunks c join kb_documents d on d.id = c.document_id "
+        "where c.collection_id=? and d.status='ok' and c.n % ? = 0 order by c.n limit ?",
+        (collection_id, step, limit))).fetchall()
+    return [(r["id"], r["text"], r["source_uri"]) for r in rows]
+
+
 async def list_chunks(conn, document_id: str, limit: int = 100, offset: int = 0) -> tuple[int, list[Chunk]]:
     total = (await (await conn.execute("select count(*) from kb_chunks where document_id=?", (document_id,))).fetchone())[0]
     rows = await (await conn.execute("select * from kb_chunks where document_id=? order by ordinal limit ? offset ?",
