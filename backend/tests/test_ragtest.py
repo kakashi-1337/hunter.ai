@@ -5,6 +5,7 @@ which need no model. And questions the decision model wrote about single passage
 and the test says where the passage it came from stood: first, among the eight a message gets, among the forty the
 search chooses from, or nowhere. It is kept, so that a change to the search can be measured with the same questions."""
 import json
+from pathlib import Path
 
 from hunterai import config
 from hunterai.kb import ragtest, search
@@ -195,3 +196,58 @@ def test_the_report_says_how_the_first_places_changed_and_reads_a_run_from_befor
 
 def test_the_test_and_the_search_agree_on_what_an_identifier_is():
     assert ragtest._FORMS is search.IDENTIFIER_FORMS
+
+
+async def test_an_identifier_is_asked_only_when_one_passage_of_the_whole_collection_holds_it(conn, col, tmp_path, monkeypatch):
+    """A test is built from a part of a large collection. An identifier that stands once in that part and again
+    outside it has no single right passage: it was asked all the same, and counted as not found."""
+    half = 4
+    texts = {f"n{i}.md": f"Note {i} has own_name_{i} for itself, and pair_name_{i // 2} with the note beside it." + FILL for i in range(2 * half)}
+    await ingest_texts(conn, col, tmp_path, texts)
+    monkeypatch.setattr(ragtest, "SCAN", half)                      # the test sees every second of the eight passages
+    seen = [text for _, text, _ in await ragtest._passages(conn, col.id)]
+    assert len(seen) == half and sum("pair_name_0" in t for t in seen) == 1     # one of a pair is in that part, one is not
+    test = await ragtest.build(conn, col, questions=0)
+    asked = [i["query"] for i in test["items"]]
+    assert asked and all(q.startswith("own_name_") for q in asked)
+    assert (test["passages"], test["of"]) == (half, 2 * half)       # and it says how much of the collection it saw
+    said = ragtest.report(test, await ragtest.run(conn, test))
+    assert "built from 4 of the 8 passages" in said
+
+
+async def test_a_miss_says_in_how_many_passages_the_identifier_stands(conn, col, tmp_path, monkeypatch):
+    texts = {f"n{i:02}.txt": f"Then wait for the page to load, and wait for the next one. Note {i}." for i in range(50)}
+    texts |= {f"api{i}.txt": f"Call wait_for with a selector, variant {i}." for i in range(search.RARE + 3)}
+    docs = await ingest_texts(conn, col, tmp_path, texts)
+    monkeypatch.setattr(search, "get_store", lambda: StubStore({}))
+    item = lambda query, name: {"kind": "identifier", "query": query, "chunk_id": kb.chunk_id(docs[name].id, 0), "source": name}  # noqa: E731
+    test = {"collection": col.id, "name": col.name, "written_by": None,
+            "items": [item("wait_for", "api7.txt"), item("gone_name", "api0.txt")]}
+    result = await ragtest.run(conn, test)
+    assert [(m["query"], m["holders"]) for m in result["misses"]] == [("wait_for", search.RARE + 3), ("gone_name", 0)]
+    said = ragtest.report(test, result)
+    assert "identifier: wait_for   (from api7.txt): it stands in 8 passages of the collection, so there is no single right passage" in said
+    assert "identifier: gone_name   (from api0.txt): no passage of the collection holds it any more" in said
+    assert "1 of the identifiers that were not found stands in more than one passage" in said and "--new" in said
+
+
+def test_a_miss_of_an_identifier_that_one_passage_holds_is_called_what_it_is():
+    test = {"name": "n", "written_by": None, "items": []}
+    result = {"at": "t", "kinds": {"identifier": {"asked": 1, "first": 0, "sent": 0, "pool": 0, "missed": 1}},
+              "found_by": {"both": 0, "vectors": 0, "keywords": 0}, "misses": [{"kind": "identifier", "query": "only_here", "source": "a.md", "holders": 1}]}
+    said = ragtest.report(test, result)
+    assert "identifier: only_here   (from a.md): one passage holds it, and the search did not bring it" in said
+    assert "more than one passage" not in said
+    # A run from before the passages were counted says nothing about them.
+    result["misses"] = [{"kind": "identifier", "query": "only_here", "source": "a.md"}]
+    assert "- identifier: only_here   (from a.md)\n" in ragtest.report(test, result) + "\n"
+
+
+async def test_a_test_of_a_large_collection_is_built_from_passages_spread_over_all_of_it(conn, col, tmp_path, monkeypatch):
+    """Its first 5,000 passages are what was indexed last: of 670,000, one book and one repository."""
+    await ingest_texts(conn, col, tmp_path, {f"n{i:02}.md": f"Note {i} stands alone." + FILL for i in range(12)})
+    monkeypatch.setattr(ragtest, "SCAN", 4)
+    where = sorted(int(Path(uri).stem[1:]) for _, _, uri in await ragtest._passages(conn, col.id))
+    assert len(where) == 4 and where[0] <= 2 and where[-1] >= 9 and all(b - a == 3 for a, b in zip(where, where[1:]))
+    monkeypatch.setattr(ragtest, "SCAN", 5000)          # a collection that fits is looked at whole
+    assert len(await ragtest._passages(conn, col.id)) == 12

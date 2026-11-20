@@ -560,7 +560,10 @@ scripts/rag-test.sh "NAME" --new             # a new test in place of the kept o
 A test asks two kinds of things, 30 of each unless you say otherwise:
 
 - **Identifiers** that occur in one passage only: a CVE number, a path, a parameter name.
-  They need no model, and they are what a search by meaning alone is weak at.
+  They need no model, and they are what a search by meaning alone is weak at. A test is built
+  from 5,000 passages at most, spread evenly over the collection (every k-th in the order
+  they were indexed), so each identifier is then asked of the whole collection: one that
+  stands in a second passage anywhere has no single right passage and is left out.
 - **Questions** the decision model writes, each about one passage, in the words of someone
   who has not read it. That is one model call for a question, when the test is built.
 
@@ -570,7 +573,10 @@ to how the texts are cut is measured with the same questions. How to read it: wh
 among the 40 and was not in the message is what a reranker could bring up; what was not among
 the 40 was found by neither half of the search, and no reranker brings that up. The test also
 says how many stood first for the exact spelling of an identifier, and against the run before
-it compares what was in the message and what stood first. When the
+it compares what was in the message and what stood first. Of an identifier that was not found
+it says in how many passages of the collection it stands now: in one (the search failed), in
+several (the collection has grown, or the test is from before this check: a miss that says
+nothing), or in none. When the
 decision model writes no question that can be used, the test says which model was asked and
 why nothing came of it, and stops asking after three in a row. The questions
 are a model's and the answer counted as right is the passage they were written from:
