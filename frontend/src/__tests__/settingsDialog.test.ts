@@ -137,7 +137,7 @@ describe('the cloud model for the subagents of a local chat', () => {
     { name: 'abliteration', configured: true, models: [model('big'), model('small')] },
     { name: 'anthropic', configured: false, models: [] },
     { name: 'ollama', configured: true, models: [model('qwen3:8b')] },
-    { name: 'claude_code', configured: true, models: [model('sonnet')] },
+    { name: 'codex', configured: true, models: [model('codex-default')] },
   ]
   const KNOWS: Settings = { ...SETTINGS, subagent_provider: null, subagent_model: null, subagent_providers: ['abliteration', 'anthropic'] }
   const provider = () => field(/^Cloud model for the subagents of a local chat/)?.querySelector<HTMLSelectElement>('select')

@@ -41,7 +41,7 @@ ASK = httpx.Timeout(5.0, connect=2.0)
 WORD = "PAPAYA-7731"        # what the local model is told and asked for again
 EARLY = "/zx-admin-7731"    # what the long chat finds in its first message
 ROOM = system_api.ROOM      # tokens a local window should have left beside the rules and the tools
-CLI = ("codex", "claude_code")      # providers that are a program on this machine, not a key
+CLI = ("codex",)                    # providers that are a program on this machine, not a key
 
 
 class Refused(Exception):

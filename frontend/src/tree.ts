@@ -560,8 +560,7 @@ export function colibriHint(server: ColibriServer | null, keySet: boolean): { li
  * of models (null when it has models to offer). */
 export function providerGroup(p: ProviderInfo): { label: string; empty: string | null } {
   if (!p.configured) {
-    const how = p.name === 'codex' ? 'install the codex CLI' : p.name === 'claude_code' ? 'install the claude CLI and log in'
-      : p.name === 'colibri' ? 'set its address in Settings' : 'add key in settings'
+    const how = p.name === 'codex' ? 'install the codex CLI' : p.name === 'colibri' ? 'set its address in Settings' : 'add key in settings'
     return { label: `${p.name} — ${how}`, empty: 'not configured' }
   }
   return { label: p.name, empty: p.models.length ? null : p.note ?? 'no models available' }

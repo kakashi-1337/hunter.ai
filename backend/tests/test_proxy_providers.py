@@ -5,7 +5,7 @@ import pytest
 
 from hunterai import upstream
 from hunterai.providers import anthropic as anthropic_provider
-from hunterai.providers import base, claude_code, codex, google, openai_compat
+from hunterai.providers import base, codex, google, openai_compat
 from hunterai.providers.base import Options, ProviderError, TextDelta, WireMessage
 from hunterai.types import TextBlock
 from tests.proxies import HttpProxy, Site, Socks5Proxy, running
@@ -81,7 +81,7 @@ async def test_the_client_of_an_sdk_is_pointed_at_the_proxy(monkeypatch, which):
     assert carrier.asked and {(method, where.split("/v1")[0]) for method, where in carrier.asked} == {("GET", "http://models.example.test")}
 
 
-@pytest.mark.parametrize("module, exe", [(claude_code, "claude"), (codex, "codex")])
+@pytest.mark.parametrize("module, exe", [(codex, "codex")])
 async def test_a_cli_provider_is_given_the_way_to_the_proxy_and_never_its_login(monkeypatch, tmp_path, module, exe):
     bindir = tmp_path / "bin"
     bindir.mkdir()

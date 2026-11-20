@@ -173,9 +173,9 @@ async def test_with_a_cloud_model_chosen_for_it_a_local_chat_is_offered_both_aga
 
 
 @pytest.mark.parametrize("chosen", [("abliteration", "cloud-1"), ("ollama", "qwen3:8b"), ("colibri", "m"), ("codex", "codex-default"),
-                                    ("claude_code", "sonnet"), ("nope", "m"), ("abliteration", "")])
+                                    ("nope", "m"), ("abliteration", "")])
 async def test_a_choice_that_cannot_do_the_work_leaves_the_local_chat_alone(conn, world, setup, chosen):
-    """In turn: no key is set for it, a local provider (twice), a provider that has no tools here (twice), one that
+    """In turn: no key is set for it, a local provider (twice), a provider that has no tools here, one that
     does not exist, and a provider without a model."""
     await stand_in(conn, *chosen)
     chat, _ = await setup(provider="ollama")
@@ -258,7 +258,7 @@ async def test_a_run_that_went_on_with_the_local_model_may_use_the_chosen_cloud_
     assert got["status"] == "done" and (len(other.calls), len(chats_own.calls), len(local.calls)) == (2, 1, 2)
 
 
-@pytest.mark.parametrize("name", ["codex", "claude_code"])
+@pytest.mark.parametrize("name", ["codex"])
 async def test_the_login_of_a_command_line_program_is_never_the_chosen_cloud_model(conn, world, setup, name):
     """Whatever such a provider says of itself: the choice is among the providers that are called with an API key."""
     use(**{name: Turns(name)})
