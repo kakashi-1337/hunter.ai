@@ -7,7 +7,7 @@ from typing import Callable
 
 from .base import Provider
 
-ORDER = ["abliteration", "anthropic", "openai", "google", "xai", "ollama", "colibri", "codex", "claude_code"]
+ORDER = ["abliteration", "anthropic", "openai", "google", "xai", "ollama", "colibri", "codex"]
 # name -> (module, factory attribute). A module that does not exist yet is skipped.
 _SPECS: dict[str, tuple[str, str]] = {
     "abliteration": ("openai_compat", "abliteration"),
@@ -18,7 +18,6 @@ _SPECS: dict[str, tuple[str, str]] = {
     "ollama": ("ollama", "make"),
     "colibri": ("colibri", "make"),
     "codex": ("codex", "make"),
-    "claude_code": ("claude_code", "make"),
     "mock": ("mock", "MockProvider"),
 }
 _instances: dict[str, Provider] = {}

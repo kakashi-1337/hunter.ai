@@ -53,7 +53,7 @@ LOCAL_PROVIDERS = frozenset({de.FALLBACK_PROVIDER, problems.COLIBRI})      # a m
 ALONE = ("a local model works alone: a subagent would be that same model starting again from an empty context. "
          "Do this work yourself with your own tools, one part after another.")
 NO_MORE = "Do the rest of this work yourself with your own tools: no further subagent is started in this run."
-CLI_LOGINS = frozenset({"codex", "claude_code"})       # the login of a command-line program, not a provider called with an API key
+CLI_LOGINS = frozenset({"codex"})                      # the login of a command-line program, not a provider called with an API key
 NOT_IN_A_SWARM = ("browser_", "look_at_image")      # one browser per chat; a tool that loads a local model
 MAX_CALLS_PER_TURN = 20
 EVIDENCE_CHARS = 40_000

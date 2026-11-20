@@ -141,8 +141,8 @@ def test_a_request_the_provider_does_not_accept_points_at_the_model_and_the_opti
 def test_an_error_that_already_says_what_to_do_is_left_as_it_is():
     whole = TOO_LARGE.format(model="gemma:12b", need=25608, window=16384)
     assert problems.model_call(failed("bad_request", whole, provider="ollama", complete=True)) == whole
-    logged_out = "the claude CLI is not logged in: run `claude` in a terminal and log in, then try again"
-    assert problems.model_call(failed("auth", logged_out, provider="claude_code", complete=True)) == logged_out
+    no_such = 'This chat is set to the provider "gone", which this HunterAI does not have. Pick a model from the list for this chat.'
+    assert problems.model_call(failed("bad_request", no_such, provider="gone", complete=True)) == no_such
 
 
 def test_an_error_without_a_provider_is_still_said():

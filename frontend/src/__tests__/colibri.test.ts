@@ -76,7 +76,6 @@ describe('colibri in the list of models', () => {
   it('leaves the other providers as they were', () => {
     expect(providerGroup({ name: 'openai', configured: false, models: [] })).toEqual({ label: 'openai — add key in settings', empty: 'not configured' })
     expect(providerGroup({ name: 'codex', configured: false, models: [] }).label).toBe('codex — install the codex CLI')
-    expect(providerGroup({ name: 'claude_code', configured: false, models: [] }).label).toBe('claude_code — install the claude CLI and log in')
     expect(providerGroup({ name: 'ollama', configured: true, models: [] })).toEqual({ label: 'ollama', empty: 'no models available' })
   })
 })

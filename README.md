@@ -30,14 +30,6 @@ what is missing.
   retry, delete, and switchable message versions (nothing is overwritten).
 - Models from abliteration.ai (default), Anthropic, OpenAI, Google, xAI, Ollama, colibri,
   and the Codex CLI, with per-model options.
-- `claude_code`: Claude through the `claude` CLI and its own login (a Claude subscription),
-  for people who have no API key. HunterAI starts `claude -p` in an empty folder with no
-  tools, no MCP servers, and none of your Claude Code settings, and never reads the login.
-  It has no tools in HunterAI, so its use is as the decision model (Settings → decision
-  model) or for a chat that only needs answers. Each call starts a process: a decision
-  took about 14 seconds on the machine this was written on, against one or two with an API
-  key, and every call counts against the subscription's limits. Whether a subscription may
-  be used by a program like this is for you to check in Anthropic's terms.
 - Fallback: if abliteration.ai is unreachable, times out, or keeps rate-limiting before
   it has produced any output, the answer comes from a local Ollama model and is labelled.
   The chat is shortened to fit that model's window first, so it still knows what the chat
@@ -617,7 +609,7 @@ model that answers with JSON: with one that does not, nothing is marked.
 - **Unless you give its subagents a cloud model** (Settings, "Cloud model for the subagents
   of a local chat"; none at the start). You choose among the cloud providers that use tools
   here and have their key (abliteration.ai, Anthropic, OpenAI, Google, xAI; not the Codex
-  and Claude Code logins, which have no tools in HunterAI). A chat on a local model is then
+  login, which has no tools in HunterAI). A chat on a local model is then
   offered `delegate` and `swarm` again, and its subagents work on that model: the local
   model writes the brief and reads the result. What a subagent reads and does (the brief,
   the tool results, pages of the target) goes to that provider, which is why nothing is
