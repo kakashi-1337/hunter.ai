@@ -130,17 +130,31 @@ async def colibri_server(conn=Depends(get_conn)):
     return out
 
 
+async def _held_by_colibri() -> dict | None:
+    """The model a colibri server holds now: it is loaded in a process of its own, which Ollama knows nothing of.
+    None without an address, and when what is there serves no model to chat with. The provider keeps what the
+    server said for half a minute, so the line that asks every few seconds asks colibri that often at most."""
+    if not colibri.address():
+        return None
+    seen = await registry.get(colibri.NAME).served()
+    if seen.state != "ok":
+        return None
+    return {"model": seen.models[0].id, "context": seen.models[0].context_window}
+
+
 @router.get("/system/status")
 async def status(request: Request, conn=Depends(get_conn)):
-    """Cheap enough to ask every few seconds. `local_models` is null when Ollama does not answer. `stopped`
-    names the services that answered before and do not now; they are looked at once a minute. `page` is the
-    script the built interface starts with: a page that runs another one is older than this server."""
+    """Cheap enough to ask every few seconds. `local_models` is null when Ollama does not answer; `colibri` is the
+    model a colibri server holds, null when none does. `stopped` names the services that answered before and do
+    not now; they are looked at once a minute. `page` is the script the built interface starts with: a page that
+    runs another one is older than this server."""
     ps = await _fetch(ollama.host() + "/api/ps")
     models = None if ps is None else [_loaded(m) for m in ps.get("models") or [] if isinstance(m, dict)]
     looked = getattr(request.app.state, "looked", None)
     if looked is None or time.time() - looked >= LOOK_EVERY:
         await checkup(request, conn)
     return {"cpu_temp": thermal.cpu_temp(), "cpu_limit": thermal.limit(), "local_models": models,
+            "colibri": await _held_by_colibri(),
             "restart_needed": stale.restart_needed(), "stopped": request.app.state.stopped, "page": page_script()}
 
 

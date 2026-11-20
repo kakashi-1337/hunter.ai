@@ -489,22 +489,25 @@ export function heat(s: SystemStatus): '' | 'warn' | 'bad' {
   return s.cpu_temp === null || s.cpu_limit === null ? '' : s.cpu_temp >= s.cpu_limit ? 'bad' : s.cpu_temp >= s.cpu_limit - NEAR_LIMIT ? 'warn' : ''
 }
 
-/** The line at the bottom of the sidebar. `about` says of each loaded model how much memory it takes, where Ollama
- * runs it and with which window, and what it means when part of it is on the processor; '' when the server does not say. */
+/** The line at the bottom of the sidebar: the models that hold memory now, Ollama's and the one a colibri server
+ * holds. `about` says of each loaded model how much memory it takes, where Ollama runs it and with which window, and
+ * what it means when part of it is on the processor; of colibri's, its context; '' when the server does not say. */
 export function machineLine(s: SystemStatus): { text: string; level: '' | 'warn' | 'bad'; about: string } {
   const parts: string[] = []
-  let about = ''
   if (s.cpu_temp !== null) parts.push(`CPU ${Math.round(s.cpu_temp)}°C`)
+  const held = s.colibri ?? null      // absent from a server from before it asked colibri
+  const size = (m: Loaded) => `(${inMemory(m)} GB${share(m) ? `, ${share(m)}` : ''})`
+  const loaded = [...(s.local_models ?? []).map((m) => ({ name: m.name, how: size(m) })), ...(held ? [{ name: held.model, how: '(colibri)' }] : [])]
   if (s.local_models === null) parts.push('Ollama is not running')
-  else if (!s.local_models.length) parts.push('no local model loaded')
-  else {
-    const size = (m: Loaded) => `(${inMemory(m)} GB${share(m) ? `, ${share(m)}` : ''})`
-    parts.push(s.local_models.length === 1 ? `${s.local_models[0].name} loaded ${size(s.local_models[0])}`
-      : `${s.local_models.map((m) => `${m.name} ${size(m)}`).join(', ')} loaded`)
-    about = s.local_models.filter((m) => m.processor).map((m) =>
+  if (loaded.length === 1) parts.push(`${loaded[0].name} loaded ${loaded[0].how}`)
+  else if (loaded.length) parts.push(`${loaded.map((m) => `${m.name} ${m.how}`).join(', ')} loaded`)
+  else if (s.local_models !== null) parts.push('no local model loaded')
+  const about = [
+    ...(s.local_models ?? []).filter((m) => m.processor).map((m) =>
       `${m.name}: ${inMemory(m)} GB in memory, ${m.processor} as \`ollama ps\` says it${m.context ? `, loaded with a window of ${whole(m.context)} tokens` : ''}.`
-      + (split(m) ? ' Part of it is on the processor, which makes it slow. On a machine with a graphics card it did not fit the memory of that card with this window: a smaller window or a smaller model fits.' : '')).join(' ')
-  }
+      + (split(m) ? ' Part of it is on the processor, which makes it slow. On a machine with a graphics card it did not fit the memory of that card with this window: a smaller window or a smaller model fits.' : '')),
+    ...(held ? [`${held.model}: held by colibri${held.context ? `, with a context of ${whole(held.context)} tokens` : ''}.`] : []),
+  ].join(' ')
   const level = heat(s) || (s.local_models?.some(split) ? 'warn' : '')
   return { text: parts.join(' · '), level, about }
 }

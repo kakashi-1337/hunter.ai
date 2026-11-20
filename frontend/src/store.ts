@@ -251,6 +251,9 @@ export const useStore = create<State>((set, get) => {
         set({
           view: 'chat', activeChatId: id, chat: null, messages: [], live: null, asks: [], runningCalls: [], workdir: null, runs: [], queued: [],
           selectedRunId: null, runDetail: null,
+          // The choices made before a chat existed end with the chat that is opened: they made this chat, or they
+          // were for one that was never made. Kept, they chose the model of every later new chat as well.
+          ...(id ? { draft: EMPTY_DRAFT } : {}),
         })
         if (!id) return
         await reloadChat(id)

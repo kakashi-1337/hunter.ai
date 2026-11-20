@@ -574,6 +574,9 @@ export interface SystemStatus {
    * where it runs, in the words of `ollama ps`; `context`: the window it was loaded with. The last three are absent
    * from a server that could not tell yet. */
   local_models: { name: string; vram_mb: number; size_mb?: number; processor?: string; context?: number | null }[] | null
+  /** The model a colibri server holds now, with its context. Null: no address is set, or what is there serves no
+   * model to chat with. Absent: a server from before it asked colibri. */
+  colibri?: { model: string; context: number | null } | null
   /** The server's code changed on disk after it started. Absent: a server from before it could tell. */
   restart_needed?: boolean
   /** The parts that were in use and do not run now: a service beside HunterAI that answered within the last week,

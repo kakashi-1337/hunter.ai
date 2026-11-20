@@ -489,3 +489,23 @@ async def test_a_chat_set_to_colibri_while_it_is_down_says_how_to_start_it(conn,
     run, _ = await go(conn, *await a_chat(conn))
     assert run.status == "error" and run.error.startswith(f"colibri does not answer at {AT} (ConnectError). ")
     assert "./start-here.sh in the colibri folder" in run.error
+
+
+# ---- the line of loaded models at the bottom of the page
+
+@respx.mock
+async def test_the_machine_state_names_the_model_colibri_holds(client, at, monkeypatch):
+    """The line asked Ollama alone, so a chat answered by colibri stood over "no local model loaded"."""
+    nothing_else(monkeypatch)
+    listed()
+    assert (await client.get("/api/system/status")).json()["colibri"] == {"model": GLM, "context": 32768}
+
+
+@respx.mock
+async def test_the_machine_state_names_no_colibri_model_where_none_is_held(client, monkeypatch):
+    nothing_else(monkeypatch)
+    asked = listed()
+    assert (await client.get("/api/system/status")).json()["colibri"] is None and not asked.called      # no address: nothing is asked
+    monkeypatch.setenv(colibri.URL_ENV, AT)
+    down()
+    assert (await client.get("/api/system/status")).json()["colibri"] is None                             # nothing answers there

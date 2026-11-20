@@ -1228,7 +1228,9 @@ The bottom of the sidebar shows the processor temperature and the local models O
 in memory, asked again every ten seconds: `gemma3:12b loaded (9.8 GB, 60% GPU)`. The line
 turns yellow within ten degrees of `HUNTERAI_MAX_CPU_TEMP` and red at it. It also turns
 yellow when a model is partly on the processor, which makes it slow; pointing at the line
-says how Ollama runs each model (in the words of `ollama ps`) and with which window. **Findings** next to it lists every finding of every
+says how Ollama runs each model (in the words of `ollama ps`) and with which window. The
+model a colibri server holds stands in the same line, marked `(colibri)`: it is loaded in
+colibri's own process, so Ollama does not list it. **Findings** next to it lists every finding of every
 target, with filters, and exports what is shown as Markdown (evidence included: read it
 before you send it anywhere). A `swarm` call shows one line per subagent in the chat: its
 brief, whether it waits, works, or is finished, and whether its answer was verified.

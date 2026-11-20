@@ -52,6 +52,17 @@ describe('the machine line', () => {
   it('says what it said before when nothing is loaded or Ollama is not running', () => {
     expect(machineLine(QUIET).text).toBe('CPU 55°C · no local model loaded')
     expect(machineLine({ ...QUIET, local_models: null }).text).toBe('CPU 55°C · Ollama is not running')
+    expect(machineLine({ ...QUIET, colibri: null }).text).toBe('CPU 55°C · no local model loaded')
+  })
+
+  it('names the model a colibri server holds, of which Ollama knows nothing', () => {
+    const colibri = { model: 'qwen3.8-27b-colibri', context: 32768 }
+    expect(machineLine({ ...QUIET, colibri }).text).toBe('CPU 55°C · qwen3.8-27b-colibri loaded (colibri)')
+    expect(machineLine({ ...QUIET, local_models: null, colibri }).text).toBe('CPU 55°C · Ollama is not running · qwen3.8-27b-colibri loaded (colibri)')
+    expect(machineLine({ ...QUIET, local_models: [QWEN], colibri }).text).toBe('CPU 55°C · qwen3:8b (5.0 GB, GPU), qwen3.8-27b-colibri (colibri) loaded')
+    expect(machineLine({ ...QUIET, colibri }).about).toBe('qwen3.8-27b-colibri: held by colibri, with a context of 32,768 tokens.')
+    expect(machineLine({ ...QUIET, colibri: { model: 'm', context: null } }).about).toBe('m: held by colibri.')
+    expect(machineLine({ ...QUIET, colibri }).level).toBe('')
   })
 })
 
