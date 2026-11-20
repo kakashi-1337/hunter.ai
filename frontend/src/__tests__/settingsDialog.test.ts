@@ -130,3 +130,54 @@ describe('Settings', () => {
     })
   })
 })
+
+describe('the cloud model for the subagents of a local chat', () => {
+  const model = (id: string) => ({ id, label: id, supports_images: false, options: [], context_window: null })
+  const PROVIDERS = [
+    { name: 'abliteration', configured: true, models: [model('big'), model('small')] },
+    { name: 'anthropic', configured: false, models: [] },
+    { name: 'ollama', configured: true, models: [model('qwen3:8b')] },
+    { name: 'claude_code', configured: true, models: [model('sonnet')] },
+  ]
+  const KNOWS: Settings = { ...SETTINGS, subagent_provider: null, subagent_model: null, subagent_providers: ['abliteration', 'anthropic'] }
+  const provider = () => field(/^Cloud model for the subagents of a local chat/)?.querySelector<HTMLSelectElement>('select')
+  const choose = async (select: HTMLSelectElement, value: string) => {
+    await act(async () => { select.value = value; select.dispatchEvent(new Event('change', { bubbles: true })) })
+  }
+  /** The dialog asks the server for the settings when it opens: that answer and the store hold the same. */
+  const serverSends = (settings: Settings) => {
+    useStore.setState({ settings, providers: PROVIDERS })
+    vi.spyOn(api, 'getSettings').mockResolvedValue(settings)
+    put.mockImplementation(async (patch: Partial<Settings>) => ({ ...settings, ...patch }) as Settings)
+  }
+
+  it('is none at the start, and offers the cloud providers the server names that are set up', async () => {
+    serverSends(KNOWS)
+    await open()
+    expect([...provider()!.options].map((o) => [o.value, o.textContent])).toEqual([['', 'None: a local model works alone'], ['abliteration', 'abliteration']])
+    expect(provider()!.value).toBe('')
+    expect(host.textContent).toContain('goes to that provider')
+  })
+
+  it('saves a provider with its first model, and clears both together', async () => {
+    serverSends(KNOWS)
+    await open()
+    await choose(provider()!, 'abliteration')
+    expect(put).toHaveBeenLastCalledWith({ subagent_provider: 'abliteration', subagent_model: 'big' })
+    await choose(provider()!, '')
+    expect(put).toHaveBeenLastCalledWith({ subagent_provider: '', subagent_model: '' })
+  })
+
+  it('shows a choice whose provider has lost its key, and says that the local model works alone meanwhile', async () => {
+    serverSends({ ...KNOWS, subagent_provider: 'anthropic', subagent_model: 'claude-x' })
+    await open()
+    expect(provider()!.value).toBe('anthropic')
+    expect(host.textContent).toContain('anthropic has no key now')
+  })
+
+  it('is left out for a server from before it knew of it', async () => {
+    serverSends(SETTINGS)
+    await open()
+    expect(provider()).toBeUndefined()
+  })
+})

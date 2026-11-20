@@ -284,6 +284,12 @@ export interface Settings {
   colibri_url?: string
   /** A key is stored for it. It is never sent to the page. */
   colibri_key_set?: boolean
+  /** The cloud model that does the subagent work of a chat on a local model. Null: such a chat has no subagents and
+   * its model works alone. `subagent_providers`: the providers that can be chosen, cloud ones that use tools. All
+   * three are absent from a server from before it knew of this. */
+  subagent_provider?: string | null
+  subagent_model?: string | null
+  subagent_providers?: string[]
 }
 
 export interface Goal {

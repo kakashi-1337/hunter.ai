@@ -165,3 +165,25 @@ async def test_the_swarm_width_is_three_until_the_owner_sets_one_to_six(client):
     for bad in (0, 7, -1):
         assert (await client.put("/api/settings", json={"swarm_width": bad})).status_code == 400
     assert (await client.get("/api/settings")).json()["swarm_width"] == 5
+
+
+# ---- the cloud model for the subagents of a chat on a local model
+
+async def test_no_cloud_model_does_a_local_chats_subagent_work_until_the_owner_chooses_one(client):
+    s = (await client.get("/api/settings")).json()
+    assert s["subagent_provider"] is None and s["subagent_model"] is None
+    # what can be chosen: cloud providers that use tools. Not the local ones, and not the ones that have no tools here.
+    assert {"abliteration", "anthropic", "openai", "google", "xai"} <= set(s["subagent_providers"])
+    assert not {"ollama", "colibri", "codex", "claude_code"} & set(s["subagent_providers"])
+    r = await client.put("/api/settings", json={"subagent_provider": "anthropic", "subagent_model": "claude-sonnet-5-5"})
+    assert r.status_code == 200 and (r.json()["subagent_provider"], r.json()["subagent_model"]) == ("anthropic", "claude-sonnet-5-5")
+    r = await client.put("/api/settings", json={"subagent_provider": "", "subagent_model": ""})
+    assert r.status_code == 200 and r.json()["subagent_provider"] is None and r.json()["subagent_model"] is None
+
+
+@pytest.mark.parametrize("name", ["ollama", "colibri", "codex", "claude_code", "nope"])
+async def test_a_provider_that_cannot_do_subagent_work_is_refused_and_nothing_is_written(client, name):
+    r = await client.put("/api/settings", json={"subagent_provider": name, "subagent_model": "m", "max_turns": 7})
+    assert r.status_code == 400 and name in r.json()["detail"] and "cloud provider that uses tools" in r.json()["detail"]
+    s = (await client.get("/api/settings")).json()
+    assert s["subagent_provider"] is None and s["max_turns"] != 7

@@ -51,6 +51,8 @@ class SettingsIn(BaseModel):
     provider_proxy: str | None = None       # the proxy the model providers are reached through; "" for none
     colibri_url: str | None = None          # where the owner's colibri server is; "" for none (colibri is then not used)
     decision_engine: bool | None = None     # the built-in decide_* tools and the risk gate (off: another engine is used)
+    subagent_provider: str | None = None    # the cloud model that does the subagent work of a chat on a local model;
+    subagent_model: str | None = None       # "" or null: such a chat has no subagents
 
 
 def _machine() -> dict:
@@ -108,6 +110,9 @@ async def _view(conn) -> dict:
         "provider_proxy_password": bool(models_via and models_via.password),
         "colibri_url": colibri.address() or "",
         "colibri_key_set": bool(config.env(colibri.KEY_ENV)),
+        "subagent_provider": await settings.get(conn, "subagent_provider") or None,
+        "subagent_model": await settings.get(conn, "subagent_model") or None,
+        "subagent_providers": subagents.stand_in_providers(),     # the ones that can be chosen: cloud, with tools
     }
 
 
@@ -153,6 +158,10 @@ async def put_settings(body: SettingsIn, conn=Depends(get_conn)):
             models_via = upstream.typed(typed, _provider_proxy())
         except upstream.ProxyError as e:
             raise HTTPException(400, f"proxy for the model providers: {e}") from None
+    chosen = (fields.get("subagent_provider") or "").strip()
+    if chosen and chosen not in subagents.stand_in_providers():
+        raise HTTPException(400, "The subagents of a chat on a local model can be given to a cloud provider that uses tools ("
+                                 + ", ".join(subagents.stand_in_providers()) + f"); {chosen} is not one.")
     at = fields.pop("colibri_url", None)
     if at is not None and at.strip():
         try:
@@ -218,7 +227,7 @@ async def put_settings(body: SettingsIn, conn=Depends(get_conn)):
     if fields.get("browser_via_caido") is not None:
         await settings.put(conn, "browser_via_caido", bool(fields["browser_via_caido"]))
     fields.pop("browser_via_caido", None)
-    for key in ("decision_provider", "decision_model", "vision_model"):
+    for key in ("decision_provider", "decision_model", "vision_model", "subagent_provider", "subagent_model"):
         if key in fields:
             await settings.put(conn, key, (fields.pop(key) or "").strip())
     for key, value in fields.items():

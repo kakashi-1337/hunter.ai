@@ -106,8 +106,8 @@ async def offered_tools(conn, chat: Chat) -> list[Tool]:
     offered = [t for t in registry.all()
                if permissions.offered(chat.mode, t, global_policy, chat_policy)
                and (t.available is None or t.available())
-               and (t.offered_to is None or t.offered_to(chat))
                and t.name not in (on_demand.FIND, on_demand.CALL)]        # those two come with on_demand(), when needed
+    offered = [t for t in offered if t.offered_to is None or await t.offered_to(conn, chat)]
     if not await settings.get(conn, "decision_engine", ENGINE_DEFAULT):
         # The owner uses another decision engine (the JEV MCP server, say): the built-in one is not offered.
         offered = [t for t in offered if not (t.source == "native" and t.name.startswith(DECIDE_PREFIX))]

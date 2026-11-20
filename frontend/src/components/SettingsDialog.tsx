@@ -253,6 +253,10 @@ export function SettingsDialog({ onClose, onSetup }: { onClose: () => void; onSe
   const defaultModels = providers.find((p) => p.name === settings?.default_provider)?.models ?? []
   const decisionModels = providers.find((p) => p.name === (settings?.decision_provider ?? settings?.default_provider))?.models ?? []
   const ollamaModels = providers.find((p) => p.name === 'ollama')?.models ?? []
+  // For the subagents of a chat on a local model: the cloud providers the server names for it that are set up.
+  const standIns = usable.filter((p) => settings?.subagent_providers?.includes(p.name))
+  const standInModels = providers.find((p) => p.name === settings?.subagent_provider)?.models ?? []
+  const standInLost = !!settings?.subagent_provider && !standIns.some((p) => p.name === settings.subagent_provider)
 
   return (
     <Modal title="Settings" onClose={onClose} footer={<>
@@ -361,6 +365,26 @@ export function SettingsDialog({ onClose, onSetup }: { onClose: () => void; onSe
             <span className="hint">Each one runs its own tools and model calls, so more of them load this machine and your model provider's rate limit. Raise it on a machine with cores and memory to spare; lower it when a swarm makes the machine slow.
               {settings.machine.cores ? ` This machine has ${settings.machine.cores} processor cores${settings.machine.memory_gb ? ` and ${settings.machine.memory_gb} GB of memory` : ''}.` : ''}</span>
           </label>
+          {settings.subagent_providers && (
+            <>
+              <label className="field"><span>Cloud model for the subagents of a local chat</span>
+                <select value={settings.subagent_provider ?? ''}
+                  onChange={(e) => { const p = providers.find((x) => x.name === e.target.value); void update({ subagent_provider: e.target.value, subagent_model: e.target.value ? p?.models[0]?.id ?? '' : '' }) }}>
+                  <option value="">None: a local model works alone</option>
+                  {standInLost && <option value={settings.subagent_provider!}>{settings.subagent_provider} (no key set)</option>}
+                  {standIns.map((p) => <option key={p.name} value={p.name}>{p.name}</option>)}
+                </select>
+              </label>
+              {settings.subagent_provider && (
+                <label className="field"><span>Model for those subagents</span>
+                  <select value={settings.subagent_model ?? ''} onChange={(e) => update({ subagent_model: e.target.value })}>
+                    {settings.subagent_model && !standInModels.some((m) => m.id === settings.subagent_model) && <option value={settings.subagent_model}>{settings.subagent_model}</option>}
+                    {standInModels.map((m) => <option key={m.id} value={m.id}>{m.id}</option>)}
+                  </select>
+                </label>)}
+              <div className="hint">A chat on a local model (Ollama, colibri) has no subagents by itself: a subagent would be that same model starting again from an empty context. With a cloud model chosen here, the delegate and swarm tools of such a chat work on it. What a subagent reads and does (the task, the tool results, pages of the target) then goes to that provider. After a subagent that failed or did not do its task, the local model does the rest of that run itself.
+                {standInLost ? ` ${settings.subagent_provider} has no key now: until it has one, a local model works alone.` : ''}</div>
+            </>)}
           <div className="field"><span>MCP servers</span>
             {mcp?.error && <span className="hint">{mcp.error}</span>}
             <div className="row">
