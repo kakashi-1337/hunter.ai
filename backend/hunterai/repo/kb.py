@@ -245,6 +245,24 @@ async def keyword_ids(conn, collection_ids: list[str], match: str, limit: int) -
     return [r["id"] for r in rows]
 
 
+async def exact_ids(conn, collection_ids: list[str], phrase: str, spelling: str, limit: int, *, any_case: bool = False) -> list[str]:
+    """Chunk ids, oldest first, whose text holds `spelling` letter for letter (with `any_case`, in whatever case).
+    The keyword index only knows words: to it `wait_for` is "wait for". So it is asked for the passages that have the
+    words of `phrase` side by side, and the text of every one of those is looked at. Nothing is cut off before that
+    look: an ordinary phrase can stand in hundreds of passages and the identifier in one of them. Only chunks of `ok`
+    documents in these collections."""
+    if not collection_ids:
+        return []
+    marks = ",".join("?" * len(collection_ids))
+    holds = "instr(lower(c.text), lower(?)) > 0" if any_case else "instr(c.text, ?) > 0"
+    rows = await (await conn.execute(
+        f"select c.id from kb_chunks_fts f join kb_chunks c on c.n = f.rowid "
+        f"join kb_documents d on d.id = c.document_id where kb_chunks_fts match ? and d.status='ok' "
+        f"and c.collection_id in ({marks}) and {holds} order by c.n limit ?",
+        (phrase, *collection_ids, spelling, limit))).fetchall()
+    return [r["id"] for r in rows]
+
+
 async def chunks_by_id(conn, ids: list[str]) -> dict[str, tuple[Chunk, Document]]:
     out: dict[str, tuple[Chunk, Document]] = {}
     for start in range(0, len(ids), 500):

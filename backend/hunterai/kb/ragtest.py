@@ -16,7 +16,6 @@ import argparse
 import asyncio
 import hashlib
 import json
-import re
 import sys
 
 from .. import config, db
@@ -39,12 +38,7 @@ KEPT_RUNS = 20
 MISSES_SHOWN = 10
 KINDS = {"identifier": "identifiers", "question": "questions"}
 
-_FORMS = (
-    re.compile(r"\bCVE-\d{4}-\d{4,7}\b"),
-    re.compile(r"(?<![\w/.-])/(?:[A-Za-z0-9_.~-]+/)+[A-Za-z0-9_~-][A-Za-z0-9_.~-]*"),      # a path of two parts or more
-    re.compile(r"\b[A-Za-z][A-Za-z0-9]*(?:_[A-Za-z0-9]+)+\b"),                             # snake_case
-    re.compile(r"\b[a-z]+(?:[A-Z][a-z0-9]+)+\b"),                                          # camelCase
-)
+_FORMS = search.IDENTIFIER_FORMS        # what the search takes for an identifier is what this test asks
 ASK = ("You write test questions for a search system. You are shown one passage of somebody's notes. Write ONE question "
        "that this passage answers, the way a person who has not read it would ask. Use your own words: do not copy "
        "more than three words in a row from the passage, and do not repeat its identifiers (paths, numbers, names of "
@@ -155,7 +149,8 @@ async def run(conn, test: dict, say=lambda text: None) -> dict:
     about three of full size), stood among the POOL the search chooses from, and were not found. And which half of
     the search found the ones that were found."""
     kinds: dict[str, dict] = {}
-    found_by = {"both": 0, "vectors": 0, "keywords": 0}
+    found_by = {"both": 0, "vectors": 0, "keywords": 0, "spelling": 0}
+    exact = 0                   # stood first because they hold an identifier of the query in its exact spelling
     misses = []
     for n, item in enumerate(test["items"], 1):
         if _now_and_then(n, len(test["items"])):
@@ -173,8 +168,10 @@ async def run(conn, test: dict, say=lambda text: None) -> dict:
         count["first"] += int(place == 1)
         count["sent"] += int(item["chunk_id"] in sent)
         count["pool"] += 1
-        found_by["both" if hit.dense_rank and hit.keyword_rank else "vectors" if hit.dense_rank else "keywords"] += 1
-    return {"at": db.now(), "kinds": kinds, "found_by": found_by, "misses": misses}
+        found_by["both" if hit.dense_rank and hit.keyword_rank else "vectors" if hit.dense_rank
+                 else "keywords" if hit.keyword_rank else "spelling"] += 1
+        exact += int(hit.exact)
+    return {"at": db.now(), "kinds": kinds, "found_by": found_by, "exact": exact, "misses": misses}
 
 
 def report(test: dict, result: dict, before: dict | None = None) -> str:
@@ -198,7 +195,11 @@ def report(test: dict, result: dict, before: dict | None = None) -> str:
     lines += ["", f"In the message: among the passages a message gets, {TOP} at most and {ROOM:,} characters of whole "
                   "passages (about three of full size).",
               f"Found by both halves of the search: {f['both']}. By the vectors only: {f['vectors']}. "
-              f"By the keywords only: {f['keywords']}."]
+              f"By the keywords only: {f['keywords']}."
+              + (f" By its exact spelling only: {f['spelling']}." if f.get("spelling") else "")]
+    if result.get("exact"):
+        lines.append(f"{result['exact']} stood first for the exact spelling of an identifier (a passage that holds "
+                     "an identifier of the query letter for letter is put before the rest).")
     low = sum(c["pool"] - c["sent"] for c in kinds.values())
     gone = sum(c["missed"] for c in kinds.values())
     if low:
@@ -211,10 +212,11 @@ def report(test: dict, result: dict, before: dict | None = None) -> str:
         if any("sent" not in c for c in earlier.values()):
             lines += ["", f"The run before counted the first {TOP} passages, not what fits a message: it is not compared with."]
         else:
-            changed = [f"{KINDS.get(k, k)} in the message: {c['sent']}, {earlier[k]['sent']} in the run before"
-                       for k, c in kinds.items() if k in earlier and c["sent"] != earlier[k]["sent"]]
+            changed = [f"{KINDS.get(k, k)} {what}: {c[key]}, {earlier[k][key]} in the run before"
+                       for k, c in kinds.items() if k in earlier
+                       for key, what in (("sent", "in the message"), ("first", "found first")) if c[key] != earlier[k][key]]
             lines += ["", "Against the run before: " + ("; ".join(changed) + "." if changed else
-                                                        "in the message, the same as in the run before.")]
+                                                        "in the message and in the first place, the same as in the run before.")]
     if result["misses"]:
         lines += ["", f"Not found ({min(len(result['misses']), MISSES_SHOWN)} of {len(result['misses'])}):"]
         lines += [f"- {m['kind']}: {m['query']}   (from {m['source']})" for m in result["misses"][:MISSES_SHOWN]]

@@ -512,6 +512,36 @@ job that was running. Files that were already embedded are not embedded again; a
 crawl that was cut off is thrown away and done again from the start, so a half-downloaded
 file is never read.
 
+### An identifier is found by its exact spelling
+
+A collection is searched in two halves, by meaning (the 40 nearest vectors) and by words (40
+keyword matches), and the two lists are fused by rank. Both halves are weak at identifiers,
+each in its own way:
+
+- To the keyword index `wait_for` is the two words "wait for", and `jQuery` is "jquery".
+  Every passage with the ordinary words matches, and the one that has the identifier is not
+  among the 40.
+- Fused by rank, a passage both halves found stands before one that is first for the
+  keywords alone. Inside a question, the one passage with the identifier stands behind every
+  passage that shares the question's ordinary words.
+
+So a passage that holds an identifier of the query letter for letter is put before the fused
+list. What counts as an identifier is narrow on purpose: a CVE number, a path of two parts or
+more, a `snake_case` name, a `camelCase` name. The spelling is looked for as it is written,
+and in any case only when no passage has it so (someone types `cve-2024-1234`). Three limits
+keep it from putting the wrong thing first:
+
+- an identifier that stands in more than 5 passages is an ordinary word of that collection
+  and puts nothing first;
+- at most 3 passages are put first, each identifier of the query in its turn;
+- a query that names more than 6 identifiers is a paste, not a question, and is searched as
+  before.
+
+Such a passage shows "exact spelling" in place of a score, under an answer and in the
+Knowledge view. What it does not do: a dotted name (`config.json`), a host name, a header
+(`X-Forwarded-Host`) or a name that only begins with a capital is not taken for an identifier
+yet, and the order of everything else is the fused order as before.
+
 ### What the search finds, measured
 
 `scripts/rag-test.sh "NAME"` asks the search of a collection for things that stand in exactly
@@ -538,7 +568,9 @@ The test is kept with its runs (`rag-tests/` in the data folder). The next run a
 test and compares with the run before, so a change to the search, to the embedding model or
 to how the texts are cut is measured with the same questions. How to read it: what stood
 among the 40 and was not in the message is what a reranker could bring up; what was not among
-the 40 was found by neither half of the search, and no reranker brings that up. When the
+the 40 was found by neither half of the search, and no reranker brings that up. The test also
+says how many stood first for the exact spelling of an identifier, and against the run before
+it compares what was in the message and what stood first. When the
 decision model writes no question that can be used, the test says which model was asked and
 why nothing came of it, and stops asking after three in a row. The questions
 are a model's and the answer counted as right is the passage they were written from:

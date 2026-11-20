@@ -71,6 +71,7 @@ class Source(BaseModel):
     line_end: int
     score: float
     text: str
+    exact: bool = False          # it stood first because it holds an identifier of the query in its exact spelling
 
 
 class SourcesBlock(BaseModel):
@@ -314,3 +315,4 @@ class Hit(BaseModel):
     score: float
     dense_rank: int | None = None
     keyword_rank: int | None = None
+    exact: bool = False          # it holds an identifier of the query in its exact spelling, and stands first for that

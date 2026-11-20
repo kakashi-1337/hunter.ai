@@ -201,3 +201,11 @@ async def test_kb_search_tool_reads_only_the_chats_collections(conn, kb_chat):
     from hunterai.tools.base import ToolError
     with pytest.raises(ToolError, match="No knowledge collection"):
         await tool.handler(ctx, {"query": "waf"})
+
+
+def test_a_source_keeps_the_word_that_it_stood_first_for_its_spelling():
+    from hunterai.types import Hit
+    hit = lambda cid, exact: Hit(chunk_id=cid, document_id="d", collection_id="c", source_uri=f"/n/{cid}.md", ordinal=0,  # noqa: E731
+                                 text="some text", line_start=1, line_end=1, score=1.016 if exact else 0.016, exact=exact)
+    picked = retrieve.pick([hit("a", True), hit("b", False)], 10_000)
+    assert [(s.n, s.exact) for s in picked] == [(1, True), (2, False)]
