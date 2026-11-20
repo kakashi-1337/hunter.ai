@@ -369,8 +369,10 @@ button.link:hover:not(:disabled) { background: none; color: var(--text); }
 .goal-body { padding: 2px 12px 8px 12px; max-height: 30vh; overflow-y: auto; display: flex; flex-direction: column; gap: 3px; }
 .goal-item { display: flex; align-items: center; gap: 8px; }
 .goal-item .box { color: var(--muted); width: 14px; flex: none; }
-.goal-item.done { color: var(--faint); text-decoration: line-through; }
-.goal-item.done .box { color: var(--accent); text-decoration: none; }
+.goal-item.done { color: var(--faint); }
+.goal-item.done .goal-text { text-decoration: line-through; }       /* the item's words only: its mark stays readable */
+.goal-item.done .box { color: var(--accent); }
+.goal-proof { margin: -2px 0 2px 22px; font-size: 11.5px; color: var(--muted); overflow-wrap: anywhere; }
 .goal-brief { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .goal-body ul { margin: 4px 0 0; padding-left: 20px; }
 

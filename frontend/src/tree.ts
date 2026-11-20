@@ -246,6 +246,12 @@ function fitNote(context: unknown): string | null {
 /** One line for a decision step: what the decision model answered. */
 export function decisionSummary(step: Step): string {
   const d = step.detail as Record<string, unknown>
+  if (step.name === 'answer check' || step.name === 'goal check') {       // the checks after a run: they give no "answers"
+    if (d.error) return `could not be made: ${String(d.error)}`
+    if (step.name === 'answer check') return `${String(d.checked ?? 0)} ${d.checked === 1 ? 'statement' : 'statements'} read · ${String(d.unsupported ?? 0)} not backed by a tool result`
+    if (d.complete !== true) return 'the answer does not say the work is complete: nothing was marked'
+    return `the answer says complete · ${String(d.shown ?? 0)} of ${String(d.checked ?? 0)} open items shown by a tool result`
+  }
   if (d.failed) return `gate failed: ${String(d.error ?? 'unknown')} (the call kept its decision)`
   if (typeof d.recommendation === 'string') return `${d.recommendation} · risk ${String(d.risk_score)} of 3`
   const answers = (d.answers ?? {}) as Record<string, Record<string, unknown>>
@@ -648,6 +654,19 @@ export function goalLine(goal: Goal, list: Helper[]): string {
   const parts = [`${goal.open_items.length} open`, `${done} done`]
   if (list.length) parts.push(working ? `${working} of ${list.length} subagents working` : `${list.length} ${list.length === 1 ? 'subagent' : 'subagents'} finished`)
   return parts.join(' · ')
+}
+
+/** What stands beside an item of the goal record: what the check found, in a few words, and what it rests on.
+ * null: an open item nobody has said is done. An item that was marked done before items were checked has no mark,
+ * and is shown as what it is: the agent's word. */
+export function goalMark(goal: Goal, item: string, done: boolean): { label: string; level: 'ok' | 'warn' | 'bad' | ''; detail: string } | null {
+  const mark = goal.marks?.[item]
+  if (!mark) return done ? { label: 'the agent\'s word', level: '', detail: 'Marked before items were checked: no tool result was read for it.' } : null
+  const quoted = `${mark.tool || 'a tool result'}: “${mark.evidence}”`
+  if (mark.verdict === 'shown') return { label: 'shown by a tool result', level: 'ok', detail: quoted }
+  if (mark.verdict === 'contradicted') return { label: 'a result says the opposite', level: 'bad', detail: quoted }
+  if (mark.verdict === 'unchecked') return { label: 'said done, not checked', level: 'warn', detail: `Could not be checked: ${mark.evidence || 'no verdict came back'}` }
+  return { label: 'said done, not shown', level: 'warn', detail: mark.evidence || 'No tool result of this chat shows it.' }
 }
 
 /** 1234567 -> "1.2M", 45678 -> "45.7k": token counts at a glance. */

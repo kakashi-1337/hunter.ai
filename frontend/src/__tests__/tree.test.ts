@@ -218,6 +218,15 @@ describe('decision steps', () => {
       .toBe('verdict: recheck (0.4, abstain) · criteria_met: no (0.2)')
     expect(decisionSummary(step({ status: 'error', detail: { invalid: true, error: 'no JSON', answers: {} } }))).toBe('no usable answer: no JSON')
   })
+  it('says what the checks after a run found, instead of "no usable answer" over a check that worked', () => {
+    expect(decisionSummary(step({ name: 'answer check', detail: { checked: 3, unsupported: 1 } }))).toBe('3 statements read · 1 not backed by a tool result')
+    expect(decisionSummary(step({ name: 'answer check', detail: { checked: 1, unsupported: 0 } }))).toBe('1 statement read · 0 not backed by a tool result')
+    expect(decisionSummary(step({ name: 'answer check', status: 'error', detail: { error: 'no JSON' } }))).toBe('could not be made: no JSON')
+    expect(decisionSummary(step({ name: 'goal check', detail: { complete: true, checked: 2, shown: 1 } })))
+      .toBe('the answer says complete · 1 of 2 open items shown by a tool result')
+    expect(decisionSummary(step({ name: 'goal check', detail: { complete: false } }))).toBe('the answer does not say the work is complete: nothing was marked')
+    expect(decisionSummary(step({ name: 'goal check', status: 'error', detail: { complete: null, error: 'no JSON' } }))).toBe('could not be made: no JSON')
+  })
   it('gate line for the permission prompt never reads as approval', () => {
     expect(gateLine({ recommendation: 'allow', risk_score: 0.2, risk_level: 'Safe - read-only' })).toBe('Risk gate (advice only): allow · risk 0.2 of 3 (Safe - read-only)')
     expect(gateLine({ recommendation: 'confirm', invalid: true, risk_score: 1.5, risk_level: 'x' })).toBe('Risk gate (advice only): no usable answer, treat as unscreened')

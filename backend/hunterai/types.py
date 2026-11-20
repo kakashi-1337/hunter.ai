@@ -101,9 +101,10 @@ class OwnerNoteBlock(BaseModel):
 
 class NoticeBlock(BaseModel):
     """Something about the answer that the owner has to know and the text does not show: it was cut off at a
-    limit, or the provider's filter ended it. Shown under the answer; never sent to a model."""
+    limit, the provider's filter ended it, or it says the work is complete while items of the goal record are not
+    shown as done. Shown under the answer; never sent to a model."""
     type: Literal["notice"] = "notice"
-    kind: str                    # "cut_off" | "filtered"
+    kind: str                    # "cut_off" | "filtered" | "goal"
     text: str
 
 

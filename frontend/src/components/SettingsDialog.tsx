@@ -314,7 +314,7 @@ export function SettingsDialog({ onClose, onSetup }: { onClose: () => void; onSe
             </select>
           </label>
           <label className="check"><input type="checkbox" checked={settings.answer_check} onChange={(e) => update({ answer_check: e.target.checked })} />
-            <span>Check each answer against the tool results of its run: after a run in a chat with tools, the decision model lists the statements of the answer that no tool result shows, or that one contradicts, and they are marked under the answer. One more call to the decision model per run.</span></label>
+            <span>Check each answer against the tool results of its run: after a run in a chat with tools, the decision model lists the statements of the answer that no tool result shows, or that one contradicts, and they are marked under the answer. One more call to the decision model per run. With it goes the check of the goal record: when an answer says the work is complete while the chat's goal record has open items, the decision model is asked whether the chat's tool results show each of them; what none shows stays open and is named under the answer (one more call per run while the record has open items, and a second when the answer says complete).</span></label>
           <label className="check"><input type="checkbox" checked={settings.decision_gate && settings.decision_engine} disabled={!settings.decision_engine} onChange={(e) => update({ decision_gate: e.target.checked })} />
             <span>Risk gate: screen every write, edit, and execute call first. It is advice: it can make an allowed call ask, and it never approves one. Costs one decision-model call per screened call.</span>
           </label>

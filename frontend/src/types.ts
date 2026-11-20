@@ -295,12 +295,17 @@ export interface Settings {
   subagent_providers?: string[]
 }
 
+/** What the check said about one item of a goal record. Only `shown` makes an item done: the decision model found the
+ * work in a tool result of the chat, and the words it quoted really stand in that result. */
+export interface GoalMark { verdict: string; evidence: string; tool: string; model: string; at: string }
+
 export interface Goal {
   chat_id: string
   objective: string
   criteria: string[]
   open_items: string[]
   done_items?: string[]
+  marks?: Record<string, GoalMark>
   updated_at: string
 }
 

@@ -477,7 +477,8 @@ all backed gets one quiet line, and one that claims nothing about the run gets n
 chat model never sees the list. It is a second model's reading, not proof: a statement
 backed by a result of an earlier run of the chat is not in front of it, and it is only as
 good as the decision model you chose. It costs one call to the decision model per run and
-is recorded as the step "answer check"; Settings switches it off.
+is recorded as the step "answer check"; Settings switches it off, and with it the check of
+the goal record after a run ([An item is done when a tool result shows it](#an-item-is-done-when-a-tool-result-shows-it)).
 
 ### The same source twice, and the queue
 
@@ -555,15 +556,51 @@ you conclude from the numbers.
 ## Orchestrator
 
 When the orchestrator sets a goal record (the `focus` tool), a panel appears above the
-messages and stays there: the objective, the open items, the items it has taken off its
-open list (shown as done: that is the agent's own word, not a check), and the subagents of
-the run on screen with their state and whether their answer was verified. It folds to one
-line.
+messages and stays there: the objective, the open items, the items that are done, and the
+subagents of the run on screen with their state and whether their answer was verified. It
+folds to one line.
+
+### An item is done when a tool result shows it
+
+An agent that says "done" has only said so. An item of the goal record gets its done mark
+when two things hold:
+
+1. the decision model, given the item and the chat's tool results, says a result shows that
+   the work was carried out, and quotes the words that decide it;
+2. those words really stand in one of the results. HunterAI looks them up itself (spacing,
+   case, and quote marks aside). A verdict whose quote is found nowhere marks nothing.
+
+The panel shows the mark with the quoted words and the tool they came from. An item the
+agent said was done and that no result shows stays open, with "said done, not shown"; one a
+result contradicts shows that result's words; and when the decision model gave no usable
+answer the item stays open as "said done, not checked". Nothing is ever marked on the
+agent's word alone. Items marked done before this rule keep their place and are labelled
+"the agent's word".
+
+The check is made in two places:
+
+- **When the agent marks items** with `focus(action="update", done=[...])`. It is told
+  which were marked and which stay open. An item it leaves out of a new `open_items` list
+  is done if a result shows it and is otherwise simply taken off, with no done mark: an
+  agent has to be able to drop what is no longer needed.
+- **After a run whose final answer says the work is complete.** The decision model is first
+  asked only that (does the answer say complete?). If it does, every open item counts as
+  said to be done and is checked. What a result shows is marked; what none shows stays
+  open and is named under the answer, for you. Settings switches this off together with
+  the answer check.
+
+What it is not: proof. It is a second model's reading of the newest tool results that fit
+(24,000 characters, 2,000 of each result), and it can read them wrongly in both directions;
+the lookup of the quoted words only rules out evidence that does not exist, and an agent
+that prints the words itself (an `echo`, say) can still mislead a careless reader. The agent's
+own notes (`focus`, `critique`, findings), the `decide_` tools, a loaded skill, and what a
+subagent answered are not evidence; the tool calls a subagent made are. It needs a decision
+model that answers with JSON: with one that does not, nothing is marked.
 
 | Tool | What it does |
 |---|---|
 | `decide_check`, `decide_classify`, `decide_score`, `decide_gate`, `decide_decide`, `decide_rank` | Ask the decision model a yes/no, a choice, a score, a risk screen, several questions at once, or a ranking. The answer is probabilities plus an action: act (confidence 0.8 or more), review (0.5 or more), abstain. An answer that cannot be used is marked invalid and is never "act". |
-| `focus` | The chat's goal record: objective, success criteria, open items. It is part of every request, and `check` says how far a next step drifts from it. |
+| `focus` | The chat's goal record: objective, success criteria, open items. It is part of every request, `check` says how far a next step drifts from it, and `done` marks an item only when a tool result shows the work (see above). |
 | `critique` | A second look at a claim or plan: assumptions, alternatives, what would disprove it. Labelled as the model's analysis. |
 | `finding_add`, `finding_update`, `finding_list` | Findings for the chat's target. Adding one runs a triage first (severity, false positive, in scope, duplicate), stored with it. |
 | `delegate` | Runs a subagent on a brief with a subset of the chat's tools: at most 12 model turns, 8 subagents per run, one at a time, never nested. Its calls pass the same permission engine and its questions appear in the same chat. For a chat on a cloud model, and for a chat on a local model when you chose a cloud model for its subagents (see "A local model works alone" below). |
