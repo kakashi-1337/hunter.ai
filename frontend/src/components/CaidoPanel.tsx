@@ -3,6 +3,7 @@ import * as api from '../api'
 import { caidoListLine, visible } from '../tree'
 import type { CaidoExchange, CaidoRow, CaidoStatus } from '../types'
 import { Modal } from './Modal'
+import { ResponsePreview } from './ResponsePreview'
 
 const text = (e: unknown) => (e instanceof Error ? e.message : String(e))
 const when = (at: CaidoRow['at']) => { const d = new Date(typeof at === 'string' && /^\d+$/.test(at) ? Number(at) : at ?? NaN); return Number.isNaN(d.getTime()) ? '' : d.toLocaleTimeString() }
@@ -18,6 +19,7 @@ export function CaidoPanel({ onClose }: { onClose: () => void }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [open, setOpen] = useState<CaidoExchange | null>(null)
+  const [view, setView] = useState<'raw' | 'preview'>('raw')      // how a response is shown; kept from one request to the next
 
   const load = async (code = filter, withMedia = media) => {
     setBusy(true); setError(null)
@@ -76,7 +78,13 @@ export function CaidoPanel({ onClose }: { onClose: () => void }) {
                 </button>
                 {open?.id === r.id && (<div className="caido-open">
                   <div className="k">Request</div><pre>{visible(open.request)}</pre>
-                  <div className="k">Response</div><pre>{open.response === null ? '(no response was recorded)' : visible(open.response)}</pre>
+                  <div className="k caido-response-head">Response
+                    <span className="seg" role="group" aria-label="How the response is shown">
+                      <button type="button" className={view === 'raw' ? 'on' : ''} aria-pressed={view === 'raw'} onClick={() => setView('raw')}>Raw</button>
+                      <button type="button" className={view === 'preview' ? 'on' : ''} aria-pressed={view === 'preview'} title="The body drawn as a page: no script runs and nothing is loaded from the network" onClick={() => setView('preview')}>Preview</button>
+                    </span>
+                  </div>
+                  {view === 'raw' ? <pre>{open.response === null ? '(no response was recorded)' : visible(open.response)}</pre> : <ResponsePreview text={open.response} />}
                 </div>)}
               </div>
             ))}

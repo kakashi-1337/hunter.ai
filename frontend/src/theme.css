@@ -334,6 +334,11 @@ button.link:hover:not(:disabled) { background: none; color: var(--text); }
 .caido-open { border: 1px solid var(--line); border-top: 0; border-radius: 0 0 6px 6px; padding: 6px 8px; }
 .caido-open .k { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
 .caido-open pre { font: 12px/1.4 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; margin: 2px 0 8px; }
+.caido-response-head { display: flex; align-items: center; gap: 10px; }
+.caido-response-head .seg { text-transform: none; letter-spacing: 0; font-size: 12px; }
+/* The target's page, drawn on the white a browser gives a page that sets no colour of its own. */
+.caido-preview { display: block; width: 100%; height: 360px; margin: 4px 0; border: 1px solid var(--line); border-radius: 6px; background: #fff; }
+.caido-no-preview { margin: 4px 0 8px; }
 
 /* setup check */
 .setup-item { border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; background: var(--raised); display: flex; flex-direction: column; gap: 2px; }
