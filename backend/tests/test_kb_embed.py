@@ -148,3 +148,25 @@ async def test_unmocked_ollama_spec_fails_fast_on_a_closed_port(monkeypatch):
     with pytest.raises(EmbedError) as e:
         await embed.get("ollama:bge-m3").embed(["x"])
     assert e.value.kind == "unavailable"
+
+
+# ---- on the processor, when the owner says so
+
+@respx.mock
+@pytest.mark.parametrize("setting, sent", [("1", {"num_ctx": 8192, "num_gpu": 0}), ("", {"num_ctx": 8192}), ("0", {"num_ctx": 8192})])
+async def test_the_model_is_kept_on_the_processor_when_the_owner_says_so(monkeypatch, setting, sent):
+    """num_gpu 0 is Ollama's word for "no layer on the graphics card": the card stays with the chat model. Left
+    unsaid, Ollama puts the model where it fits."""
+    monkeypatch.setenv("HUNTERAI_EMBED_ON_CPU", setting)
+    route = respx.post(URL).mock(return_value=httpx.Response(200, json={"embeddings": [[0.1] * 1024]}))
+    await embed.get("ollama:bge-m3").embed(["a"])
+    assert json.loads(route.calls.last.request.content)["options"] == sent
+    assert embed.on_cpu() is (setting == "1")
+
+
+@respx.mock
+async def test_a_job_with_many_requests_stays_on_the_processor_too(monkeypatch):
+    monkeypatch.setenv("HUNTERAI_EMBED_ON_CPU", "1")
+    route = respx.post(URL).mock(return_value=httpx.Response(200, json={"embeddings": [[0.1] * 1024]}))
+    await embed.OllamaEmbedder("bge-m3", stays_loaded=True).embed(["a"])
+    assert json.loads(route.calls.last.request.content)["options"] == {"num_ctx": 8192, "num_gpu": 0}

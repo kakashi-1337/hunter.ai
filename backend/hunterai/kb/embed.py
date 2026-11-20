@@ -29,6 +29,7 @@ DEFAULT_EMBEDDER = "ollama:bge-m3"
 KEEP_LOADED = 0              # seconds the model stays loaded after a single answer
 MAX_KEEP_LOADED = 3600
 JOB_KEEP_LOADED = 300        # between the batches of a job, which unloads the model itself at its end
+CPU_ENV = "HUNTERAI_EMBED_ON_CPU"
 _SPEC = re.compile(r"^(ollama|fake):[A-Za-z0-9._:/-]{1,100}$")
 
 
@@ -46,6 +47,15 @@ def keep_loaded() -> int:
     except ValueError:
         return KEEP_LOADED
     return min(seconds, MAX_KEEP_LOADED) if seconds >= 0 else KEEP_LOADED
+
+
+def on_cpu() -> bool:
+    """Whether the owner keeps the embedding model on the processor (Settings; HUNTERAI_EMBED_ON_CPU=1). The graphics
+    card then stays with the chat model: the embedder takes none of its memory, so no model has to leave the card
+    for it. (An Ollama that may hold one model at a time, OLLAMA_MAX_LOADED_MODELS=1, unloads the other one all the
+    same.) It is slower there, which a job that embeds many files shows. Read from the env file at every request,
+    so the worker that ingests follows the setting too."""
+    return (config.env(CPU_ENV) or "").strip() == "1"
 
 
 class Embedder(Protocol):
@@ -102,7 +112,8 @@ class OllamaEmbedder:
             raise ValueError(f"at most {EMBED_BATCH} texts per request")
         body = {"model": self.model, "input": texts, "truncate": False,
                 "keep_alive": JOB_KEEP_LOADED if self._stays_loaded else keep_loaded(),
-                "options": {"num_ctx": EMBED_NUM_CTX}}
+                # num_gpu 0: no layer of the model on the graphics card, in Ollama's words. Unsaid: Ollama decides.
+                "options": {"num_ctx": EMBED_NUM_CTX, **({"num_gpu": 0} if on_cpu() else {})}}
         async with embed_lock(self._lock_timeout):
             try:
                 async with httpx.AsyncClient(timeout=httpx.Timeout(120, connect=5)) as client:
