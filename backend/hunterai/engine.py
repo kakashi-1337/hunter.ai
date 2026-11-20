@@ -61,6 +61,7 @@ class _Attempt:
         self.stop: str | None = None      # why the last model call ended, in the provider's word
         self.produced = 0                 # output tokens of the last model call
         self.notice: NoticeBlock | None = None    # what the owner has to know about how the answer ended
+        self.goal: NoticeBlock | None = None      # the answer says complete while items of the goal record are open
         self.changes: ChangesBlock | None = None  # what the run changed in the work folder (coding mode)
 
     @property
@@ -68,9 +69,10 @@ class _Attempt:
         return bool(self.items)
 
     def blocks(self) -> list[Block]:
-        """What is stored: the run's blocks, then the word about how the answer ended, what the run changed in the
-        work folder, the knowledge-base sources and the answer check, when there are any."""
-        return [*self.items, *(b for b in (self.notice, self.changes, self.sources, self.check) if b is not None)]
+        """What is stored: the run's blocks, then the word about how the answer ended and about the open items of
+        the goal record, what the run changed in the work folder, the knowledge-base sources and the answer check,
+        when there are any."""
+        return [*self.items, *(b for b in (self.notice, self.goal, self.changes, self.sources, self.check) if b is not None)]
 
     def wire_blocks(self) -> list[Block]:
         """What goes back to the model: never a block that is only the owner's to read."""
@@ -518,6 +520,7 @@ async def _execute(conn_factory, run_id: str, chat_id: str, user_message_id: str
         acc.notice = await _ending(chat, provider, model, acc)
         if specs:                 # a chat with tools: its answer can claim things the tool results do not show
             await _check_answer(conn, run_id, acc)
+            await _check_goal(conn, run_id, chat_id, acc)
         if chat.title == "New chat":
             first = next((b.text for m in wire if m.role == "user" for b in m.blocks
                           if b.type == "text" and b.text), "")
@@ -575,6 +578,43 @@ async def _check_answer(conn, run_id: str, acc: _Attempt) -> None:
             status = "error" if detail.get("error") else "done"
         except Exception as e:  # noqa: BLE001
             detail = {"error": f"{type(e).__name__}: {e}"[:300]}
+        finally:
+            done = await asyncio.shield(runs.patch_step(conn, step.id, status=status, detail=detail or None, close=True))
+            await asyncio.shield(hub.publish(run_id, {"type": "step_finished", "step": done.model_dump()}))
+    except asyncio.CancelledError:
+        pass                      # stopped while checking: the answer itself was complete
+    except Exception:  # noqa: BLE001
+        pass
+
+
+async def _check_goal(conn, run_id: str, chat_id: str, acc: _Attempt) -> None:
+    """When the final answer says the work is complete: hold the open items of the chat's goal record against the
+    chat's tool results. What a result shows is marked done; what none shows stays open and is named under the
+    answer. Like the answer check it is an extra with a step of its own, and it never fails the run."""
+    from . import answer_check, goal_check
+    step = None
+    try:
+        if not await goal_check.wanted(conn):
+            return
+        goal = await goals.get(conn, chat_id)
+        answer = answer_check.material(acc.items)[0]
+        if goal is None or not goal.open_items or len(answer) < goal_check.MIN_ANSWER:
+            return
+        step = await runs.add_step(conn, run_id, "decision", "goal check", {})
+        await hub.publish(run_id, {"type": "step_started", "step": step.model_dump()})
+        status, detail = "error", {}
+        try:
+            complete, detail = await goal_check.says_complete(conn, answer)
+            detail = {**detail, "complete": complete}
+            if complete:
+                goal, marks, _, more = await goal_check.settle(conn, goal, list(goal.open_items))
+                detail = {**detail, **more, "complete": True}
+                said = goal_check.notice(goal, marks)
+                if said:
+                    acc.goal = NoticeBlock(kind="goal", text=said)
+            status = "error" if detail.get("error") else "done"
+        except Exception as e:  # noqa: BLE001
+            detail = {**detail, "error": f"{type(e).__name__}: {e}"[:300]}
         finally:
             done = await asyncio.shield(runs.patch_step(conn, step.id, status=status, detail=detail or None, close=True))
             await asyncio.shield(hub.publish(run_id, {"type": "step_finished", "step": done.model_dump()}))

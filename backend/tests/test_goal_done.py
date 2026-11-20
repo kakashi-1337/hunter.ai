@@ -13,23 +13,24 @@ async def focus(conn, chat, run_id, n, **args):
     return await goals.get(conn, chat.id)
 
 
-async def test_items_that_leave_the_open_list_are_kept_as_done(conn):
+async def test_an_item_does_not_become_done_on_the_agents_word(conn):
+    """It did, once: whatever left the open list was shown as done. Now a tool result has to show the work
+    (tests/test_goal_check.py); in a chat with no tool result nothing can."""
     for t in mind.tools():
         registry.register(t)
     chat, run_id = await seeded_run(conn, permissions={"risk": {"read": "allow", "write": "allow"}})
     g = await focus(conn, chat, run_id, 1, action="set", objective="Map the API", success_criteria=["every endpoint listed"],
                     open_items=["crawl the site", "read the JS bundles", "list endpoints"])
     assert g.open_items == ["crawl the site", "read the JS bundles", "list endpoints"] and g.done_items == []
+    # Said to be done: it stays open. What is added is added.
     g = await focus(conn, chat, run_id, 2, action="update", done=["crawl the site"], add_open=["check auth on each endpoint"])
-    assert g.open_items == ["read the JS bundles", "list endpoints", "check auth on each endpoint"] and g.done_items == ["crawl the site"]
-    # The whole list replaced: what is no longer on it counts as done too, in the order it left.
+    assert g.open_items == ["crawl the site", "read the JS bundles", "list endpoints", "check auth on each endpoint"]
+    assert g.done_items == [] and g.marks["crawl the site"].verdict == "not_shown"
+    # The whole list replaced: what is no longer on it is gone, and not done.
     g = await focus(conn, chat, run_id, 3, action="update", open_items=["check auth on each endpoint"])
-    assert g.open_items == ["check auth on each endpoint"] and g.done_items == ["crawl the site", "read the JS bundles", "list endpoints"]
-    # An item that comes back is open again, not both.
-    g = await focus(conn, chat, run_id, 4, action="update", add_open=["list endpoints"])
-    assert "list endpoints" in g.open_items and "list endpoints" not in g.done_items
+    assert g.open_items == ["check auth on each endpoint"] and g.done_items == [] and g.marks == {}
     # A new goal starts with nothing done.
-    g = await focus(conn, chat, run_id, 5, action="set", objective="Something else", open_items=["one"])
+    g = await focus(conn, chat, run_id, 4, action="set", objective="Something else", open_items=["one"])
     assert (g.objective, g.open_items, g.done_items) == ("Something else", ["one"], [])
 
 

@@ -49,7 +49,8 @@ async def test_focus_sets_reads_updates_and_survives(conn, mind_registered):
     block, _ = await call(conn, chat, run_id, "focus", action="update", add_open=["Try id 1338", "Map the endpoints"],
                           done=["Map the endpoints"])
     g = await goals.get(conn, chat.id)
-    assert g.open_items == ["Try id 1338"] and g.objective.startswith("Find an IDOR")
+    # "Map the endpoints" was only said to be done: no tool result of this chat shows it, so it stays open.
+    assert g.open_items == ["Map the endpoints", "Try id 1338"] and g.objective.startswith("Find an IDOR")
     block, _ = await call(conn, chat, run_id, "focus", action="set")
     assert block.is_error and "objective" in block.content
     block, _ = await call(conn, chat, run_id, "focus", action="update", add_open=["x"])

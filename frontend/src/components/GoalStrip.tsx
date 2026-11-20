@@ -1,10 +1,24 @@
 import { useEffect, useState } from 'react'
 import * as api from '../api'
 import { useStore } from '../store'
-import { goalLine, helpers, visible } from '../tree'
+import { goalLine, goalMark, helpers, visible } from '../tree'
 import type { Goal } from '../types'
 
 const STATE = { queued: 'waiting', running: 'working', done: 'finished', error: 'failed', cancelled: 'stopped' } as const
+
+/** One item of the record with what the check found about it: the mark in a few words, and under it what the mark
+ * rests on (the words of a tool result, or why there is no verdict). */
+function Item({ goal, item, done }: { goal: Goal; item: string; done: boolean }) {
+  const mark = goalMark(goal, item, done)
+  return (<>
+    <div className={`goal-item${done ? ' done' : ''}`}>
+      <span className="box" aria-label={done ? 'done' : 'open'}>{done ? '☑' : '☐'}</span>
+      <span className="grow goal-text">{visible(item)}</span>
+      {mark && <span className={`badge ${mark.level}`}>{mark.label}</span>}
+    </div>
+    {mark && <div className="goal-proof">{visible(mark.detail)}</div>}
+  </>)
+}
 
 /** The chat's goal record, in view above the messages for as long as there is one: what is open, what is done,
  * and the subagents of the run on screen. It appears by itself when the orchestrator sets a goal. All text is plain. */
@@ -35,8 +49,8 @@ export function GoalStrip() {
       </button>
       {open && (<div className="goal-body">
         {goal.open_items.length === 0 && done.length === 0 && <div className="hint">The agent has listed no steps yet.</div>}
-        {goal.open_items.map((item, i) => <div key={`o${i}`} className="goal-item"><span className="box" aria-label="open">☐</span><span>{visible(item)}</span></div>)}
-        {done.map((item, i) => <div key={`d${i}`} className="goal-item done"><span className="box" aria-label="done">☑</span><span>{visible(item)}</span></div>)}
+        {goal.open_items.map((item, i) => <Item key={`o${i}`} goal={goal} item={item} done={false} />)}
+        {done.map((item, i) => <Item key={`d${i}`} goal={goal} item={item} done />)}
         {list.length > 0 && (<>
           <div className="k">Subagents of this run</div>
           {list.map((h) => (
@@ -48,7 +62,7 @@ export function GoalStrip() {
           ))}
         </>)}
         {goal.criteria.length > 0 && <details><summary>Success criteria ({goal.criteria.length})</summary><ul>{goal.criteria.map((c, i) => <li key={i}>{visible(c)}</li>)}</ul></details>}
-        {done.length > 0 && <div className="hint">An item is marked done when the agent takes it off its open list. That is the agent's own word, not a check.</div>}
+        {(done.length > 0 || Object.keys(goal.marks ?? {}).length > 0) && <div className="hint">An item is marked done only when a tool result of this chat shows the work: the decision model reads the results, and the words it quotes have to stand in one of them. An item the agent only says is done stays open. It is a model's reading of the results, not proof.</div>}
       </div>)}
     </section>
   )

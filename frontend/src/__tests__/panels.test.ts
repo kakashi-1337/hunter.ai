@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { compact, goalLine, helpers, answerCheckLine, answerCheckOf, filterFindings, findingsMarkdown, machineLine, renderItems, swarmMembers } from '../tree'
+import { compact, goalLine, goalMark, helpers, answerCheckLine, answerCheckOf, filterFindings, findingsMarkdown, machineLine, renderItems, swarmMembers } from '../tree'
 import type { AnswerCheckBlock, FindingRow, Message, Step } from '../types'
 
 const step = (over: Partial<Step>): Step => ({
@@ -128,6 +128,25 @@ describe('goal panel', () => {
     expect(goalLine(goal, helpers(steps))).toBe('2 open · 1 done · 1 of 3 subagents working')
     expect(goalLine(goal, [])).toBe('2 open · 1 done')
     expect(goalLine({ ...goal, done_items: undefined }, [{ id: 'd', brief: 'x', state: 'done' }])).toBe('2 open · 0 done · 1 subagent finished')
+  })
+  it('says of an item what the check found, and never calls the agent\'s word a check', () => {
+    const mark = (verdict: string, evidence = '', tool = '') => ({ verdict, evidence, tool, model: 'ollama/judge', at: 't' })
+    const goal = { chat_id: 'c', objective: 'Map the API', criteria: [], open_items: ['a', 'b', 'c', 'd'], done_items: ['y', 'z'], updated_at: 't',
+      marks: { z: mark('shown', 'Found 132 URLs', 'execute'), a: mark('not_shown'), b: mark('contradicted', 'Failed to connect', 'web_fetch'),
+        c: mark('unchecked', 'the decision model did not return a JSON object') } }
+    // Done, and a tool result shows it: the words and the tool they came from.
+    expect(goalMark(goal, 'z', true)).toEqual({ label: 'shown by a tool result', level: 'ok', detail: 'execute: “Found 132 URLs”' })
+    // Done from before items were checked: said plainly, with no badge that looks like a check.
+    expect(goalMark(goal, 'y', true)).toEqual({ label: 'the agent\'s word', level: '', detail: 'Marked before items were checked: no tool result was read for it.' })
+    // Open, although the agent said done.
+    expect(goalMark(goal, 'a', false)).toEqual({ label: 'said done, not shown', level: 'warn', detail: 'No tool result of this chat shows it.' })
+    expect(goalMark(goal, 'b', false)).toEqual({ label: 'a result says the opposite', level: 'bad', detail: 'web_fetch: “Failed to connect”' })
+    expect(goalMark(goal, 'c', false)).toEqual({ label: 'said done, not checked', level: 'warn', detail: 'Could not be checked: the decision model did not return a JSON object' })
+    // An open item nobody said anything about has no mark; neither has a record from before there were marks.
+    expect(goalMark(goal, 'd', false)).toBeNull()
+    expect(goalMark({ ...goal, marks: undefined }, 'a', false)).toBeNull()
+    // A reason the check gave for "not shown" is passed on.
+    expect(goalMark({ ...goal, marks: { a: mark('not_shown', 'this chat has no tool result yet') } }, 'a', false)?.detail).toBe('this chat has no tool result yet')
   })
 })
 

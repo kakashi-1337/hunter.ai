@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import json
 
-from .. import db
+from .. import db, goal_check
 from ..decision import engine as de
 from .. import notify
 from ..repo import chats, findings, goals, targets
@@ -39,6 +39,7 @@ async def _focus(ctx: ToolContext, args: dict) -> ToolResult:
         if action == "set":
             if not (args.get("objective") or "").strip():
                 raise ToolError("focus(action=\"set\") needs an objective")
+            await goals.delete(conn, ctx.chat_id)           # a new goal starts with nothing done and no mark
             goal = await goals.put(conn, ctx.chat_id, args["objective"].strip(),
                                    list(args.get("success_criteria") or []),
                                    list(args.get("open_items") or []))
@@ -46,18 +47,16 @@ async def _focus(ctx: ToolContext, args: dict) -> ToolResult:
         if goal is None:
             raise ToolError("there is no goal record yet; set one with focus(action=\"set\", objective=...)")
         if action == "update":
-            done = set(args.get("done") or [])
-            items = [i for i in goal.open_items if i not in done]
-            items += [i for i in (args.get("add_open") or []) if i not in items and i not in done]
-            if args.get("open_items") is not None:
-                items = list(args["open_items"])
-            criteria = list(args["success_criteria"]) if args.get("success_criteria") is not None \
-                else goal.criteria
-            # What left the open list is kept as done, in the order it left, for the owner's view of the work.
-            left = [i for i in goal.open_items if i not in items]
-            goal = await goals.put(conn, ctx.chat_id, (args.get("objective") or goal.objective).strip(),
-                                   criteria, items, [*goal.done_items, *left])
-            return ToolResult("Goal record updated.\n" + _record(goal))
+            # Saying that an item is done marks nothing: it is marked when a tool result of the chat shows the work
+            # (goal_check.py). What is said to be done and is not shown stays open, and the agent is told so.
+            said = list(dict.fromkeys(args.get("done") or []))
+            unknown = [i for i in said if i not in goal.open_items and i not in goal.done_items]
+            goal, marks, dropped, _ = await goal_check.settle(
+                conn, goal, said, list(args["open_items"]) if args.get("open_items") is not None else None,
+                add_open=list(args.get("add_open") or []), objective=args.get("objective"),
+                criteria=list(args["success_criteria"]) if args.get("success_criteria") is not None else None)
+            back = goal_check.told(marks, dropped, unknown)
+            return ToolResult("Goal record updated.\n" + (back + "\n" if back else "") + _record(goal))
         # check: does a next step serve the objective?
         step = (args.get("next_step") or "").strip()
         if not step:
@@ -230,8 +229,9 @@ def _tool(name, description, properties, required, handler) -> Tool:
 def tools() -> list[Tool]:
     return [
         _tool("focus", "The chat's goal record: objective, success criteria, open items. action=get | set | "
-              "update | check. Set it at the start of real work, keep the open items current, and use "
-              "check before a long or expensive step to see whether it serves the objective.",
+              "update | check. Set it when real work starts and keep it current. update with done=[items] marks "
+              "an item done only when a tool result shows the work: do that before you say the work is complete. "
+              "check tells whether a big next step serves the objective.",
               {"action": {"enum": ["get", "set", "update", "check"]}, "objective": {"type": "string"},
                "success_criteria": STRINGS, "open_items": STRINGS, "add_open": STRINGS, "done": STRINGS,
                "next_step": {"type": "string"}}, ["action"], _focus),

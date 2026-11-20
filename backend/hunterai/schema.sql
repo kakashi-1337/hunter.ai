@@ -141,6 +141,18 @@ create table if not exists goals (
   updated_at text not null
 );
 
+-- What the check said about an item of a goal record: an item is done only when a tool result of the chat shows it.
+create table if not exists goal_marks (
+  chat_id text not null references chats(id) on delete cascade,
+  item text not null,
+  verdict text not null,             -- shown | not_shown | contradicted | unchecked
+  evidence text not null default '', -- the words of a tool result that decide it, or why there is no verdict
+  tool text not null default '',     -- the tool whose result holds those words
+  model text not null default '',    -- the decision model that read the results
+  at text not null,
+  primary key (chat_id, item)
+);
+
 create table if not exists subruns (
   id text primary key,
   run_id text not null references runs(id) on delete cascade,
