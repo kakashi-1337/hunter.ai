@@ -1121,6 +1121,50 @@ minute for it to cool, then answers with the OCR text alone and says why. A lapt
 power at the processor's critical temperature without a line in any log.
 `HUNTERAI_MAX_CPU_TEMP` sets the limit in C (`off` removes it).
 
+### A picture is decoded before a model gets it
+
+HunterAI takes a file for a picture by its first bytes, and those of a damaged file are in
+order: a screenshot that was cut short while it was saved begins like any other PNG. The
+program that runs a local model refuses the whole request for such a file (through Ollama:
+`HTTP 400: Failed to load image or audio file`). Every picture of a chat goes with every
+message of it, so from that file on each message of the chat failed the same way, and the
+error advised changing the model or an option, which does nothing for it.
+
+So every picture is decoded on this machine first (`pictures.py`, with the Pillow library),
+on its way to a chat model and in `look_at_image`:
+
+- **What cannot be decoded is not sent.** The model gets a line in its place,
+  `[attached picture "shot.png" omitted: it cannot be decoded (the file is damaged or cut short)]`,
+  and the chat goes on. A chat that failed on every message works again: its damaged picture
+  is left out from now on. `look_at_image` refuses such a file before a model is loaded for it.
+- **You are told when you attach it**: the line above the message box names the file and the
+  reason, and its chip carries a ⚠. The file is taken all the same and kept as it came. In a
+  message, a picture the browser cannot show is said to be that, where the bare words
+  "attached image" stood.
+- **A PNG and an ordinary JPEG go as they are**, byte for byte.
+- **A WebP, a GIF, an animation, and a JPEG few programs decode** (four channels, lossless
+  or arithmetic coding) **go as a PNG of the first picture.** The readers differ on these:
+  the decoder inside llama.cpp has no WebP, Ollama refuses an animated one with an HTTP 500,
+  and not every cloud API takes a GIF. Transparency is kept. A PNG that comes out larger
+  than 4 MB goes as a JPEG of quality 92 instead, unless it has transparency. The chat keeps
+  showing what you attached; only the copy for the model is made, each turn.
+- **More than 50 million pixels are not decoded** (a 4K screen has 8 million): such a file
+  is left out, with that reason.
+- Only PNG, JPEG, GIF and WebP are opened, whatever else the library could read.
+
+Size still matters to a local model. qwen3-vl counts a token for every 32x32 pixels, no
+fewer than about 1,040 for a picture and no more than about 4,100 (measured through Ollama
+0.40.16, with a one-line question): about 1,070 tokens for a picture of 1024x768 or
+smaller, 2,070 for 1920x1080, 3,630 for 2560x1440, and 4,106 for 3840x2160. A picture of
+more than about 4 million pixels is scaled down by the model's own reader to stay under
+that, and the small text in it shrinks with it: a part cut out of a large screenshot is
+read better than the whole. Time grows with the tokens. When a picture does not fit the
+8,192 tokens `look_at_image` gives its model (another model may count differently), Ollama
+refuses the request; the result of the tool then carries Ollama's own words, the size of
+the picture, and what to do. When Ollama refuses a picture in a chat all the same, the
+error says that it is the picture, and that a new chat without it, or another model, is
+the way on.
+
 ### Caido
 
 HunterAI runs its own [Caido](https://caido.io) (the `caido-cli` program, found on the PATH,

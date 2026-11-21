@@ -43,6 +43,7 @@ export function Composer() {
       try {
         const up = await api.upload(f, chatId ?? undefined)
         setFiles((prev) => [...prev, up])
+        if (up.problem) setError(`${up.filename}: ${up.problem}`)       // told now, not by the model three messages later
       } catch (e) {
         setError(`${f.name}: ${e instanceof Error ? e.message : String(e)}`)
       } finally {
@@ -151,8 +152,8 @@ export function Composer() {
           {(files.length > 0 || uploading > 0) && (
             <div className="attachments" style={{ margin: '0 0 6px' }}>
               {files.map((f) => (
-                <span key={f.id} className="chip">
-                  {f.mime.startsWith('image/') ? '🖼' : '📎'} {f.filename}
+                <span key={f.id} className="chip" title={f.problem || undefined}>
+                  {f.problem ? '⚠' : f.mime.startsWith('image/') ? '🖼' : '📎'} {f.filename}
                   <button className="icon" aria-label={`Remove ${f.filename}`} onClick={() => setFiles((p) => p.filter((x) => x.id !== f.id))}>✕</button>
                 </span>
               ))}

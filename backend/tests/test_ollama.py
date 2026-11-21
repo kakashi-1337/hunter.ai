@@ -315,6 +315,21 @@ async def test_a_refusal_by_ollama_for_size_is_one_the_engine_knows(refusal):
 
 
 @respx.mock
+async def test_a_picture_the_program_behind_the_model_cannot_read_is_said_in_words_the_owner_can_act_on():
+    """What Ollama answers then, as it was reported. The owner was told to change the model or an option, which
+    does nothing for it: the picture goes with every turn of the chat."""
+    respx.post(URL).mock(return_value=httpx.Response(400, json={"error": {
+        "code": 400, "message": "Failed to load image or audio file", "type": "invalid_request_error"}}))
+    with pytest.raises(ProviderError) as ei:
+        await run(model="eyes:9b")
+    e = ei.value
+    assert e.kind == "bad_request" and e.status == 400 and e.complete
+    assert "Failed to load image or audio file" in e.message and "eyes:9b" in e.message
+    assert "new chat without the picture" in e.message and "another model" in e.message
+    assert not context.is_overflow(e)
+
+
+@respx.mock
 async def test_each_model_offers_the_thinking_controls_ollama_reports_for_it():
     respx.get(HOST + "/api/tags").mock(return_value=httpx.Response(200, json={"models": [
         {"name": "gpt-oss:20b"}, {"name": "qwen3:8b"}, {"name": "llama3.2:3b"}, {"name": "deep:1"}, {"name": "older:1"}]}))

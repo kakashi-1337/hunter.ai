@@ -1,4 +1,7 @@
+import io
+
 import pytest
+from PIL import Image
 
 from hunterai import config, uploads
 from hunterai.types import FileBlock, ImageBlock
@@ -19,6 +22,34 @@ async def test_images_detected_by_content_not_name(conn, data, mime):
     u = await uploads.save(conn, None, "notes.txt", data)
     assert u.mime == mime
     assert await uploads.to_block(conn, u.id) == ImageBlock(upload_id=u.id, mime=mime)
+
+
+def picture(kind="PNG", size=(640, 480)):
+    out = io.BytesIO()
+    Image.new("RGB", size, (200, 30, 30)).save(out, kind)
+    return out.getvalue()
+
+
+@pytest.mark.parametrize("data", [PNG, JPG, GIF, WEBP, picture()[:400]])
+async def test_a_picture_that_cannot_be_decoded_is_taken_and_said_to_be_that(conn, data):
+    """It begins like a picture and is none a model can be sent: the owner is told when he attaches it, not by
+    the model three messages later."""
+    u = await uploads.save(conn, None, "shot.png", data)
+    assert u.mime in uploads.IMAGE_MIMES and await uploads.load_bytes(conn, u.id) == data
+    assert u.problem == "this picture will not be sent to a model: it cannot be decoded (the file is damaged or cut short)"
+
+
+@pytest.mark.parametrize("name, data", [("shot.png", picture()), ("shot.webp", picture("WEBP")), ("anim.gif", picture("GIF")),
+                                        ("photo.jpg", picture("JPEG")), ("notes.txt", b"hello"), ("fw.bin", bytes(range(256)) * 8)])
+async def test_nothing_is_said_about_a_file_that_is_what_it_seems(conn, name, data):
+    assert (await uploads.save(conn, None, name, data)).problem == ""
+
+
+async def test_a_picture_too_large_to_decode_is_said_to_be_that(conn, monkeypatch):
+    from hunterai import pictures
+    monkeypatch.setattr(pictures, "MAX_PIXELS", 640 * 480 - 1)
+    u = await uploads.save(conn, None, "wall.png", picture())
+    assert u.problem.startswith("this picture will not be sent to a model: it has 307,200 pixels (640x480), more than")
 
 
 async def test_text_file_becomes_file_block(conn):

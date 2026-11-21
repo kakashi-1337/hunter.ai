@@ -193,6 +193,7 @@ class Upload(BaseModel):
     size: int
     sha256: str
     created_at: str
+    problem: str = ""       # said once, in the answer to the upload: why a model will not get this file as it is; not stored
 
 
 class Step(BaseModel):

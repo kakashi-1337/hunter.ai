@@ -16,16 +16,28 @@ const STATUS_NOTE: Partial<Record<Message['status'], string>> = {
   cancelled: 'Stopped',
 }
 
-function Attachments({ blocks }: { blocks: Block[] }) {
+const NOT_SHOWN = 'The browser cannot show this file as a picture: most likely it is damaged or cut short (or the file is no longer on this machine). A model is not sent a picture that cannot be decoded: it is told that one was left out, and why.'
+
+/** A picture of a message. One the browser cannot show is said to be that: the words "attached image" alone,
+ * which is what a browser puts in its place, read like a link that was never a picture. */
+function Thumb({ id }: { id: string }) {
+  const [broken, setBroken] = useState(false)
+  if (broken) return <span className="chip" title={NOT_SHOWN}><a href={uploadUrl(id)} target="_blank" rel="noopener noreferrer">⚠ A picture that cannot be shown</a></span>
+  return (
+    <a href={uploadUrl(id)} target="_blank" rel="noopener noreferrer">
+      <img className="thumb" src={uploadUrl(id)} alt="attached image" loading="lazy" onError={() => setBroken(true)} />
+    </a>
+  )
+}
+
+export function Attachments({ blocks }: { blocks: Block[] }) {
   const items = blocks.filter((b) => b.type === 'image' || b.type === 'file')
   if (!items.length) return null
   return (
     <div className="attachments">
       {items.map((b) =>
         b.type === 'image' ? (
-          <a key={b.upload_id} href={uploadUrl(b.upload_id)} target="_blank" rel="noopener noreferrer">
-            <img className="thumb" src={uploadUrl(b.upload_id)} alt="attached image" loading="lazy" />
-          </a>
+          <Thumb key={b.upload_id} id={b.upload_id} />
         ) : b.type === 'file' ? (
           <span key={b.upload_id} className="chip" title={b.text === null ? 'Binary file: the model only sees its name and size' : undefined}>
             <a href={uploadUrl(b.upload_id)}>📎 {b.filename}</a>

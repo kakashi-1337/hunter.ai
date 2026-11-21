@@ -1,17 +1,19 @@
 """Store attached files and turn them into message content blocks."""
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import mimetypes
 import os
 
-from . import config
+from . import config, pictures
 from .db import new_id, now
 from .types import Block, FileBlock, ImageBlock, Upload
 
 MAX_BYTES = 50 * 1024 * 1024
 MAX_TEXT_CHARS = 200_000
 IMAGE_MIMES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+NOT_SENT = "this picture will not be sent to a model: {why}"
 
 
 def sniff_image(data: bytes) -> str | None:
@@ -75,7 +77,11 @@ async def save(conn, chat_id: str | None, filename: str, data: bytes) -> Upload:
         " values(?,?,?,?,?,?,?,?)",
         (uid, chat_id, name, detect_mime(name, data), len(data), digest, digest, now()))
     await conn.commit()
-    return await get(conn, uid)
+    saved = await get(conn, uid)
+    # A file is taken for a picture by its first bytes, and those of a damaged one are in order. It is stored as
+    # it came (the chat shows what was attached); the owner is told now that a model will not get it (pictures.py).
+    why = await asyncio.to_thread(pictures.why_not, data) if saved.mime in IMAGE_MIMES else ""
+    return saved.model_copy(update={"problem": NOT_SENT.format(why=why)}) if why else saved
 
 
 async def get(conn, upload_id: str) -> Upload | None:

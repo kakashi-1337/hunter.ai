@@ -338,6 +338,8 @@ export interface Upload {
   size: number
   sha256: string
   created_at: string
+  /** Said once, in the answer to the upload: why a model will not get this file as it is (a picture that cannot be decoded). */
+  problem?: string
 }
 
 export interface SearchHit {

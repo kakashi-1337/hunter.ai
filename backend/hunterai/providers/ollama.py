@@ -52,6 +52,10 @@ IMAGE_CHARS = 6_000         # what one image is counted as
 TOO_LARGE = ("The request does not fit the context window of the local model {model}: about {need:,} tokens for a "
              "window of {window:,}. Raise \"Context window for local models\" in Settings (a larger window needs "
              "more memory), or set this chat's own context window.")
+NO_PICTURE = "failed to load image"     # what the program behind a model answers for a picture it cannot decode
+PICTURE_REFUSED = ("Ollama could not read a picture of this chat (its words: {said}). HunterAI sends only pictures it can "
+                   "decode itself, so this is one the program behind {model} does not take, and it goes with every message of "
+                   "the chat. Continue in a new chat without the picture, or pick another model for this chat.")
 
 
 def usable_num_ctx(written) -> int | None:
@@ -268,6 +272,10 @@ class OllamaProvider:
                         if r.status_code == 400 and "does not support tools" in text:
                             raise ProviderError(
                                 "bad_request", f"Ollama model {model} does not support tools", 400)
+                        if r.status_code == 400 and NO_PICTURE in text.lower():
+                            said = error_from_status(400, text, None).message.removeprefix("HTTP 400: ")
+                            raise ProviderError("bad_request", PICTURE_REFUSED.format(said=said[:200], model=model), 400,
+                                                complete=True)
                         raise error_from_status(r.status_code, text, None)
                     async for line in r.aiter_lines():
                         if not line.strip():

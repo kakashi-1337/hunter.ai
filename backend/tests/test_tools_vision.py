@@ -1,9 +1,11 @@
 import base64
+import io
 import json
 
 import httpx
 import pytest
 import respx
+from PIL import Image
 
 from hunterai import thermal, uploads
 from hunterai.providers.base import ToolCall, WireMessage, flatten_text
@@ -12,7 +14,13 @@ from hunterai.tools import registry, vision
 from hunterai.types import ImageBlock
 from tests.toolkit import run_call, seeded_run
 
-PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+def picture(kind="PNG", size=(1280, 720), **save):
+    out = io.BytesIO()
+    Image.new("RGB", size, (200, 30, 30)).save(out, kind, **save)
+    return out.getvalue()
+
+
+PNG = picture()
 OLLAMA = "http://127.0.0.1:11434"
 TAGS = {"models": [{"name": "plain:8b"}, {"name": "eyes:9b"}]}
 
@@ -105,34 +113,78 @@ async def test_an_image_attached_to_the_chat_is_reached_by_its_id(conn):
     assert "no such attached image" in (await look(conn, image="upload:" + "0" * 32))[0].content
 
 
-def png(width, height):
-    return b"\x89PNG\r\n\x1a\n" + (13).to_bytes(4, "big") + b"IHDR" + width.to_bytes(4, "big") + height.to_bytes(4, "big") + b"\x08\x02\x00\x00\x00" + b"\x00" * 32
-
-
-def jpeg(width, height):
-    app0 = b"\xff\xe0" + (16).to_bytes(2, "big") + b"JFIF\x00" + b"\x00" * 9
-    sof = b"\xff\xc0" + (17).to_bytes(2, "big") + b"\x08" + height.to_bytes(2, "big") + width.to_bytes(2, "big") + b"\x03" + b"\x00" * 9
-    return b"\xff\xd8" + app0 + sof + b"\xff\xd9"
-
-
-def test_the_size_of_a_picture_is_read_from_its_header():
-    assert vision.picture_size(png(640, 360)) == (640, 360)
-    assert vision.picture_size(jpeg(1280, 720)) == (1280, 720)
-    assert vision.picture_size(b"GIF89a" + (320).to_bytes(2, "little") + (200).to_bytes(2, "little") + b"\x00" * 8) == (320, 200)
-    assert vision.picture_size(b"RIFF\x00\x00\x00\x00WEBPVP8X" + b"\x0a\x00\x00\x00" + b"\x00" * 4
-                               + (799).to_bytes(3, "little") + (599).to_bytes(3, "little")) == (800, 600)
-    assert vision.picture_size(PNG) is None and vision.picture_size(b"\xff\xd8\xff" + b"\x00" * 9) is None
+@respx.mock
+@pytest.mark.parametrize("kind", ["PNG", "JPEG", "GIF", "WEBP"])
+async def test_a_small_picture_is_said_to_be_small_and_a_large_one_is_not(conn, tmp_path, kind):
+    ollama()
+    small = tmp_path / "frame"; small.write_bytes(picture(kind, (640, 360)))
+    text = (await look(conn, image=str(small)))[0].content
+    assert "640x360" in text and "original size" in text
+    large = tmp_path / "shot"; large.write_bytes(picture(kind, (1280, 720)))
+    text = (await look(conn, image=str(large)))[0].content
+    assert "1280x720" in text and "original size" not in text and "animation" not in text
 
 
 @respx.mock
-async def test_a_small_picture_is_said_to_be_small_and_a_large_one_is_not(conn, tmp_path):
+@pytest.mark.parametrize("name, data", [("cut short", picture()[:900]), ("its beginning only", b"\x89PNG\r\n\x1a\n" + b"\x00" * 64),
+                                        ("a JPEG cut short", picture("JPEG", (1280, 720), quality=95)[:2000])])
+async def test_a_picture_that_cannot_be_decoded_is_not_given_to_a_model(conn, tmp_path, name, data):
+    """The program that runs the model answers such a file with HTTP 400, and a model that was loaded for nothing
+    has heated the machine all the same."""
+    chat_route = ollama()
+    shot = tmp_path / "p.png"; shot.write_bytes(data)
+    block, _ = await look(conn, image=str(shot))
+    assert block.is_error and "damaged or cut short" in block.content, name
+    assert not chat_route.called and not respx.routes[0].called
+
+
+@respx.mock
+@pytest.mark.parametrize("kind, save", [("WEBP", {"lossless": True}), ("GIF", {})])
+async def test_a_kind_not_every_reader_takes_goes_to_the_model_as_a_png(conn, tmp_path, kind, save):
+    chat_route = ollama()
+    shot = tmp_path / "p"; shot.write_bytes(picture(kind, (800, 600), **save))
+    block, _ = await look(conn, image=str(shot))
+    sent = Image.open(io.BytesIO(base64.b64decode(json.loads(chat_route.calls.last.request.content)["messages"][-1]["images"][0])))
+    assert not block.is_error and sent.format == "PNG" and sent.size == (800, 600) and sent.convert("RGB").getpixel((0, 0)) == (200, 30, 30)
+    assert "800x600" in block.content
+
+
+@respx.mock
+async def test_of_an_animation_the_first_picture_is_described_and_the_result_says_so(conn, tmp_path):
+    chat_route = ollama()
+    frames = [Image.new("RGB", (800, 600), c) for c in ((255, 0, 0), (0, 255, 0), (0, 0, 255))]
+    out = io.BytesIO()
+    frames[0].save(out, "GIF", save_all=True, append_images=frames[1:], duration=100)
+    shot = tmp_path / "moving.gif"; shot.write_bytes(out.getvalue())
+    block, _ = await look(conn, image=str(shot))
+    sent = Image.open(io.BytesIO(base64.b64decode(json.loads(chat_route.calls.last.request.content)["messages"][-1]["images"][0])))
+    assert sent.format == "PNG" and sent.convert("RGB").getpixel((0, 0)) == (255, 0, 0)
+    assert "an animation of 3 pictures" in block.content and "only the first" in block.content
+
+
+@respx.mock
+async def test_what_ollama_says_when_it_refuses_is_passed_on(conn, tmp_path):
     ollama()
-    small = tmp_path / "frame.png"; small.write_bytes(png(640, 360))
-    text = (await look(conn, image=str(small)))[0].content
-    assert "640x360" in text and "original size" in text
-    large = tmp_path / "shot.png"; large.write_bytes(png(1280, 720))
-    text = (await look(conn, image=str(large)))[0].content
-    assert "1280x720" in text and "original size" not in text
+    respx.post(f"{OLLAMA}/api/chat").mock(return_value=httpx.Response(400, json={"error": {
+        "code": 400, "message": "Failed to load image or audio file", "type": "invalid_request_error"}}))
+    shot = tmp_path / "p.png"; shot.write_bytes(PNG)
+    block, _ = await look(conn, image=str(shot))
+    assert not block.is_error and "could not describe" in block.content and "LOGIN user password" in block.content
+    assert "HTTP 400: Failed to load image or audio file" in block.content and "crop" not in block.content
+
+
+@respx.mock
+async def test_a_picture_too_large_for_the_model_is_said_to_be_that(conn, tmp_path):
+    """Ollama's words for it, as it gave them for a picture of 2,148 tokens at a window of 2,048. (qwen3-vl itself
+    scales a picture down to about 4,100 tokens, so with 8,192 it does not come to this; another model may.)"""
+    ollama()
+    respx.post(f"{OLLAMA}/api/chat").mock(return_value=httpx.Response(400, json={
+        "error": "request (9112 tokens) exceeds the available context size (8192 tokens), try increasing it"}))
+    shot = tmp_path / "p.png"; shot.write_bytes(picture(size=(3840, 2160)))
+    block, _ = await look(conn, image=str(shot))
+    text = block.content
+    assert not block.is_error and "exceeds the available context size" in text and "LOGIN user password" in text
+    assert "3840x2160" in text and "8,192 tokens" in text and "crop it to the part that matters" in text
 
 
 @respx.mock
