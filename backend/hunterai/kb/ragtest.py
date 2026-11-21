@@ -42,7 +42,7 @@ from urllib.parse import urlsplit
 from .. import config, db
 from ..decision import engine as de
 from ..repo import kb
-from . import embed, generated, parsers, retrieve, search
+from . import embed, generated, layout, parsers, retrieve, search
 from .embed import EmbedError
 from .vectors import get_store
 
@@ -301,7 +301,8 @@ async def run(conn, test: dict, say=lambda text: None) -> dict:
         if _now_and_then(n, len(test["items"])):
             say(f"asking {n} of {len(test['items'])}")
         hits = await search.search(conn, [test["collection"]], item["query"], limit=POOL, lock_timeout=None)
-        sent = {s.chunk_id for s in retrieve.pick(hits[:TOP], ROOM)}        # as a message is filled
+        # As a message is filled: with what stands above each passage, which takes room there too.
+        sent = {s.chunk_id for s in retrieve.pick(await layout.annotate(conn, hits[:TOP]), ROOM)}
         own = next(((place, hit) for place, hit in enumerate(hits, 1) if hit.chunk_id == item["chunk_id"]), None)
         good, near, right = [own] if own else [], None, None
         if own is None or (item["kind"] in IN_WORDS and own[0] != 1):

@@ -73,6 +73,8 @@ class Source(BaseModel):
     text: str
     exact: bool = False          # it stood first because it holds an identifier of the query in its exact spelling
     first_of: Literal["vectors", "keywords"] | None = None      # or because this half of the search had it first
+    parts: int | None = None     # passages its document was cut into: it is part `ordinal + 1` of them
+    where: str = ""              # the title and the headings it stands under in its document, as the model was shown them
 
 
 class SourcesBlock(BaseModel):
@@ -318,3 +320,5 @@ class Hit(BaseModel):
     keyword_rank: int | None = None
     exact: bool = False          # it holds an identifier of the query in its exact spelling, and stands first for that
     first_of: Literal["vectors", "keywords"] | None = None      # the half that has it first: it leads the fused list for that
+    parts: int | None = None     # passages its document was cut into
+    where: str = ""              # the title and the headings it stands under in its document (kb/layout.py)

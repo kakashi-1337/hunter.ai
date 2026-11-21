@@ -163,7 +163,7 @@ async def search(conn, collection_ids: list[str], query: str, limit: int = 8, *,
                         source_uri=doc.source_uri, ordinal=chunk.ordinal, text=chunk.text,
                         line_start=chunk.line_start, line_end=chunk.line_end, score=-neg,
                         dense_rank=d, keyword_rank=k, exact=cid in spelled,
-                        first_of=leads[cid][0] if cid in leads else None))
+                        first_of=leads[cid][0] if cid in leads else None, parts=doc.chunk_count))
         if len(hits) >= limit:
             break
     return hits
