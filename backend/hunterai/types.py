@@ -72,6 +72,7 @@ class Source(BaseModel):
     score: float
     text: str
     exact: bool = False          # it stood first because it holds an identifier of the query in its exact spelling
+    first_of: Literal["vectors", "keywords"] | None = None      # or because this half of the search had it first
 
 
 class SourcesBlock(BaseModel):
@@ -316,3 +317,4 @@ class Hit(BaseModel):
     dense_rank: int | None = None
     keyword_rank: int | None = None
     exact: bool = False          # it holds an identifier of the query in its exact spelling, and stands first for that
+    first_of: Literal["vectors", "keywords"] | None = None      # the half that has it first: it leads the fused list for that

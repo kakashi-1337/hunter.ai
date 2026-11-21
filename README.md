@@ -555,7 +555,27 @@ keep it from putting the wrong thing first:
 Such a passage shows "exact spelling" in place of a score, under an answer and in the
 Knowledge view. What it does not do: a dotted name (`config.json`), a host name, a header
 (`X-Forwarded-Host`) or a name that only begins with a capital is not taken for an identifier
-yet, and the order of everything else is the fused order as before.
+yet. Behind such passages the order is the one the next section describes.
+
+### The first passage of each half stands first
+
+Fused by rank, a passage that both halves have anywhere in their 40 stands before the passage a
+single half has first. So the nearest passage by meaning of a whole collection could stand
+seventh, behind six that only share a few words with the question, and a message has room for
+about three. The same held for the best match in words.
+
+Now the first passage of each half leads the list: the nearest in meaning, then the best match
+in words, then everything else in the fused order. A passage with an exact spelling still
+stands before both. A leading passage shows "nearest in meaning" or "best match in words" in
+place of a score, under an answer and in the Knowledge view: what is added to its score to put
+it first is no measure of anything.
+
+What this is for was counted before it was added, on the kept test of a real collection of
+about 600,000 passages (45 questions written from its passages): the right passage stood first
+for 18 of them instead of 15, and was in the message for 29 instead of 26. Other ways of
+putting the two lists together (a smaller constant in the fusion, the better of a passage's two
+places) brought 16 and 28. When several collections are asked at once, one passage leads for
+the vectors, the nearest of them, not one for every collection.
 
 ### What the search finds, measured
 

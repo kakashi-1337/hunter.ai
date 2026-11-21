@@ -382,6 +382,8 @@ export interface Source {
   text: string
   /** It stood first because it holds an identifier of the query in its exact spelling. Its score is then no measure. */
   exact?: boolean
+  /** The half of the search that had it first: it leads the fused list for that, and its score is no measure either. */
+  first_of?: 'vectors' | 'keywords' | null
 }
 
 export interface SourcesBlock { type: 'sources'; query: string; items: Source[]; hits: number; error: string | null }
@@ -455,6 +457,8 @@ export interface KbHit {
   keyword_rank: number | null
   /** It holds an identifier of the query in its exact spelling, and stands first for that. */
   exact?: boolean
+  /** The half of the search that has it first: it leads the fused list for that. */
+  first_of?: 'vectors' | 'keywords' | null
 }
 
 export interface ChatKb { chat_id: string; collection_ids: string[]; always_retrieve: boolean }

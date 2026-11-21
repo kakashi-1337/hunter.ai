@@ -83,6 +83,14 @@ export function jobSource(job: Job): string {
 
 export const sourceLabel = (uri: string, lineStart: number, lineEnd: number): string => `${uri} : lines ${lineStart}–${lineEnd}`
 
+/** What a passage is called that leads the list because one half of the search had it first, and why it leads. */
+export const FIRST_OF: Record<'vectors' | 'keywords', { label: string; title: string }> = {
+  vectors: { label: 'nearest in meaning',
+    title: 'Of all the passages the search weighed, this one is nearest to the question in meaning. It was put first for that.' },
+  keywords: { label: 'best match in words',
+    title: 'Of all the passages the search weighed, this one matches the words of the question best. It was put first for that, behind the nearest in meaning.' },
+}
+
 /** A finished entry may be removed from the list; what it ingested stays. */
 export const jobRemovable = (state: JobState): boolean => state === 'done' || state === 'cancelled'
 

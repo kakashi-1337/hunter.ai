@@ -209,3 +209,13 @@ def test_a_source_keeps_the_word_that_it_stood_first_for_its_spelling():
                                  text="some text", line_start=1, line_end=1, score=1.016 if exact else 0.016, exact=exact)
     picked = retrieve.pick([hit("a", True), hit("b", False)], 10_000)
     assert [(s.n, s.exact) for s in picked] == [(1, True), (2, False)]
+
+
+def test_a_source_says_which_half_of_the_search_had_it_first():
+    """Under an answer such a passage shows why it leads, as one with an exact spelling does: its score is no measure."""
+    from hunterai.types import Hit
+    hit = lambda cid, first: Hit(chunk_id=cid, document_id="d", collection_id="c", source_uri=f"/n/{cid}.md", ordinal=0,  # noqa: E731
+                                 text="some text", line_start=1, line_end=1, score=0.016, first_of=first)
+    picked = retrieve.pick([hit("a", "vectors"), hit("b", "keywords"), hit("c", None)], 6000)
+    assert [(s.n, s.first_of) for s in picked] == [(1, "vectors"), (2, "keywords"), (3, None)]
+

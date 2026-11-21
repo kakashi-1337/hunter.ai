@@ -13,7 +13,16 @@ a path, a snake_case or camelCase name). The two halves are weak at exactly thes
 An identifier that stands in more than RARE passages is an ordinary word of that collection and puts nothing
 first, and a query that names more than MAX_IDENTIFIERS is a paste, not a question. What this is for was measured
 with scripts/rag-test.sh on a real collection before it was added: of 30 identifiers asked on their own, 9 stood
-first and 5 were not found at all (in_progress, result_type, form_input, wait_for, jQuery)."""
+first and 5 were not found at all (in_progress, result_type, form_input, wait_for, jQuery).
+
+Behind those stands the first passage of each half: the nearest by meaning, then the best by its words. Fused by
+rank alone they did not lead, for the reason given above: a passage both halves have anywhere in their 40 stands
+before the one a single half has first, so the nearest passage of all could stand seventh behind six that share a
+few words with the question, and a message has room for three passages or so. What this is for was counted before
+it was added, on the kept test of a collection of 606,939 passages (45 questions written from its passages, the
+search repeated from its two lists on): the right passage stood first for 18 of them instead of 15, and was in
+the message for 29 instead of 26. A smaller k (5 or 2), or the better of a passage's two places, brought 16 and 28;
+the two firsts put behind the fused first, 15 and 29."""
 from __future__ import annotations
 
 import re
@@ -32,6 +41,8 @@ MAX_EXACT = 3               # passages put first for an exact spelling: about wh
 MAX_IDENTIFIERS = 6         # of one query: one that names more is a paste, and what it names decides nothing
 MIN_IDENTIFIER = 4          # characters
 EXACT_SCORE = 1.0           # added for an exact spelling. A fused score stays under 0.04, so the list keeps one order
+FIRST_OF_VECTORS = 0.6      # added for the passage the vector half has first, and
+FIRST_OF_KEYWORDS = 0.5     # for the one the keyword half has first: over every fused score, under an exact spelling
 
 # What is an identifier here. Narrow on purpose: a passage put first for a word that was no identifier takes one of
 # the three places a message has. An ordinary compound ("state-of-the-art", "and/or", "JavaScript", "3.14") is none.
@@ -87,6 +98,23 @@ def put_first(found: list[list[str]], fused: dict[str, float]) -> list[str]:
     return out[:MAX_EXACT]
 
 
+def leading(dense: dict[str, int], nearness: dict[str, float], keyword: dict[str, int], found,
+            spelled: list[str]) -> dict[str, tuple[str, float]]:
+    """The first passage of each half that still has its passage: which half it leads for, and what that adds to
+    its score. One for the vectors, also when several collections are asked and each has a nearest of its own (the
+    nearest of those; their numbers compare only where the collections share an embedding model, and the first
+    collection's stands where they do not say). A passage that is first in both halves leads once, for the vectors.
+    One that an exact spelling already put first is none of these, and no other passage leads in its place."""
+    out: dict[str, tuple[str, float]] = {}
+    first = min((cid for cid in dense if cid in found), key=lambda cid: (dense[cid], -nearness.get(cid, 0.0)), default=None)
+    if first is not None and first not in spelled:
+        out[first] = ("vectors", FIRST_OF_VECTORS)
+    first = min((cid for cid in keyword if cid in found), key=keyword.__getitem__, default=None)
+    if first is not None and first not in spelled:
+        out.setdefault(first, ("keywords", FIRST_OF_KEYWORDS))
+    return out
+
+
 def to_match_any(q: str) -> str:
     """An FTS5 query that matches any of the words, with nothing in `q` read as syntax."""
     terms = []
@@ -107,22 +135,25 @@ async def search(conn, collection_ids: list[str], query: str, limit: int = 8, *,
     for spec in dict.fromkeys(c.embedder for c in cols):
         vectors[spec] = (await embed.get(spec, lock_timeout).embed([query]))[0]
     dense: dict[str, int] = {}
+    nearness: dict[str, float] = {}
     for c in cols:
-        for rank, (chunk_id, _) in enumerate(await store.search(kb.vector_name(c.id), vectors[c.embedder], CANDIDATES), 1):
-            dense.setdefault(chunk_id, rank)
+        for rank, (chunk_id, near) in enumerate(await store.search(kb.vector_name(c.id), vectors[c.embedder], CANDIDATES), 1):
+            if chunk_id not in dense:
+                dense[chunk_id], nearness[chunk_id] = rank, near
     match = to_match_any(query)
     keyword = {cid: rank for rank, cid in enumerate(
         await kb.keyword_ids(conn, [c.id for c in cols], match, CANDIDATES) if match else [], 1)}
     fused = {cid: (1 / (RRF_K + dense[cid]) if cid in dense else 0) + (1 / (RRF_K + keyword[cid]) if cid in keyword else 0)
              for cid in {*dense, *keyword}}
     spelled = put_first(await exact(conn, [c.id for c in cols], query), fused)
+    found = await kb.chunks_by_id(conn, list({*fused, *spelled}))
+    leads = leading(dense, nearness, keyword, found, spelled)
     scored = []
     for cid in {*fused, *spelled}:
         d, k = dense.get(cid), keyword.get(cid)
-        score = fused.get(cid, 0) + (EXACT_SCORE if cid in spelled else 0)
+        score = fused.get(cid, 0) + (EXACT_SCORE if cid in spelled else leads[cid][1] if cid in leads else 0)
         scored.append((-score, d if d is not None else 10**9, cid, d, k))
     scored.sort()
-    found = await kb.chunks_by_id(conn, [s[2] for s in scored])
     hits = []
     for neg, _, cid, d, k in scored:
         if cid not in found:
@@ -131,7 +162,8 @@ async def search(conn, collection_ids: list[str], query: str, limit: int = 8, *,
         hits.append(Hit(chunk_id=cid, document_id=doc.id, collection_id=doc.collection_id,
                         source_uri=doc.source_uri, ordinal=chunk.ordinal, text=chunk.text,
                         line_start=chunk.line_start, line_end=chunk.line_end, score=-neg,
-                        dense_rank=d, keyword_rank=k, exact=cid in spelled))
+                        dense_rank=d, keyword_rank=k, exact=cid in spelled,
+                        first_of=leads[cid][0] if cid in leads else None))
         if len(hits) >= limit:
             break
     return hits
