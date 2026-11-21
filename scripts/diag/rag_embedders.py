@@ -37,7 +37,9 @@ and source. One of 1,699 passages with a made-up embedding model: the first row 
 ragtest.run() and the check row repeats it; with every passage of the collection among the sample the like-for-like
 rows are exact, and with a sample of 20 and of 200 the counts of a second model (all-minilm) came within one of its
 counts over the whole collection. One of 319 passages embedded with bge-m3 in Ollama, beside qwen3-embedding:0.6b,
-bge-large and all-minilm: the same checks held, and the two models that read 512 tokens refused the longer passages."""
+bge-large and all-minilm: the same checks held, and the two models that read 512 tokens refused the longer passages.
+An instruction in front of the passages too (the second embedding of all of them) was run there with
+jina-embeddings-v5-text-small-retrieval."""
 import asyncio
 import json
 import os
@@ -68,11 +70,12 @@ SAY_EVERY = 30.0                    # seconds between two lines about where the 
 UNSEEN = "unseen-"                  # in a list: a passage of the collection that is not here, which one of the sample stands for
 # Families whose makers trained the vectors so that their front part can stand for the whole: such a vector is also
 # counted cut to the size the collection's vectors have today, which is what would be kept on disk for the same room.
-CUT = ("qwen3-embedding", "embeddinggemma", "snowflake-arctic-embed2", "nomic-embed-text", "mxbai-embed")
+CUT = ("qwen3-embedding", "jina-embeddings-v5", "embeddinggemma", "snowflake-arctic-embed2", "nomic-embed-text", "mxbai-embed")
 # What a family of models wants in front of a question and in front of a passage, by its makers' model card.
 # The first name that is part of a model's name counts. A model of no family here is asked with the bare text only.
 OWN = (
     ("qwen3-embedding", "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery:", ""),
+    ("jina-embeddings-v5", "Query: ", "Document: "),
     ("embeddinggemma", "task: search result | query: ", "title: none | text: "),
     ("snowflake-arctic-embed2", "query: ", ""),
     ("snowflake-arctic-embed", "Represent this sentence for searching relevant passages: ", ""),
@@ -99,8 +102,9 @@ def by_name(name: str) -> bool:
 
 
 def plain(spec: str) -> str:
-    """A model as it is named in the tables: "ollama:bge-large:latest" is "bge-large"."""
-    return spec.removeprefix("ollama:").removesuffix(":latest")
+    """A model as it is named in the tables: "ollama:bge-large:latest" is "bge-large", and of a name with an owner
+    or a host in front ("hf.co/jinaai/some-model-GGUF:Q8_0") the last part stands."""
+    return spec.removeprefix("ollama:").removesuffix(":latest").rsplit("/", 1)[-1]
 
 
 def tagged(name: str) -> str:
@@ -376,10 +380,13 @@ async def main() -> int:
         print(f"\nThe passages every model is asked about: {len(ids):,}. For the questions: the {int(mask['words'].sum()):,} "
               f"the keyword half brings, {int(mask['around'].sum()):,} around the right ones\nin their documents, and the "
               f"{int(mask['today'].sum()):,} the vector half of today brings. From all over the collection: "
-              f"{int(mask['sample'].sum()):,}, each standing for about {each['whole']:,}.")
+              + (f"{int(mask['sample'].sum()):,}, each standing for about {each['whole']:,}." if mask["sample"].any()
+                 else "none (SAMPLE=0), so nothing here stands for the rest of it."))
         if embed.on_cpu():
-            print('"Run the embedding model on the processor" is on in Settings: every model here runs there too, '
-                  "and the times below are a processor's.")
+            print('"Run the embedding model on the processor" is on in Settings: every model here runs there too, which '
+                  "takes hours for a small model\nand days for a large one, and the times below are a processor's. For this "
+                  "run alone on the graphics card, stop it and start it again\nwith HUNTERAI_EMBED_ON_CPU=0 in front of the "
+                  "command; the setting stays as it is.", flush=True)
 
         # ---- every model reads the same passages
         queries = [a.query for a in asked]
