@@ -386,8 +386,8 @@ async def main() -> int:
         moved = [(a, now[id(a)], new[id(a)]) for a in asked
                  if (now[id(a)] is None) != (new[id(a)] is None)
                  or (now[id(a)] and new[id(a)] and now[id(a)][1] != new[id(a)][1])]
-        print("\n4. What changes for single things with the layout line in the keyword index (the first row against the "
-              "fourth):" + ("" if moved else " nothing."))
+        print("\n4. What changes for single things with the layout line in the keyword index (\"as it is now\" against "
+              "\"the layout line in the keyword index\"):" + ("" if moved else " nothing."))
         for a, was, got in sorted(moved, key=lambda m: (m[2] is None, m[2] is not None and not m[2][1])):
             better = got is not None and (was is None or (got[1] and not was[1]))
             print(f"   {'+' if better else '-'} {short(a.item['query'], 96)}\n       {said(was)} -> {said(got)}"
