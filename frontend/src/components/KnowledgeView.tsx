@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import * as api from '../api'
 import type { KbChunk, KbDocument } from '../types'
-import { duplicateJobs, jobEmpty, formatBytes, formatEta, formatRate, jobActions, jobProgress, jobRemovable, jobSource, relPath, sourceLabel } from '../kb'
+import { FIRST_OF, duplicateJobs, jobEmpty, formatBytes, formatEta, formatRate, jobActions, jobProgress, jobRemovable, jobSource, relPath, sourceLabel } from '../kb'
 import { useKb } from '../kbStore'
 import { visible } from '../tree'
 import { confirmBox, promptBox } from '../dialog'
@@ -253,8 +253,9 @@ function SearchBox() {
       {hits && hits.length === 0 && <div className="hint">No passage matched.</div>}
       {hits?.map((h, i) => (
         <div key={h.chunk_id} className="kb-hit">
-          <div className="row"><b>{i + 1}</b>{!h.exact && <span className="muted">{h.score.toFixed(4)}</span>}
+          <div className="row"><b>{i + 1}</b>{!h.exact && !h.first_of && <span className="muted">{h.score.toFixed(4)}</span>}
             {h.exact && <span className="badge ok" title="This passage holds an identifier of the query letter for letter, and is put first for that.">exact spelling</span>}
+            {!h.exact && h.first_of && <span className="badge ok" title={FIRST_OF[h.first_of].title}>{FIRST_OF[h.first_of].label}</span>}
             {h.dense_rank !== null && <span className="badge">dense #{h.dense_rank}</span>}
             {h.keyword_rank !== null && <span className="badge">keyword #{h.keyword_rank}</span>}
             <span className="mono grow kb-ellipsis">{visible(sourceLabel(h.source_uri, h.line_start, h.line_end))}</span><span className="muted">chunk {h.ordinal}</span></div>

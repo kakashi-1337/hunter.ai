@@ -1,4 +1,4 @@
-import { sourceLabel } from '../kb'
+import { FIRST_OF, sourceLabel } from '../kb'
 import { citedNumbers, sourcesNote, unknownCitations, visible } from '../tree'
 import type { SourcesBlock } from '../types'
 
@@ -18,7 +18,9 @@ export function SourcesList({ block, answer }: { block: SourcesBlock; answer: st
             <b>[{s.n}]</b> <span className="mono">{visible(sourceLabel(s.source_uri, s.line_start, s.line_end))}</span>
             {s.exact
               ? <span className="badge" title="This passage holds an identifier of the question letter for letter, and was put first for that.">exact spelling</span>
-              : <span className="muted"> · {s.score.toFixed(4)}</span>}
+              : s.first_of
+                ? <span className="badge" title={FIRST_OF[s.first_of].title}>{FIRST_OF[s.first_of].label}</span>
+                : <span className="muted"> · {s.score.toFixed(4)}</span>}
             {cited.has(s.n) && <span className="badge">cited</span>}
           </summary>
           <pre>{visible(s.text)}</pre>

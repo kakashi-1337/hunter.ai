@@ -18,9 +18,12 @@ async def test_rrf_fuses_dense_and_keyword_ranks(conn, col, tmp_path):
     cid = lambda n: kb.chunk_id(docs[n].id, 0)  # noqa: E731
     stub = StubStore({kb.vector_name(col.id): [(cid("d2.txt"), 0.9), (cid("d1.txt"), 0.8), ("f" * 32, 0.7)]})
     hits = await search.search(conn, [col.id], "alpha", store=stub)
-    assert [Path(h.source_uri).name for h in hits] == ["d1.txt", "d2.txt", "d3.txt"]         # the orphan id is dropped
-    assert [(h.dense_rank, h.keyword_rank) for h in hits] == [(2, 1), (1, None), (None, 2)]
-    assert [h.score for h in hits] == pytest.approx([1 / 62 + 1 / 61, 1 / 61, 1 / 62]) and (hits[0].text, hits[0].ordinal) == ("alpha beta", 0)
+    # The orphan id is dropped. The first of the vectors and the first of the keywords lead, then what is left.
+    assert [Path(h.source_uri).name for h in hits] == ["d2.txt", "d1.txt", "d3.txt"]
+    assert [(h.dense_rank, h.keyword_rank) for h in hits] == [(1, None), (2, 1), (None, 2)]
+    assert [h.score for h in hits] == pytest.approx([search.FIRST_OF_VECTORS + 1 / 61,
+                                                     search.FIRST_OF_KEYWORDS + 1 / 62 + 1 / 61, 1 / 62])
+    assert (hits[1].text, hits[1].ordinal) == ("alpha beta", 0)
 
 
 async def test_real_stores_put_the_relevant_chunk_first(conn, col, tmp_path):
@@ -137,11 +140,12 @@ async def test_a_word_that_stands_in_many_passages_is_no_identifier_of_the_colle
     assert hits[0].source_uri.endswith("n0.txt")    # the order the two halves give, as before
 
 
-async def test_a_question_without_an_identifier_is_searched_as_before(conn, col, tmp_path):
+async def test_a_question_without_an_identifier_is_ordered_by_the_two_halves_alone(conn, col, tmp_path):
     docs = await ingest_texts(conn, col, tmp_path, {"d1.txt": "alpha beta", "d2.txt": "gamma delta", "d3.txt": "alpha epsilon"})
     hits = await search.search(conn, [col.id], "alpha", store=dense(col, docs, ["d2.txt", "d1.txt"]))
-    assert [Path(h.source_uri).name for h in hits] == ["d1.txt", "d2.txt", "d3.txt"] and not any(h.exact for h in hits)
-    assert [h.score for h in hits] == pytest.approx([1 / 62 + 1 / 61, 1 / 61, 1 / 62])
+    assert [Path(h.source_uri).name for h in hits] == ["d2.txt", "d1.txt", "d3.txt"] and not any(h.exact for h in hits)
+    assert [h.score for h in hits] == pytest.approx([search.FIRST_OF_VECTORS + 1 / 61,
+                                                     search.FIRST_OF_KEYWORDS + 1 / 62 + 1 / 61, 1 / 62])
 
 
 async def test_a_paste_full_of_identifiers_puts_nothing_first(conn, col, tmp_path):
@@ -176,3 +180,83 @@ async def test_of_the_passages_with_an_identifier_those_the_two_halves_rank_best
     hits = await search.search(conn, [col.id], "user_name", store=dense(col, docs, ["u4.txt", "z.txt", "u3.txt"]))
     first = [Path(h.source_uri).name for h in hits if h.exact]
     assert len(first) == search.MAX_EXACT and first[:2] == ["u4.txt", "u3.txt"]
+
+
+# ---------------------------------------------------------------- the first passage of each half stands first
+
+def names(hits):
+    return [Path(h.source_uri).name for h in hits]
+
+
+async def test_the_first_passage_of_each_half_stands_before_what_both_halves_found_far_down(conn, col, tmp_path):
+    """Fused by rank with k=60, a passage both halves have anywhere in their 40 stands before the passage one half
+    has first (2/100 against 1/61): the nearest passage by meaning stood seventh behind six that shared words."""
+    texts = {f"both{i}.txt": f"Notes on session tokens and cookies, part {i} of the series." for i in range(6)}
+    texts["meaning.txt"] = "How a login stays valid between two requests."              # no word of the question
+    texts["words.txt"] = "session tokens cookies: session tokens, cookies"              # the keyword half's first
+    docs = await ingest_texts(conn, col, tmp_path, texts)
+    store = dense(col, docs, ["meaning.txt", *(f"both{i}.txt" for i in range(6))])
+    hits = await search.search(conn, [col.id], "session tokens cookies", store=store)
+    assert names(hits[:2]) == ["meaning.txt", "words.txt"]
+    assert [(h.dense_rank, h.keyword_rank) for h in hits[:2]] == [(1, None), (None, 1)]
+    assert all(h.dense_rank and h.keyword_rank for h in hits[2:]) and len(hits) == 8
+    assert [h.score for h in hits] == sorted((h.score for h in hits), reverse=True)     # one order: still by its score
+    assert hits[0].score == pytest.approx(search.FIRST_OF_VECTORS + 1 / 61)
+    assert hits[1].score == pytest.approx(search.FIRST_OF_KEYWORDS + 1 / 61)
+    assert [h.first_of for h in hits[:3]] == ["vectors", "keywords", None]             # each says why it leads
+
+
+async def test_an_exact_spelling_stands_before_the_first_of_each_half(conn, col, tmp_path):
+    texts = {f"n{i}.txt": f"An attacker can read account data of another user. Note {i}." for i in range(4)}
+    texts |= {"cve.txt": "The fix for CVE-2024-1234 landed in release 2.3.1.",
+              "meaning.txt": "How a login stays valid between two requests."}
+    docs = await ingest_texts(conn, col, tmp_path, texts)
+    hits = await search.search(conn, [col.id], "can an attacker use CVE-2024-1234 to read account data",
+                               store=dense(col, docs, ["meaning.txt", "n0.txt", "n1.txt"]))
+    assert names(hits[:2]) == ["cve.txt", "meaning.txt"] and hits[0].exact and not hits[1].exact
+    assert hits[0].score >= search.EXACT_SCORE > hits[1].score >= search.FIRST_OF_VECTORS
+    assert (hits[0].first_of, hits[1].first_of) == (None, "vectors")
+    assert [h.score for h in hits] == sorted((h.score for h in hits), reverse=True)
+
+
+async def test_a_passage_with_an_exact_spelling_leads_for_that_alone_and_no_other_takes_its_place(conn, col, tmp_path):
+    texts = {f"n{i}.txt": f"An attacker can read account data of another user. Note {i}." for i in range(4)}
+    texts |= {"cve.txt": "The fix for CVE-2024-1234 landed in release 2.3.1.",
+              "meaning.txt": "How a login stays valid between two requests."}
+    docs = await ingest_texts(conn, col, tmp_path, texts)
+    hits = await search.search(conn, [col.id], "can an attacker use CVE-2024-1234 to read account data",
+                               store=dense(col, docs, ["cve.txt", "meaning.txt", "n0.txt"]))
+    assert names(hits)[0] == "cve.txt" and hits[0].exact and hits[0].first_of is None
+    assert hits[0].score < search.EXACT_SCORE + search.FIRST_OF_KEYWORDS         # its spelling put it first, nothing more
+    assert not any(h.first_of == "vectors" for h in hits)                         # the second of the vectors does not lead
+
+
+async def test_a_passage_that_is_first_in_both_halves_leads_once_and_alone(conn, col, tmp_path):
+    docs = await ingest_texts(conn, col, tmp_path, {"top.txt": "alpha beta alpha beta", "a.txt": "alpha and one more word",
+                                                    "b.txt": "beta and two more words", "c.txt": "gamma"})
+    hits = await search.search(conn, [col.id], "alpha beta", store=dense(col, docs, ["top.txt", "c.txt", "a.txt"]))
+    assert names(hits)[0] == "top.txt" and hits[0].score == pytest.approx(search.FIRST_OF_VECTORS + 2 / 61)
+    assert all(h.score < search.FIRST_OF_KEYWORDS for h in hits[1:]) and len(hits) == 4
+    assert [h.first_of for h in hits] == ["vectors", None, None, None]
+
+
+async def test_the_first_of_the_vectors_is_the_first_that_still_has_its_passage(conn, col, tmp_path):
+    docs = await ingest_texts(conn, col, tmp_path, {"a.txt": "alpha", "b.txt": "nothing of it", "c.txt": "alpha alpha gamma"})
+    stub = StubStore({kb.vector_name(col.id): [("f" * 32, 0.95), (chunk(docs, "b.txt"), 0.9), (chunk(docs, "a.txt"), 0.8)]})
+    hits = await search.search(conn, [col.id], "alpha", store=stub)
+    assert names(hits)[0] == "b.txt" and (hits[0].dense_rank, hits[0].keyword_rank) == (2, None)
+    assert hits[1].keyword_rank == 1 and hits[1].score >= search.FIRST_OF_KEYWORDS
+
+
+async def test_of_several_collections_one_passage_leads_for_the_vectors_the_nearest(conn, col, tmp_path):
+    """Each collection has a nearest passage of its own. One of them leads, not one for every collection: a message
+    has room for three passages or so."""
+    other = await make_collection(conn, "other")
+    here = await ingest_texts(conn, col, tmp_path, {"far.txt": "nothing of it"})
+    there = await ingest_texts(conn, other, tmp_path, {"near.txt": "nothing of it either", "words.txt": "alpha"})
+    stub = StubStore({kb.vector_name(col.id): [(chunk(here, "far.txt"), 0.5)],
+                      kb.vector_name(other.id): [(chunk(there, "near.txt"), 0.9)]})
+    hits = await search.search(conn, [col.id, other.id], "alpha", store=stub)
+    assert names(hits) == ["near.txt", "words.txt", "far.txt"]
+    assert [h.score >= search.FIRST_OF_KEYWORDS for h in hits] == [True, True, False]
+

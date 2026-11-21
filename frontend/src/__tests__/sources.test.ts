@@ -29,4 +29,19 @@ describe('the sources under an answer', () => {
     expect(rows[1]).not.toContain('exact spelling')
     expect(rows[1]).toContain('0.0164')
   })
+
+  it('say which half of the search had a passage first, where its score would read as a measure', () => {
+    const block: SourcesBlock = { type: 'sources', query: 'how does a login stay valid', hits: 3, error: null,
+      items: [source(1, { first_of: 'vectors', score: 0.6164 }), source(2, { first_of: 'keywords', score: 0.5164 }), source(3)] }
+    act(() => { root.render(createElement(SourcesList, { block, answer: 'It stays valid through a cookie [1].' })) })
+    const rows = [...host.querySelectorAll('details.source > summary')].map((s) => s.textContent ?? '')
+    expect(rows).toHaveLength(3)
+    expect(rows[0]).toContain('nearest in meaning')
+    expect(rows[0]).not.toContain('0.6164')         // what is added to lead is no measure either
+    expect(rows[1]).toContain('best match in words')
+    expect(rows[1]).not.toContain('0.5164')
+    expect(rows[2]).toContain('0.0164')
+    expect(rows[2]).not.toContain('nearest in meaning')
+    expect(rows[2]).not.toContain('best match in words')
+  })
 })
