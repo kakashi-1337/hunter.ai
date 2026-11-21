@@ -84,7 +84,7 @@ const SETTINGS: Settings = {
   default_provider: 'abliteration', default_model: 'big', fallback_model: 'qwen3:8b', local_window: 16384,
   keys: { ABLIT_API_KEY: true }, permissions: {}, max_turns: 60, swarm_width: 3, swarm_width_max: 6,
   machine: { cores: 8, memory_gb: 32 }, presets: {}, decision_provider: null, decision_model: null, decision_gate: false,
-  decision_engine: true, kb_redact: true, vision_model: null, browser_via_caido: false, answer_check: false,
+  decision_engine: true, kb_redact: true, kb_skip_generated: true, vision_model: null, browser_via_caido: false, answer_check: false,
   mcp_on_demand: true, notify_findings: false, notify_min_severity: 'high', notify_webhook_set: false, caido_available: false,
   upstream_proxy: '', upstream_proxy_password: false, upstream_proxy_intercepts: false, upstream_proxy_kb: false,
   provider_proxy: '', provider_proxy_password: false, colibri_url: '', colibri_key_set: false,

@@ -15,7 +15,7 @@ from typing import Literal
 from ..repo import jobs, kb, settings
 from ..types import Collection, Document, Job
 from .. import thermal
-from . import chunking, embed, limits, parsers, screen, sources
+from . import chunking, embed, generated, limits, parsers, screen, sources
 from .archives import Found
 from .embed import EmbedError
 from .vectors import Point, VectorError, VectorStore, get_store
@@ -39,11 +39,12 @@ def _source_kind(payload: dict) -> str:
     return payload["source"]["kind"]
 
 
-async def _set_aside(conn, store: VectorStore, col: Collection, source_kind: str, uri: str,
-                     status: Literal["skipped", "failed"], reason: str, *, job_id: str | None,
-                     sha256: str = "", size: int = 0) -> Document:
-    """The one path for every skipped or failed document. Its vectors go first, so a crash
-    between the two steps cannot leave vectors that no later run would find."""
+async def set_aside(conn, store: VectorStore, col: Collection, source_kind: str, uri: str,
+                    status: Literal["skipped", "failed"], reason: str, *, job_id: str | None,
+                    sha256: str = "", size: int = 0) -> Document:
+    """The one path for every skipped or failed document, in a job and when a collection is cleaned
+    (kb/clean.py). Its vectors go first, so a crash between the two steps cannot leave vectors that
+    no later run would find."""
     doc = await kb.find_document(conn, col.id, uri)
     if doc is not None and doc.status in ("ok", "processing"):
         await store.delete_by_document(kb.vector_name(col.id), doc.id)
@@ -114,6 +115,9 @@ async def _run_job(conn, job: Job, used: list, *, store: VectorStore | None = No
     store = store or get_store()
     name = kb.vector_name(col.id)
     kind = _source_kind(payload)
+    # What nobody wrote (build output, bundles, source maps, lock files) is left out, unless the owner switched
+    # that off. A page of a crawled site was asked for: it is taken as it is.
+    screened = kind != "web" and bool(await settings.get(conn, "kb_skip_generated", True))
     began = time.monotonic()
     mine = {"chunks": 0, "bytes": 0, "items": 0}
 
@@ -178,7 +182,7 @@ async def _run_job(conn, job: Job, used: list, *, store: VectorStore | None = No
             # A clone or a crawl can take minutes before the first file is known: say how much has arrived meanwhile.
             watch = asyncio.create_task(watch_fetch(conn, job.id, sources.staging_path(payload["staging_id"]))) \
                 if kind in ("git", "web") else None
-            async for x in _then(sources.discover(payload), watch):
+            async for x in _then(sources.discover(payload, skip_generated=screened), watch):
                 seen += 1
                 if seen % (1 if kind in ("web", "git") else DISCOVER_CHECK_EVERY) == 0:   # a crawl is slow
                     await check()       # a discovery that is left is redone from the start
@@ -189,7 +193,7 @@ async def _run_job(conn, job: Job, used: list, *, store: VectorStore | None = No
                     if len(batch) >= DISCOVER_BATCH:
                         await flush()
                 else:
-                    await patiently("vectors", lambda x=x: _set_aside(
+                    await patiently("vectors", lambda x=x: set_aside(
                         conn, store, col, kind, x.uri, x.status, x.reason, job_id=job.id))
                     await jobs.progress(conn, job.id, add={x.status: 1})
                     if x.status == "failed" and x.uri == _where(payload):
@@ -216,8 +220,8 @@ async def _run_job(conn, job: Job, used: list, *, store: VectorStore | None = No
                                                      "stage": stage_name})
 
             async def aside(status, reason, **kw) -> str:
-                await patiently("vectors", lambda: _set_aside(conn, store, col, kind, item.uri, status,
-                                                              reason, job_id=job.id, **kw))
+                await patiently("vectors", lambda: set_aside(conn, store, col, kind, item.uri, status,
+                                                             reason, job_id=job.id, **kw))
                 return status
 
             async def one() -> str:
@@ -227,6 +231,12 @@ async def _run_job(conn, job: Job, used: list, *, store: VectorStore | None = No
                 except OSError as e:
                     return await aside("failed", f"unreadable: {type(e).__name__}")
                 sha = hashlib.sha256(data).hexdigest()
+                file_name = Path(item.path).name
+                if screened and generated.has_shape(file_name):
+                    # Asked before "unchanged": a minified file that was indexed before this was asked goes out now.
+                    minified = await asyncio.to_thread(generated.by_shape, file_name, [data])
+                    if minified:
+                        return await aside("skipped", minified, sha256=sha, size=len(data))
                 doc = await kb.find_document(conn, col.id, item.uri)
                 resume = False
                 if doc is not None and doc.sha256 == sha:
@@ -237,7 +247,7 @@ async def _run_job(conn, job: Job, used: list, *, store: VectorStore | None = No
                 if not resume:
                     await stage("clean")
                     try:
-                        parsed = await asyncio.to_thread(parsers.parse, Path(item.path).name, data)
+                        parsed = await asyncio.to_thread(parsers.parse, file_name, data)
                     except parsers.Skip as e:
                         return await aside("skipped", e.reason, sha256=sha, size=len(data))
                     if await settings.get(conn, "kb_redact", True):

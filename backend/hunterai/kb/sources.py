@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .. import config, db
-from . import archives, limits, parsers
+from . import archives, generated, limits, parsers
 from .archives import Found, Problem
 from .limits import Budget
 
@@ -51,19 +51,28 @@ def is_secret(name: str) -> bool:
     return any(fnmatch.fnmatchcase(name.lower(), p) for p in SECRET_PATTERNS)
 
 
-def _screen_members(uri: str, found: list[Found]) -> tuple[list[Found], list[Problem]]:
+def _passed_over(directory: str, screened: bool) -> str | None:
+    """Why a walk does not enter a directory of this name, or None. `screened`: what nobody wrote is left out too."""
+    if directory in IGNORED_DIRS:
+        return "ignored directory"
+    return generated.BUILD if screened and directory in generated.DIRS else None
+
+
+def _screen_members(uri: str, found: list[Found], screened: bool) -> tuple[list[Found], list[Problem]]:
     """The rules a folder walk applies, applied to what came out of an archive: nothing under
-    an ignored directory and no secret-like file is kept, on disk or in the index."""
+    an ignored directory and no secret-like file is kept, on disk or in the index; with `screened`,
+    nothing that nobody wrote either."""
     keep: list[Found] = []
     problems: list[Problem] = []
     pruned: set[str] = set()
     for f in found:
         parts = f.uri.split("!/")
-        ignored = None
+        ignored = why = None
         for depth, member in enumerate(parts[1:], 1):
             dirs = member.split("/")[:-1] if depth == len(parts) - 1 else member.split("/")
             for i, d in enumerate(dirs):
-                if d in IGNORED_DIRS:
+                why = _passed_over(d, screened)
+                if why:
                     ignored = "!/".join(parts[:depth]) + "!/" + "/".join(member.split("/")[:i + 1]) + "/"
                     break
             if ignored:
@@ -71,9 +80,11 @@ def _screen_members(uri: str, found: list[Found]) -> tuple[list[Found], list[Pro
         if ignored:
             if ignored not in pruned:
                 pruned.add(ignored)
-                problems.append(Problem(ignored, "skipped", "ignored directory"))
+                problems.append(Problem(ignored, "skipped", why))
         elif is_secret(f.path.name):
             problems.append(Problem(f.uri, "skipped", "secret-like file name (not ingested)"))
+        elif screened and (named := generated.by_name(f.path.name)):
+            problems.append(Problem(f.uri, "skipped", named))
         else:
             keep.append(f)
             continue
@@ -227,10 +238,12 @@ def sweep_staging(keep: set[str], max_age_seconds: float = 86400, min_committed_
     return removed
 
 
-async def discover(payload: dict) -> AsyncIterator[Found | Problem]:
+async def discover(payload: dict, *, skip_generated: bool = True) -> AsyncIterator[Found | Problem]:
     """Every file of the job's source, and every file or folder passed over with the reason.
     Sources: "upload" (staged files), "folder" (read in place), "git" (a shallow clone into
-    staging), "web" (a bounded crawl into staging)."""
+    staging), "web" (a bounded crawl into staging). `skip_generated`: what nobody wrote is passed over too
+    (kb/generated.py: build output, a minified or bundled file, a source map, a lock file), wherever a
+    folder, a repository or an archive brings it along. The pages of a crawl were asked for and are not judged."""
     root = staging_path(payload["staging_id"])
     unpacked = root / "unpacked"
     source = payload["source"]
@@ -284,11 +297,13 @@ async def discover(payload: dict) -> AsyncIterator[Found | Problem]:
             yield Problem(uri, "skipped", "special file")
         elif is_secret(p.name):
             yield Problem(uri, "skipped", "secret-like file name (not ingested)")
+        elif skip_generated and (named := generated.by_name(p.name)):
+            yield Problem(uri, "skipped", named)        # before the size is asked for: it uses up nothing of the job
         elif counted and (why := budget.refusal(st.st_size, stored=not in_place)):
             yield Problem(uri, "skipped", why)
         elif parsers.kind_for(p.name) == "archive":
             found, problems = await archives.unpack(p, uri, unpacked, budget)
-            found, more = _screen_members(uri, found)
+            found, more = _screen_members(uri, found, skip_generated)
             for x in (*found, *problems, *more):
                 yield x
         else:
@@ -306,11 +321,11 @@ async def discover(payload: dict) -> AsyncIterator[Found | Problem]:
         for d in sorted(dirnames):
             if in_place and _same(here / d, own):
                 yield Problem(uri_of(here / d) + "/", "skipped", OWN_DATA)
-            elif d in IGNORED_DIRS:
-                yield Problem(uri_of(here / d) + "/", "skipped", "ignored directory")
+            elif (why := _passed_over(d, skip_generated)):
+                yield Problem(uri_of(here / d) + "/", "skipped", why)
             elif (here / d).is_symlink():
                 yield Problem(uri_of(here / d), "skipped", "symlink not followed")
-        dirnames[:] = sorted(d for d in dirnames if d not in IGNORED_DIRS and not (here / d).is_symlink()
+        dirnames[:] = sorted(d for d in dirnames if not _passed_over(d, skip_generated) and not (here / d).is_symlink()
                              and not (in_place and _same(here / d, own)))
         for n in sorted(names):
             async for x in one(here / n):

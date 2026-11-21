@@ -14,7 +14,7 @@ const SETTINGS: Settings = {
   default_provider: 'abliteration', default_model: 'big', fallback_model: 'qwen3:8b', local_window: 16384,
   keys: { ABLIT_API_KEY: true }, permissions: {}, max_turns: 60, swarm_width: 3, swarm_width_max: 6,
   machine: { cores: 8, memory_gb: 32 }, presets: {}, decision_provider: null, decision_model: null, decision_gate: false,
-  decision_engine: true, kb_redact: true, vision_model: null, browser_via_caido: false, answer_check: false,
+  decision_engine: true, kb_redact: true, kb_skip_generated: true, vision_model: null, browser_via_caido: false, answer_check: false,
   mcp_on_demand: true, notify_findings: false, notify_min_severity: 'high', notify_webhook_set: false, caido_available: false,
   upstream_proxy: '', upstream_proxy_password: false, upstream_proxy_intercepts: false, upstream_proxy_kb: false,
   provider_proxy: '', provider_proxy_password: false, colibri_url: '', colibri_key_set: false,
@@ -198,5 +198,23 @@ describe('where the embedding model runs', () => {
   it('is left out for a server from before it knew of it', async () => {
     await open()
     expect(box()).toBeUndefined()
+  })
+})
+
+describe('leaving out what nobody wrote when a folder is indexed', () => {
+  const label = () => [...host.querySelectorAll('label.check')].find((l) => /^Leave out what nobody wrote/.test(l.textContent ?? ''))
+  const box = () => label()?.querySelector<HTMLInputElement>('input')
+
+  it('is a switch that is on at the start, and is saved when it is turned off', async () => {
+    await open()
+    expect(box()!.checked).toBe(true)
+    await act(async () => { box()!.click() })
+    expect(put).toHaveBeenLastCalledWith({ kb_skip_generated: false })
+  })
+
+  it('says what is left out, and how a collection that was filled before is cleaned', async () => {
+    await open()
+    const text = label()!.textContent ?? ''
+    for (const said of ['.next', 'minified', 'source maps', 'lock files', 'skipped', 'scripts/kb-clean.sh']) expect(text).toContain(said)
   })
 })
