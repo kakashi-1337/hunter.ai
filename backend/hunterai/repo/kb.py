@@ -263,6 +263,13 @@ async def exact_ids(conn, collection_ids: list[str], phrase: str, spelling: str,
     return [r["id"] for r in rows]
 
 
+async def texts_until(conn, document_id: str, ordinal: int) -> list[str]:
+    """The passages of a document that stand before its passage `ordinal`, in their order."""
+    rows = await (await conn.execute("select text from kb_chunks where document_id=? and ordinal<? order by ordinal",
+                                     (document_id, ordinal))).fetchall()
+    return [r["text"] for r in rows]
+
+
 async def chunks_by_id(conn, ids: list[str]) -> dict[str, tuple[Chunk, Document]]:
     out: dict[str, tuple[Chunk, Document]] = {}
     for start in range(0, len(ids), 500):

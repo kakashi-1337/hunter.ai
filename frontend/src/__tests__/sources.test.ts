@@ -44,4 +44,16 @@ describe('the sources under an answer', () => {
     expect(rows[2]).not.toContain('nearest in meaning')
     expect(rows[2]).not.toContain('best match in words')
   })
+
+  it('say which part of its document a passage is and what stands above it there, as the model was shown it', () => {
+    const block: SourcesBlock = { type: 'sources', query: 'how do I install it on linux', hits: 3, error: null,
+      items: [source(1, { ordinal: 2, parts: 12, where: 'Guide > Install > Linux' }), source(2, { parts: 1 }), source(3)] }
+    act(() => { root.render(createElement(SourcesList, { block, answer: 'With the package manager [1].' })) })
+    const rows = [...host.querySelectorAll('details.source > summary')].map((s) => s.textContent ?? '')
+    expect(rows[0]).toContain('part 3 of 12')
+    expect(rows[0]).toContain('in: Guide > Install > Linux')
+    expect(rows[1]).not.toContain('part 1 of 1')    // a document of one passage is the whole of it
+    expect(rows[1]).not.toContain('in:')
+    expect(rows[2]).not.toContain('part')
+  })
 })

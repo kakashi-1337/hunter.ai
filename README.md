@@ -577,6 +577,39 @@ putting the two lists together (a smaller constant in the fusion, the better of 
 places) brought 16 and 28. When several collections are asked at once, one passage leads for
 the vectors, the nearest of them, not one for every collection.
 
+### A passage is shown with its place in the document
+
+A passage is about 1,200 characters cut out of a document. The model is shown it with its
+source and its lines, and what stood above it in the document is gone by then: the fourth
+passage of a page about one product never names the product, because the page's title is the
+first line of its first passage only, and a table under "Typography > Hierarchy" of a design
+guide is just a table.
+
+So the line above each passage also says which part of its document it is, and under which
+title and headings it stands there:
+
+```
+[1] git:github.com/acme/guide/docs/install.md (lines 40-58, part 3 of 12), in: Guide > Install > Linux
+```
+
+- a web page or an HTML file: the title of the page;
+- a Markdown file: the headings above the passage, outside code blocks. A passage that begins
+  with a heading stands under the headings above that one;
+- source code, a PDF, plain text: the part number only, for now.
+
+It is made by rules when a passage is shown, from what the collection already holds: nothing
+is indexed again and no model is asked. It is shown in a message, in what `kb_search` returns,
+and under an answer in "Sources". These words are the document's own, like the passage: they
+stand inside the untrusted block and are screened with it. They take room in a message as the
+text does, and `scripts/rag-test.sh` counts "in the message" with them.
+
+What it does not do: the search does not look at these lines. That was counted first, on a
+real collection of about 600,000 passages (45 questions). Put into the keyword index beside
+each passage, they brought 29 passages into a message, as many as the order of the section
+above brings alone (30 with both); they found one passage that only the name of its file
+names, and lost another behind the passages of its sister files. Embedded with the passages
+they changed next to nothing. They help the reader of a passage, not the search for it.
+
 ### What the search finds, measured
 
 `scripts/rag-test.sh "NAME"` asks the search of a collection for things that stand in exactly

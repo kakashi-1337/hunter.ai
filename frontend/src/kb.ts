@@ -83,6 +83,10 @@ export function jobSource(job: Job): string {
 
 export const sourceLabel = (uri: string, lineStart: number, lineEnd: number): string => `${uri} : lines ${lineStart}–${lineEnd}`
 
+/** Where a passage stands in its document, as the model was shown it: "part 3 of 12 · in: Guide > Install", or "". */
+export const sourcePlace = (s: { ordinal: number; parts?: number | null; where?: string }): string =>
+  [s.parts && s.parts > 1 ? `part ${s.ordinal + 1} of ${s.parts}` : '', s.where ? `in: ${s.where}` : ''].filter(Boolean).join(' · ')
+
 /** What a passage is called that leads the list because one half of the search had it first, and why it leads. */
 export const FIRST_OF: Record<'vectors' | 'keywords', { label: string; title: string }> = {
   vectors: { label: 'nearest in meaning',

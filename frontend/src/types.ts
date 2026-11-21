@@ -384,6 +384,10 @@ export interface Source {
   exact?: boolean
   /** The half of the search that had it first: it leads the fused list for that, and its score is no measure either. */
   first_of?: 'vectors' | 'keywords' | null
+  /** Passages its document was cut into: this one is part `ordinal + 1` of them. */
+  parts?: number | null
+  /** The title and the headings it stands under in its document, as the model was shown them. The document's own words. */
+  where?: string
 }
 
 export interface SourcesBlock { type: 'sources'; query: string; items: Source[]; hits: number; error: string | null }
@@ -459,6 +463,9 @@ export interface KbHit {
   exact?: boolean
   /** The half of the search that has it first: it leads the fused list for that. */
   first_of?: 'vectors' | 'keywords' | null
+  /** Passages its document was cut into. */
+  parts?: number | null
+  where?: string
 }
 
 export interface ChatKb { chat_id: string; collection_ids: string[]; always_retrieve: boolean }

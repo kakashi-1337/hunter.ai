@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 from .. import db
-from ..kb import search
+from ..kb import layout, search
 from ..kb.embed import EmbedError
-from ..kb.retrieve import _header, _neutral
+from ..kb.retrieve import _header, _neutral, _part
 from ..kb.vectors import VectorError
 from ..repo import kb
 from .base import Tool, ToolContext, ToolError, ToolResult
@@ -26,13 +26,15 @@ async def _kb_search(ctx: ToolContext, args: dict) -> ToolResult:
             raise ToolError(f"knowledge search is unavailable: {e.message}") from None
         except VectorError as e:
             raise ToolError(f"knowledge search is unavailable: {e}") from None
+        hits = await layout.annotate(conn, hits)
     finally:
         await conn.close()
     if not hits:
         return ToolResult("No matching passage in the attached knowledge collections.")
     parts, used = [], 0
     for n, h in enumerate(hits, 1):
-        part = f"{_neutral(_header(n, h.source_uri, h.line_start, h.line_end, h.text))}\n{_neutral(h.text)}"
+        part = (f"{_neutral(_header(n, h.source_uri, h.line_start, h.line_end, h.text, part=_part(h), where=h.where))}\n"
+                f"{_neutral(h.text)}")
         if used + len(part) > MAX_RESULT_CHARS:
             break
         parts.append(part)
