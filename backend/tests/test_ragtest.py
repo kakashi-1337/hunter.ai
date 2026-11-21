@@ -7,6 +7,8 @@ search chooses from, or nowhere. It is kept, so that a change to the search can 
 import json
 from pathlib import Path
 
+import pytest
+
 from hunterai import config
 from hunterai.kb import ragtest, search
 from hunterai.providers import registry
@@ -16,12 +18,22 @@ from tests.test_decision_engine import Json
 
 FILL = " This note is long enough to be worth a question: it goes on about how the issue was found, what was tried first, " \
        "and what the owner of the program answered when it was reported to them last spring."
+# Each note says something of its own at length: notes that share most of their wording have no single right passage,
+# and a test writes no question from them.
 TEXTS = {
     "sqli.md": "The login form at /app/auth/login is injectable in the user_name parameter. CVE-2024-11111 is the same bug "
-               "in the vendor's product." + FILL,
-    "xss.md": "Stored XSS on the profile page: the displayName field is rendered unescaped, as CVE-2023-22222 describes." + FILL,
-    "both.md": "This note mentions /shared/path/here and shared_name, and so does the next one." + FILL,
-    "other.md": "Another note with /shared/path/here and shared_name in it, on a different subject." + FILL,
+               "in the vendor's product. It turned up while the search box was being tested for something else, with a payload "
+               "that closed the quote and added a sleep of five seconds: the answer took that much longer every time it was sent "
+               "again that afternoon." + FILL,
+    "xss.md": "Stored XSS on the profile page: the displayName field is rendered unescaped, as CVE-2023-22222 describes. A visitor "
+              "who opens the profile of the attacker runs the script at once, and so does every moderator who reviews the account, "
+              "which is how a session of a member of staff could be taken over during the demonstration for the client." + FILL,
+    "both.md": "This note mentions /shared/path/here and shared_name, and so does the next one. It exists to show that two files "
+               "can talk about one and the same thing in nearly one breath, which happens all the time in real folders of notes, "
+               "where a colleague copied a line from a ticket into two places and forgot about the second." + FILL,
+    "other.md": "Another note with /shared/path/here and shared_name in it, on a different subject. Its real topic is the day of "
+                "the conference in the harbour city: the long queue for coffee before the keynote, the room that was far too "
+                "small for the workshop, and the train home that left twenty minutes late and arrived early." + FILL,
 }
 
 
@@ -73,17 +85,20 @@ async def test_a_model_that_writes_no_question_costs_that_passage_only(conn, col
     assert [i["query"] for i in test["items"]] == ["Where is the stored XSS?"]
 
 
-async def test_a_passage_the_search_does_not_bring_is_counted_and_named(conn, col, tmp_path):
+async def test_a_passage_the_search_does_not_bring_is_counted_and_named(conn, col, tmp_path, monkeypatch):
     docs = await ingest_texts(conn, col, tmp_path, TEXTS)
+    monkeypatch.setattr(ragtest, "POOL", 1)             # the search is asked for one passage: in four notes, all would be found
+    first = (await search.search(conn, [col.id], "something no passage is about", limit=1))[0]
+    wanted = next(name for name, doc in docs.items() if doc.id != first.document_id)       # a passage it did not bring
     test = {"collection": col.id, "name": col.name, "created": "t", "written_by": None, "items": [
         {"kind": "identifier", "query": "CVE-2024-11111", "chunk_id": kb.chunk_id(docs["sqli.md"].id, 0), "source": "sqli.md"},
-        {"kind": "question", "query": "something no passage is about", "chunk_id": "f" * 32, "source": "gone.md"}]}
+        {"kind": "question", "query": "something no passage is about", "chunk_id": kb.chunk_id(docs[wanted].id, 0), "source": wanted}]}
     result = await ragtest.run(conn, test)
     assert result["kinds"]["identifier"] == {"asked": 1, "first": 1, "sent": 1, "pool": 1, "missed": 0}
     assert result["kinds"]["question"] == {"asked": 1, "first": 0, "sent": 0, "pool": 0, "missed": 1}
-    assert result["misses"] == [{"kind": "question", "query": "something no passage is about", "source": "gone.md"}]
+    assert result["misses"] == [{"kind": "question", "query": "something no passage is about", "source": wanted}]
     said = ragtest.report(test, result)
-    assert "identifiers" in said and "questions" in said and "gone.md" in said and "something no passage is about" in said
+    assert "identifiers" in said and "questions" in said and wanted in said and "something no passage is about" in said
 
 
 async def test_the_command_builds_a_test_once_keeps_it_and_compares_the_next_run_with_the_one_before(conn, col, tmp_path, capsys):
@@ -110,9 +125,9 @@ async def test_in_a_data_folder_that_was_never_used_the_command_says_there_is_no
 
 # ---- what the first real run showed
 
-def hit(chunk_id, text, dense=1, keyword=None):
+def hit(chunk_id, text, dense=1, keyword=None, source=None):
     from hunterai.types import Hit
-    return Hit(chunk_id=chunk_id, document_id="d", collection_id="c", source_uri=f"{chunk_id}.md", ordinal=0, text=text,
+    return Hit(chunk_id=chunk_id, document_id="d", collection_id="c", source_uri=source or f"{chunk_id}.md", ordinal=0, text=text,
                line_start=1, line_end=2, score=0.5, dense_rank=dense, keyword_rank=keyword)
 
 
@@ -251,3 +266,170 @@ async def test_a_test_of_a_large_collection_is_built_from_passages_spread_over_a
     assert len(where) == 4 and where[0] <= 2 and where[-1] >= 9 and all(b - a == 3 for a, b in zip(where, where[1:]))
     monkeypatch.setattr(ragtest, "SCAN", 5000)          # a collection that fits is looked at whole
     assert len(await ragtest._passages(conn, col.id)) == 12
+
+
+# ---- what a collection of 670,000 passages showed: half of the questions had no single right passage
+
+BENCH = ("Ensure that audit logging is enabled for the {product} service. Rationale: without audit logs an administrator cannot "
+         "tell who changed a setting or when. Audit: open the {product} console, choose Settings, then Logging, and confirm that "
+         "the audit trail is switched on for every region. Remediation: switch the audit trail on and choose a bucket that only "
+         "the security team can read. Default value: the audit trail is off when a {product} account is created.")
+OWN = ("The pentest of the staging site started on a Monday. The first finding was an open redirect in the logout link, which "
+       "the team fixed the same week. The second was a session cookie without the secure flag, reported two days later and "
+       "still open when the retest began in the following month, as the notes of the retest say in their first paragraph.")
+
+
+def test_a_twin_shares_most_of_a_passages_wording():
+    one, other = BENCH.format(product="Relational Database"), BENCH.format(product="Object Storage")
+    assert ragtest.twin(one, other) and ragtest.twin(other, one)                # the same text for another product
+    assert ragtest.twin(one, "## 4.2 Logging\n\n" + one + "\n\nSee also the next control.")        # it stands whole inside a longer one
+    assert not ragtest.twin(one, OWN)
+    assert not ragtest.twin(one, "Audit logging should be on for the Relational Database service, so that changes can be traced "
+                                 "to a person. Check it in the console under Settings and Logging; turn it on if it is off.")   # same subject, other words
+    assert not ragtest.twin(one, one[:160])                                     # a piece of it does not answer what the whole answers
+    assert not ragtest.twin("", one) and not ragtest.twin(one, "") and not ragtest.twin("two words", "two words")
+
+
+def test_notes_that_share_a_closing_paragraph_are_no_twins():
+    """Seen in this file's own notes: the same forty words at the end of each, and before them a subject of its own.
+    Between "no twin" and "twin" stands a passage that shares most of its wording: no question is written from it."""
+    shares = [ragtest.shared(a, b) for a in TEXTS.values() for b in TEXTS.values() if a is not b]
+    assert 0.2 < min(shares) and max(shares) < ragtest.NEAR < ragtest.TWIN
+    one, other = BENCH.format(product="Relational Database"), BENCH.format(product="Object Storage")
+    assert ragtest.shared(one, other) >= ragtest.TWIN and ragtest.shared(one, one) == 1.0 and ragtest.shared("", one) == 0.0
+    words = one.split()
+    some_changed = " ".join(f"other{i}" if i % 8 == 0 else w for i, w in enumerate(words))        # every eighth word is another
+    assert ragtest.NEAR <= ragtest.shared(one, some_changed) < ragtest.TWIN and not ragtest.twin(one, some_changed)
+
+
+@pytest.mark.parametrize("uri", [
+    "/home/u/notes/report.md", "/home/u/notes/readme.txt", "/home/u/site/page.html", "/home/u/books/guide.pdf", "/home/u/notes/plan.docx",
+    "git:github.com/o/r/docs/intro.md", "git:github.com/o/r/docs/api.rst", "upload:notes/findings.md", "/x/docs.zip!/docs/a.md",
+    "https://docs.example.com/guide/start", "https://example.com/llms-full.txt", "https://example.com/post.html?page=2",
+])
+def test_a_document_meant_to_be_read(uri):
+    assert ragtest.readable(uri)
+
+
+@pytest.mark.parametrize("uri", [
+    "/home/u/web/src/app.js", "/home/u/web/src/types.d.ts", "/home/u/web/i18n/locales/ar.ts", "git:github.com/o/r/src/main.py",
+    "/home/u/web/package.json", "/home/u/data/rows.csv", "/home/u/db/schema.sql", "/home/u/web/config.yaml", "upload:app.min.js",
+    "/home/u/web/.next/server/pages/index.html",            # a page a build made: left out of a collection today
+    "/home/u/web/.next/static/chunks/main.js.map", "/x/pkg.tgz!/package/dist/client.d.ts", "/x/app.bundle.js.gz!/app.bundle.js",
+    "/home/u/web/yarn.lock", "/home/u/web/LICENSE", "https://example.com/api/data.json", "https://example.com/feed.xml",
+])
+def test_a_document_that_is_code_or_data_or_machine_made(uri):
+    assert not ragtest.readable(uri)
+
+
+async def decider(conn, *questions):
+    await settings.put(conn, "decision_provider", "decider")
+    await settings.put(conn, "decision_model", "d")
+    d = Json("decider", *[json.dumps({"question": q}) for q in questions])
+    registry.override("decider", d)
+    return d
+
+
+async def test_questions_are_written_from_documents_meant_to_be_read(conn, col, tmp_path):
+    """Asked about a line of a bundle or a table of translations, a model writes a question no one would ask."""
+    code = "def check(value):\n    '''" + FILL + FILL + "'''\n    return value\n"
+    await ingest_texts(conn, col, tmp_path, {"report.md": OWN, "check.py": code, "table.json": json.dumps({"rows": [FILL] * 4})})
+    d = await decider(conn, "When did the pentest of the staging site start?", "unused", "unused")
+    test = await ragtest.build(conn, col, identifiers=0, questions=3)
+    assert [(i["query"], Path(i["source"]).name) for i in test["items"]] == [("When did the pentest of the staging site start?", "report.md")]
+    assert len(d.calls) == 1 and test["prose"] == 1
+    said = ragtest.report(test, await ragtest.run(conn, test))
+    assert "from documents meant to be read" in said
+
+
+async def test_a_collection_of_code_and_data_gets_no_questions_and_says_why(conn, col, tmp_path):
+    code = "def check(value):\n    '''" + FILL + FILL + "'''\n    return value\n"
+    await ingest_texts(conn, col, tmp_path, {"check.py": code + "token_name_one = 1\n", "other.py": code + "token_name_two = 2\n"})
+    d = await decider(conn, "unused")
+    test = await ragtest.build(conn, col, identifiers=2, questions=3)
+    assert d.calls == [] and {i["kind"] for i in test["items"]} == {"identifier"} and test["prose"] == 0
+    said = ragtest.report(test, await ragtest.run(conn, test))
+    assert "No question was written: no passage of this collection comes from a document meant to be read" in said
+
+
+async def test_a_passage_that_has_a_twin_gets_no_question(conn, col, tmp_path):
+    """The same control in the benchmark of every product: whichever of them the search brings answers the question."""
+    await ingest_texts(conn, col, tmp_path, {"db.md": BENCH.format(product="Relational Database"),
+                                             "storage.md": BENCH.format(product="Object Storage"), "report.md": OWN})
+    d = await decider(conn, "When did the pentest of the staging site start?", "unused", "unused")
+    test = await ragtest.build(conn, col, identifiers=0, questions=3)
+    assert [Path(i["source"]).name for i in test["items"]] == ["report.md"] and len(d.calls) == 1
+    assert (test["prose"], test["near"]) == (3, 2)
+    said = ragtest.report(test, await ragtest.run(conn, test))
+    assert "2 passages were passed over because another passage shares most of their wording" in said
+
+
+async def test_a_question_that_a_twin_of_its_passage_answers_is_found(conn, col, tmp_path, monkeypatch):
+    """A test that was built before, or a collection that grew: the twin stands first and the passage itself nowhere."""
+    docs = await ingest_texts(conn, col, tmp_path, {"db.md": BENCH.format(product="Relational Database"),
+                                                    "storage.md": BENCH.format(product="Object Storage"), "report.md": OWN})
+    ids = {name: kb.chunk_id(doc.id, 0) for name, doc in docs.items()}
+    texts = {name: (await kb.get_chunk(conn, cid)).text for name, cid in ids.items()}
+
+    async def found(conn, collections, query, limit=8, **kw):
+        return [hit(ids["storage.md"], texts["storage.md"]), hit(ids["report.md"], texts["report.md"], dense=2)]
+    monkeypatch.setattr(ragtest.search, "search", found)
+    test = {"collection": col.id, "name": col.name, "created": "t", "written_by": "m", "items": [
+        {"kind": "question", "query": "How is audit logging checked?", "chunk_id": ids["db.md"], "source": "db.md"},
+        {"kind": "question", "query": "When did the pentest start?", "chunk_id": ids["report.md"], "source": "report.md"}]}
+    result = await ragtest.run(conn, test)
+    assert result["kinds"]["question"] == {"asked": 2, "first": 1, "sent": 2, "pool": 2, "missed": 0}
+    assert result["twins"] == 1 and result["misses"] == []
+    said = ragtest.report(test, result)
+    assert "1 question was answered by a twin of its passage" in said
+
+
+async def test_an_identifier_is_never_answered_by_a_twin(conn, col, tmp_path, monkeypatch):
+    docs = await ingest_texts(conn, col, tmp_path, {"db.md": BENCH.format(product="Relational Database") + " See rds_audit_flag.",
+                                                    "storage.md": BENCH.format(product="Object Storage")})
+    ids = {name: kb.chunk_id(doc.id, 0) for name, doc in docs.items()}
+
+    async def found(conn, collections, query, limit=8, **kw):
+        return [hit(ids["storage.md"], BENCH.format(product="Object Storage"))]
+    monkeypatch.setattr(ragtest.search, "search", found)
+    test = {"collection": col.id, "name": col.name, "created": "t", "written_by": None, "items": [
+        {"kind": "identifier", "query": "rds_audit_flag", "chunk_id": ids["db.md"], "source": "db.md"}]}
+    result = await ragtest.run(conn, test)
+    assert result["kinds"]["identifier"] == {"asked": 1, "first": 0, "sent": 0, "pool": 0, "missed": 1} and result["twins"] == 0
+
+
+async def test_what_the_collection_no_longer_holds_is_not_asked_about(conn, col, tmp_path):
+    """After a collection was cleaned, a kept test still names passages that are gone. Those are no misses of the search."""
+    docs = await ingest_texts(conn, col, tmp_path, TEXTS)
+    test = {"collection": col.id, "name": col.name, "created": "t", "written_by": "m", "items": [
+        {"kind": "identifier", "query": "CVE-2024-11111", "chunk_id": kb.chunk_id(docs["sqli.md"].id, 0), "source": "sqli.md"},
+        {"kind": "identifier", "query": "gone_name_here", "chunk_id": "e" * 32, "source": "bundle.js"},
+        {"kind": "question", "query": "What did the bundle say?", "chunk_id": "f" * 32, "source": "bundle.js"}]}
+    result = await ragtest.run(conn, test)
+    assert result["kinds"] == {"identifier": {"asked": 1, "first": 1, "sent": 1, "pool": 1, "missed": 0}}
+    assert result["gone"] == 2 and result["misses"] == []
+    said = ragtest.report(test, result)
+    assert "2 of the 3 things this test asks are about passages the collection no longer holds" in said and "--new" in said
+    assert "asked 1 identifier" in said
+
+
+async def test_a_miss_says_when_the_search_brought_a_passage_that_shares_most_of_the_wording(conn, col, tmp_path, monkeypatch):
+    """Not a twin, so it stays a miss; but whoever reads the list should know how close the search came."""
+    words = BENCH.format(product="Relational Database").split()
+    close = " ".join(f"other{i}" if i % 8 == 0 else w for i, w in enumerate(words))
+    docs = await ingest_texts(conn, col, tmp_path, {"db.md": BENCH.format(product="Relational Database"), "close.md": close, "report.md": OWN})
+    ids = {name: kb.chunk_id(doc.id, 0) for name, doc in docs.items()}
+    texts = {name: (await kb.get_chunk(conn, cid)).text for name, cid in ids.items()}
+
+    async def found(conn, collections, query, limit=8, **kw):
+        return [hit(ids["report.md"], texts["report.md"]), hit(ids["close.md"], texts["close.md"], dense=2, source="close.md")]
+    monkeypatch.setattr(ragtest.search, "search", found)
+    test = {"collection": col.id, "name": col.name, "created": "t", "written_by": "m", "items": [
+        {"kind": "question", "query": "How is audit logging checked?", "chunk_id": ids["db.md"], "source": "db.md"}]}
+    result = await ragtest.run(conn, test)
+    assert result["kinds"]["question"]["missed"] == 1 and result["twins"] == 0
+    share = ragtest.shared(texts["db.md"], texts["close.md"])
+    assert result["misses"] == [{"kind": "question", "query": "How is audit logging checked?", "source": "db.md",
+                                 "near": {"share": round(share, 2), "place": 2, "source": "close.md"}}]
+    said = ragtest.report(test, result)
+    assert f"the passage at place 2 (from close.md) shares {round(100 * share)}% of its wording" in said
