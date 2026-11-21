@@ -330,6 +330,14 @@ async def test_upload_only_message_and_image_inline(client):
     assert dl.headers["content-type"] == "image/png" and "inline" in dl.headers["content-disposition"]
 
 
+async def test_the_answer_to_an_upload_says_when_a_picture_cannot_be_sent_to_a_model(client):
+    from tests.test_uploads import picture
+    good = (await client.post("/api/uploads", files={"file": ("s.png", picture(), "image/png")})).json()
+    assert good["mime"] == "image/png" and good["problem"] == ""
+    cut = (await client.post("/api/uploads", files={"file": ("s.png", picture()[:400], "image/png")})).json()
+    assert cut["mime"] == "image/png" and "will not be sent to a model" in cut["problem"] and "damaged or cut short" in cut["problem"]
+
+
 async def test_html_upload_is_never_served_as_html(client):
     up = (await client.post("/api/uploads", files={
         "file": ("x.html", b"<script>alert(1)</script>", "text/html")})).json()

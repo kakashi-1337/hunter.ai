@@ -1,8 +1,10 @@
 import asyncio
+import io
 
 import pytest
+from PIL import Image
 
-from hunterai import db, engine, hub
+from hunterai import db, engine, hub, uploads
 from hunterai.modes import SYSTEM_PROMPTS, build_system
 from hunterai.providers import registry
 from hunterai.providers.base import (ModelInfo, Options, ProviderError, Stop, TextDelta,
@@ -327,14 +329,91 @@ async def test_retry_context_excludes_previous_answer(conn, setup):
     assert await messages.siblings(conn, first.id) == [first.id, second.id]
 
 
+def picture(kind="PNG", size=(64, 48)):
+    out = io.BytesIO()
+    Image.new("RGB", size, (200, 30, 30)).save(out, kind)
+    return out.getvalue()
+
+
+def gives(data):
+    async def load(upload_id):
+        return data
+    return load
+
+
 async def test_image_bytes_loaded_for_the_adapter(conn, setup):
     p = Scripted("abliteration")
     use(abliteration=p)
     chat = await chats.create(conn, None, "coding", "abliteration", "abliterated-model", {})
-    user = await messages.add(conn, chat.id, None, "user",
-                              [TextBlock(text="see"), ImageBlock(upload_id="up1", mime="image/png")])
-    await go(conn, chat, user)
-    assert p.calls[0]["messages"][0].images == {"up1": b"IMG"}
+    shot = picture()
+    seen = ImageBlock(upload_id="up1", mime="image/png")
+    user = await messages.add(conn, chat.id, None, "user", [TextBlock(text="see"), seen])
+    await go(conn, chat, user, load_bytes=gives(shot))
+    sent = p.calls[0]["messages"][0]
+    assert sent.images == {"up1": shot} and sent.blocks == [TextBlock(text="see"), seen]
+
+
+@pytest.mark.parametrize("name, data, why", [
+    ("cut short", picture(size=(640, 480))[:300], "it cannot be decoded (the file is damaged or cut short)"),
+    ("its beginning only", b"\x89PNG\r\n\x1a\n" + b"\x00" * 64, "it cannot be decoded (the file is damaged or cut short)"),
+    ("no picture at all", b"IMG", "it is not a PNG, JPEG, GIF or WebP picture"),
+])
+async def test_a_picture_that_cannot_be_decoded_is_not_sent_and_the_model_is_told(conn, setup, name, data, why):
+    """The case that was reported: one such file among the pictures of a chat, and the program that runs the
+    local model refused every later turn of it (HTTP 400, "Failed to load image or audio file")."""
+    p = Scripted("abliteration")
+    use(abliteration=p)
+    chat = await chats.create(conn, None, "coding", "abliteration", "abliterated-model", {})
+    up = await uploads.save(conn, chat.id, "first shot.png", data + b"")
+    await conn.execute("update uploads set mime='image/png' where id=?", (up.id,))      # as it was stored before this was looked at
+    await conn.commit()
+    good = picture()
+    first = await messages.add(conn, chat.id, None, "user", [TextBlock(text="see"), ImageBlock(upload_id=up.id, mime="image/png")])
+    answer = await messages.add(conn, chat.id, first.id, "assistant", [TextBlock(text="I see nothing.")])
+    second = await messages.add(conn, chat.id, answer.id, "user", [TextBlock(text="and this"), ImageBlock(upload_id="up2", mime="image/png")])
+
+    async def load(upload_id):
+        return data if upload_id == up.id else good
+    run, _ = await go(conn, chat, second, load_bytes=load)
+    sent = p.calls[0]["messages"]
+    assert run.status == "done" and sent[0].images == {} and sent[2].images == {"up2": good}, name
+    assert sent[0].blocks == [TextBlock(text="see"), TextBlock(text=f'[attached picture "first shot.png" omitted: {why}]')]
+    assert (await messages.get(conn, first.id)).blocks[1] == ImageBlock(upload_id=up.id, mime="image/png")    # the chat still shows what was attached
+
+
+async def test_a_picture_whose_upload_is_not_known_is_left_out_without_a_name(conn, setup):
+    p = Scripted("abliteration")
+    use(abliteration=p)
+    chat = await chats.create(conn, None, "coding", "abliteration", "abliterated-model", {})
+    user = await messages.add(conn, chat.id, None, "user", [ImageBlock(upload_id="up1", mime="image/png"), TextBlock(text="see")])
+    await go(conn, chat, user, load_bytes=gives(b""))
+    sent = p.calls[0]["messages"][0]
+    assert sent.images == {} and sent.blocks[0].text.startswith("[attached picture omitted: ") and sent.blocks[1].text == "see"
+
+
+@pytest.mark.parametrize("kind, stored", [("WEBP", "image/webp"), ("GIF", "image/gif")])
+async def test_a_picture_not_every_reader_takes_goes_to_the_adapter_as_a_png(conn, setup, kind, stored):
+    p = Scripted("abliteration")
+    use(abliteration=p)
+    chat = await chats.create(conn, None, "coding", "abliteration", "abliterated-model", {})
+    user = await messages.add(conn, chat.id, None, "user", [TextBlock(text="see"), ImageBlock(upload_id="up1", mime=stored)])
+    await go(conn, chat, user, load_bytes=gives(picture(kind)))
+    sent = p.calls[0]["messages"][0]
+    made = Image.open(io.BytesIO(sent.images["up1"]))
+    assert made.format == "PNG" and made.size == (64, 48) and sent.blocks[1] == ImageBlock(upload_id="up1", mime="image/png")
+    assert (await messages.get(conn, user.id)).blocks[1].mime == stored
+
+
+async def test_a_picture_is_called_the_kind_it_is(conn, setup):
+    """An adapter names the kind with the bytes, and a cloud API refuses a picture that is not what it is called."""
+    p = Scripted("abliteration")
+    use(abliteration=p)
+    chat = await chats.create(conn, None, "coding", "abliteration", "abliterated-model", {})
+    shot = picture("JPEG")
+    user = await messages.add(conn, chat.id, None, "user", [ImageBlock(upload_id="up1", mime="image/png")])
+    await go(conn, chat, user, load_bytes=gives(shot))
+    sent = p.calls[0]["messages"][0]
+    assert sent.images == {"up1": shot} and sent.blocks == [ImageBlock(upload_id="up1", mime="image/jpeg")]
 
 
 async def test_missing_image_bytes_do_not_kill_the_run(conn, setup):

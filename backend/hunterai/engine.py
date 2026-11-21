@@ -12,15 +12,15 @@ import dataclasses
 import time
 from typing import Awaitable, Callable
 
-from . import checks, context, hub, permissions, problems, savepoint, secrets
+from . import checks, context, hub, permissions, pictures, problems, savepoint, secrets, uploads
 from .modes import build_system
 from .providers import registry
 from .providers.base import (Options, ProviderError, Stop, TextDelta, ThinkingDelta,
                              ThinkingSeal, ToolCall, ToolSpec, Usage, WireMessage, safe_call_id)
 from .repo import chats, goals, messages, runs, settings, targets
 from .tools import loopguard, runner
-from .types import (NOT_FOR_MODELS, Block, ChangesBlock, NoticeBlock, OwnerNoteBlock, TextBlock, ThinkingBlock, ToolCallBlock,
-                    ToolResultBlock)
+from .types import (NOT_FOR_MODELS, Block, ChangesBlock, ImageBlock, NoticeBlock, OwnerNoteBlock, TextBlock, ThinkingBlock,
+                    ToolCallBlock, ToolResultBlock)
 
 DEFAULT_PROVIDER = "abliteration"
 FALLBACK_PROVIDER = "ollama"
@@ -172,6 +172,24 @@ async def recover(conn) -> None:
     await conn.commit()
 
 
+async def _picture(conn, b: ImageBlock, images: dict[str, bytes], load_bytes: LoadBytes) -> Block:
+    """A picture of a message as a model gets it: its bytes go into `images`, in a kind every reader takes, and
+    the block is returned under the name of that kind. One that cannot be decoded is not sent, because the
+    program that runs a local model refuses the whole request for it, and so every later turn of the chat
+    (pictures.py): the block returned for it says in words that it was left out, and why."""
+    try:
+        data = await load_bytes(b.upload_id)
+    except Exception:
+        return b  # adapter renders a missing image as a placeholder
+    try:
+        seen = await pictures.for_model(data)
+    except pictures.Unreadable as e:
+        upload = await uploads.get(conn, b.upload_id)
+        return TextBlock(text=pictures.omitted(upload.filename if upload else None, str(e)))
+    images[b.upload_id] = seen.data
+    return b if b.mime == seen.mime else b.model_copy(update={"mime": seen.mime})
+
+
 async def _context(conn, chat, user_message_id: str, load_bytes: LoadBytes) -> list[WireMessage]:
     out: list[WireMessage] = []
     for m in await messages.path(conn, chat.id, user_message_id):
@@ -179,14 +197,9 @@ async def _context(conn, chat, user_message_id: str, load_bytes: LoadBytes) -> l
         if m.role == "assistant" and not has_text:
             continue  # failed or empty turns carry nothing the model can use
         images: dict[str, bytes] = {}
-        for b in m.blocks:
-            if b.type == "image":
-                try:
-                    images[b.upload_id] = await load_bytes(b.upload_id)
-                except Exception:
-                    pass  # adapter renders a missing image as a placeholder
-        out.append(WireMessage(role=m.role, blocks=[b for b in m.blocks if b.type not in NOT_FOR_MODELS],
-                               images=images, id=m.id))
+        blocks = [await _picture(conn, b, images, load_bytes) if b.type == "image" else b
+                  for b in m.blocks if b.type not in NOT_FOR_MODELS]
+        out.append(WireMessage(role=m.role, blocks=blocks, images=images, id=m.id))
     return out
 
 
