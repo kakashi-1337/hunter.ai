@@ -96,7 +96,8 @@ async def test_a_passage_the_search_does_not_bring_is_counted_and_named(conn, co
     result = await ragtest.run(conn, test)
     assert result["kinds"]["identifier"] == {"asked": 1, "first": 1, "sent": 1, "pool": 1, "missed": 0}
     assert result["kinds"]["question"] == {"asked": 1, "first": 0, "sent": 0, "pool": 0, "missed": 1}
-    assert result["misses"] == [{"kind": "question", "query": "something no passage is about", "source": wanted}]
+    assert result["misses"] == [{"kind": "question", "query": "something no passage is about", "source": wanted,
+                                 "brought": first.source_uri}]
     said = ragtest.report(test, result)
     assert "identifiers" in said and "questions" in said and wanted in said and "something no passage is about" in said
 
@@ -125,9 +126,9 @@ async def test_in_a_data_folder_that_was_never_used_the_command_says_there_is_no
 
 # ---- what the first real run showed
 
-def hit(chunk_id, text, dense=1, keyword=None, source=None):
+def hit(chunk_id, text, dense=1, keyword=None, source=None, document="d"):
     from hunterai.types import Hit
-    return Hit(chunk_id=chunk_id, document_id="d", collection_id="c", source_uri=source or f"{chunk_id}.md", ordinal=0, text=text,
+    return Hit(chunk_id=chunk_id, document_id=document, collection_id="c", source_uri=source or f"{chunk_id}.md", ordinal=0, text=text,
                line_start=1, line_end=2, score=0.5, dense_rank=dense, keyword_rank=keyword)
 
 
@@ -335,7 +336,7 @@ async def test_questions_are_written_from_documents_meant_to_be_read(conn, col, 
     code = "def check(value):\n    '''" + FILL + FILL + "'''\n    return value\n"
     await ingest_texts(conn, col, tmp_path, {"report.md": OWN, "check.py": code, "table.json": json.dumps({"rows": [FILL] * 4})})
     d = await decider(conn, "When did the pentest of the staging site start?", "unused", "unused")
-    test = await ragtest.build(conn, col, identifiers=0, questions=3)
+    test = await ragtest.build(conn, col, identifiers=0, questions=3, code=0)
     assert [(i["query"], Path(i["source"]).name) for i in test["items"]] == [("When did the pentest of the staging site start?", "report.md")]
     assert len(d.calls) == 1 and test["prose"] == 1
     said = ragtest.report(test, await ragtest.run(conn, test))
@@ -346,7 +347,7 @@ async def test_a_collection_of_code_and_data_gets_no_questions_and_says_why(conn
     code = "def check(value):\n    '''" + FILL + FILL + "'''\n    return value\n"
     await ingest_texts(conn, col, tmp_path, {"check.py": code + "token_name_one = 1\n", "other.py": code + "token_name_two = 2\n"})
     d = await decider(conn, "unused")
-    test = await ragtest.build(conn, col, identifiers=2, questions=3)
+    test = await ragtest.build(conn, col, identifiers=2, questions=3, code=0)
     assert d.calls == [] and {i["kind"] for i in test["items"]} == {"identifier"} and test["prose"] == 0
     said = ragtest.report(test, await ragtest.run(conn, test))
     assert "No question was written: no passage of this collection comes from a document meant to be read" in said
@@ -430,6 +431,155 @@ async def test_a_miss_says_when_the_search_brought_a_passage_that_shares_most_of
     assert result["kinds"]["question"]["missed"] == 1 and result["twins"] == 0
     share = ragtest.shared(texts["db.md"], texts["close.md"])
     assert result["misses"] == [{"kind": "question", "query": "How is audit logging checked?", "source": "db.md",
-                                 "near": {"share": round(share, 2), "place": 2, "source": "close.md"}}]
+                                 "near": {"share": round(share, 2), "place": 2, "source": "close.md"},
+                                 "brought": f'{ids["report.md"]}.md'}]
     said = ragtest.report(test, result)
     assert f"the passage at place 2 (from close.md) shares {round(100 * share)}% of its wording" in said
+
+
+# ---- what the ten misses of a real run showed: six questions did not say what they were about
+
+async def test_the_writer_is_told_where_a_passage_comes_from(conn, col, tmp_path):
+    """A passage seldom names what it is about: that stands in the title or the address of its document. Shown the
+    passage alone, a model asks about "this tool" and "the product", and no search can know which one is meant."""
+    await ingest_texts(conn, col, tmp_path, {"blog/what-is-acme-paint-3.md": OWN})
+    d = await decider(conn, "When did the pentest of the Acme Paint 3 staging site start?")
+    test = await ragtest.build(conn, col, identifiers=0, questions=1)
+    shown, system = d.calls[0]["messages"][0].blocks[0].text, d.calls[0]["system"]
+    assert "blog/what-is-acme-paint-3.md" in shown and shown.index("FROM:") < shown.index("PASSAGE:") and OWN[:60] in shown
+    assert str(tmp_path) not in shown                                    # no more of a path on this machine than its last parts
+    assert "where it comes from" in system and '"this tool"' in system and "name what" in system
+    assert [i["query"] for i in test["items"]] == ["When did the pentest of the Acme Paint 3 staging site start?"]
+
+
+@pytest.mark.parametrize("uri, shown", [
+    ("/home/dave/artex/web/src/components/Chat.tsx", "artex/web/src/components/Chat.tsx"),
+    ("/home/dave/a.md", "home/dave/a.md"),
+    ("git:github.com/usestrix/strix/strix/tools/browser.py", "github.com/usestrix/strix/strix/tools/browser.py"),
+    ("upload:notes/findings.md", "notes/findings.md"),
+    ("https://www.example.com/blog/what-is-acme-paint-3?utm=1#top", "www.example.com/blog/what-is-acme-paint-3"),
+    ("/srv/a/b/c/d/docs.zip!/docs/a.md", "a/b/c/d/docs.zip!/docs/a.md"),
+])
+def test_where_a_passage_comes_from_as_the_writer_is_shown_it(uri, shown):
+    assert ragtest.named(uri) == shown
+
+
+async def test_a_miss_says_what_the_search_brought_and_where_the_document_stood(conn, col, tmp_path, monkeypatch):
+    """Whoever reads the list of misses wants to know: did the search bring something as good, another part of the
+    same document, or something else altogether? That took a script of its own before."""
+    docs = await ingest_texts(conn, col, tmp_path, {"db.md": BENCH.format(product="Relational Database"), "report.md": OWN})
+    ids = {name: kb.chunk_id(doc.id, 0) for name, doc in docs.items()}
+
+    async def found(conn, collections, query, limit=8, **kw):
+        return [hit(ids["report.md"], OWN, source="report.md"),
+                hit("another", "Another part of the same document.", dense=2, source="db.md", document=docs["db.md"].id)]
+    monkeypatch.setattr(ragtest.search, "search", found)
+    test = {"collection": col.id, "name": col.name, "created": "t", "written_by": "m", "items": [
+        {"kind": "question", "query": "How is audit logging checked?", "chunk_id": ids["db.md"], "source": "db.md"},
+        {"kind": "identifier", "query": "audit_flag_name", "chunk_id": ids["db.md"], "source": "db.md"}]}
+    result = await ragtest.run(conn, test)
+    assert [(m["kind"], m["brought"], m["same"]) for m in result["misses"]] == [
+        ("question", "report.md", {"place": 2, "sent": True}), ("identifier", "report.md", {"place": 2, "sent": True})]
+    said = ragtest.report(test, result)
+    assert said.count("the search brought first: report.md. Another passage of the same document stood at place 2, in the message.") == 2
+
+
+async def test_a_miss_of_which_nothing_of_the_document_was_brought_says_so(conn, col, tmp_path, monkeypatch):
+    docs = await ingest_texts(conn, col, tmp_path, {"db.md": BENCH.format(product="Relational Database"), "report.md": OWN})
+
+    async def found(conn, collections, query, limit=8, **kw):
+        return [hit(kb.chunk_id(docs["report.md"].id, 0), OWN, source="report.md")]
+    monkeypatch.setattr(ragtest.search, "search", found)
+    test = {"collection": col.id, "name": col.name, "created": "t", "written_by": "m", "items": [
+        {"kind": "question", "query": "How is audit logging checked?", "chunk_id": kb.chunk_id(docs["db.md"].id, 0), "source": "db.md"}]}
+    result = await ragtest.run(conn, test)
+    assert "same" not in result["misses"][0]
+    assert "the search brought first: report.md. No other passage of the same document was among the 40." in ragtest.report(test, result)
+
+
+async def test_which_half_of_the_search_found_them_is_said_for_each_kind(conn, col, tmp_path):
+    """Asked for a bare identifier the vectors find little, and that is no weakness; for a question they should find
+    most. One sum for both kinds hides which of the two it is."""
+    docs = await ingest_texts(conn, col, tmp_path, TEXTS)
+    test = {"collection": col.id, "name": col.name, "created": "t", "written_by": "m", "items": [
+        {"kind": "identifier", "query": "CVE-2024-11111", "chunk_id": kb.chunk_id(docs["sqli.md"].id, 0), "source": "sqli.md"},
+        {"kind": "question", "query": "Which page renders a field unescaped?", "chunk_id": kb.chunk_id(docs["xss.md"].id, 0), "source": "xss.md"}]}
+    result = await ragtest.run(conn, test)
+    assert set(result["halves"]) == {"identifier", "question"} and all(sum(h.values()) == 1 for h in result["halves"].values())
+    assert {k: sum(h[k] for h in result["halves"].values()) for k in result["found_by"]} == result["found_by"]
+    said = ragtest.report(test, result)
+    assert "Identifiers: found by both halves of the search: " in said and "Questions: found by both halves of the search: " in said
+
+
+# ---- features are in the code: questions about source code somebody wrote
+
+@pytest.mark.parametrize("uri", [
+    "git:github.com/usestrix/strix/strix/tools/browser.py", "/home/u/artex/server/src/agent/loop.ts", "/home/u/app/web/src/components/Chat.tsx",
+    "upload:tool/main.go", "/x/src.zip!/src/lib.rs", "git:github.com/o/r/scripts/build.sh",
+])
+def test_source_code_somebody_wrote(uri):
+    assert ragtest.source_code(uri) and not ragtest.readable(uri)
+
+
+@pytest.mark.parametrize("uri", [
+    "/home/u/web/src/types.d.ts", "/x/pkg.tgz!/package/dist/client.d.mts",                 # declarations a compiler wrote
+    "/home/u/web/i18n/locales/ar.ts", "git:github.com/o/r/src/translations/de.js",       # tables of translations
+    "/home/u/web/package.json", "/home/u/web/config.yaml", "/home/u/db/schema.sql", "/home/u/data/rows.csv",      # data and settings
+    "/home/u/web/.next/server/app/page.js", "/home/u/web/public/app.min.js",              # left out of a collection today
+    "/home/u/notes/report.md", "https://example.com/static/app.js",                        # no code, and a page of a crawl
+])
+def test_what_is_no_source_code_to_ask_about(uri):
+    assert not ragtest.source_code(uri)
+
+
+CODE = ('def take_screenshot(page, full=False):\n    """Take a picture of the page the agent is looking at and give it back as PNG bytes. '
+        'With full set, the whole page is taken and not only the part in view, which costs more of the context of the model that '
+        'reads it and is therefore off unless the caller asks for it."""\n    return page.screenshot(full_page=full)\n')
+
+
+async def test_questions_about_code_are_written_from_source_code_and_counted_apart(conn, col, tmp_path):
+    table = "export default {\n" + "".join(f"  greeting_{i}: 'A translated line of the interface, number {i}.',\n" for i in range(12)) + "}\n"
+    await ingest_texts(conn, col, tmp_path, {"report.md": OWN, "strix/tools/browser.py": CODE, "i18n/locales/en.ts": table,
+                                             "types.d.ts": "export declare function shot(page: Page, full?: boolean): Promise<Buffer>;\n" * 8})
+    d = await decider(conn, "When did the pentest of the staging site start?", "How does the browser tool of strix take a picture of a page?", "unused")
+    test = await ragtest.build(conn, col, identifiers=0, questions=1, code=2)
+    assert [(i["kind"], Path(i["source"]).name) for i in test["items"]] == [("question", "report.md"), ("code", "browser.py")]
+    assert len(d.calls) == 2 and "strix/tools/browser.py" in d.calls[1]["messages"][0].blocks[0].text
+    assert (test["prose"], test["code"]) == (1, 1)
+    result = await ragtest.run(conn, test)
+    assert (result["kinds"]["question"]["asked"], result["kinds"]["code"]["asked"], result["kinds"]["code"]["pool"]) == (1, 1, 1)
+    said = ragtest.report(test, result)
+    assert "asked 1 questions and 1 questions about code" in said and "\nquestions about code " in said
+    assert "and from source code somebody wrote" in said
+
+
+async def test_a_collection_of_code_only_gets_questions_about_code(conn, col, tmp_path):
+    await ingest_texts(conn, col, tmp_path, {"strix/tools/browser.py": CODE})
+    d = await decider(conn, "How does the browser tool of strix take a picture of a page?")
+    test = await ragtest.build(conn, col, identifiers=0, questions=2)                     # half as many about code, unless said otherwise
+    assert [i["kind"] for i in test["items"]] == ["code"] and len(d.calls) == 1 and (test["prose"], test["code"]) == (0, 1)
+    said = ragtest.report(test, await ragtest.run(conn, test))
+    assert "the questions are about source code only" in said and "No question was written" not in said
+
+
+async def test_no_questions_means_no_model_is_asked_about_code_either(conn, col, tmp_path, capsys):
+    await ingest_texts(conn, col, tmp_path, {"strix/tools/browser.py": CODE + "screenshot_tool_name = 1\n"})
+    d = await decider(conn, "unused")
+    assert await ragtest.main([col.name, "--new", "--questions", "0"]) == 0
+    assert d.calls == [] and "identifiers" in capsys.readouterr().out
+    assert await ragtest.main([col.name, "--new", "--questions", "0", "--code", "1"]) == 0     # unless that is asked for
+    assert len(d.calls) == 1 and "questions about code" in capsys.readouterr().out
+
+
+async def test_a_question_about_code_is_answered_by_a_twin_as_any_question_is(conn, col, tmp_path, monkeypatch):
+    docs = await ingest_texts(conn, col, tmp_path, {"a/browser.py": CODE, "b/browser.py": CODE.replace("PNG", "JPEG")})
+    ids = {name: kb.chunk_id(doc.id, 0) for name, doc in docs.items()}
+    text = (await kb.get_chunk(conn, ids["b/browser.py"])).text
+
+    async def found(conn, collections, query, limit=8, **kw):
+        return [hit(ids["b/browser.py"], text, source="b/browser.py")]
+    monkeypatch.setattr(ragtest.search, "search", found)
+    test = {"collection": col.id, "name": col.name, "created": "t", "written_by": "m", "items": [
+        {"kind": "code", "query": "How is a picture of the page taken?", "chunk_id": ids["a/browser.py"], "source": "a/browser.py"}]}
+    result = await ragtest.run(conn, test)
+    assert result["kinds"]["code"] == {"asked": 1, "first": 1, "sent": 1, "pool": 1, "missed": 0} and result["twins"] == 1

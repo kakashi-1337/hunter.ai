@@ -569,10 +569,13 @@ full size. Nothing of the collection is changed.
 scripts/rag-test.sh                          # the collections
 scripts/rag-test.sh "NAME"                   # builds a test once, asks it, keeps it
 scripts/rag-test.sh "NAME" --questions 0     # a new test without a model: identifiers only
+scripts/rag-test.sh "NAME" --code 0          # a new test without questions about source code
 scripts/rag-test.sh "NAME" --new             # a new test in place of the kept one
 ```
 
-A test asks two kinds of things, 30 of each unless you say otherwise:
+A test asks three kinds of things: 30 identifiers, 30 questions and 15 questions about source
+code, unless you say otherwise (`--identifiers`, `--questions`, `--code`; left out, there is one
+question about code for every two questions):
 
 - **Identifiers** that occur in one passage only: a CVE number, a path, a parameter name.
   They need no model, and they are what a search by meaning alone is weak at. A test is built
@@ -587,14 +590,28 @@ A test asks two kinds of things, 30 of each unless you say otherwise:
   passage of which another passage shares most of the wording: 60% or more of its sequences
   of three words, as the same text does that stands in the collection once for every
   product. Such a one is looked for among the passages whose vectors stand nearest.
+  The model is shown the passage and where it comes from (the address of the page, or the
+  last parts of the path of the file), and is told to name what it asks about. A passage
+  seldom does: that stands in the title of its document. Shown the passage alone, a model
+  asks about "this tool" and "the product", and no search can know which one is meant.
+- **Questions about code**, written the same way from source code somebody wrote: a
+  programming language, not declarations a compiler wrote (`.d.ts`), not a table of
+  translations, not data or settings (JSON, YAML, SQL). What a tool does stands in its code
+  more often than in its documents. They are counted in a row of their own, because a search
+  finds code and prose differently.
 
 The test is kept with its runs (`rag-tests/` in the data folder). The next run asks the same
 test and compares with the run before, so a change to the search, to the embedding model or
 to how the texts are cut is measured with the same questions. How to read it: what stood
 among the 40 and was not in the message is what a reranker could bring up; what was not among
 the 40 was found by neither half of the search, and no reranker brings that up. The test also
-says how many stood first for the exact spelling of an identifier, and against the run before
-it compares what was in the message and what stood first. Of an identifier that was not found
+says how many stood first for the exact spelling of an identifier, which half of the search
+found the things of each kind (a bare identifier is the keywords' to find, a question the
+vectors'), and against the run before it compares what was in the message and what stood
+first. Under each thing that was not found it says what the search brought first, and whether
+another passage of the same document stood among the 40 and where: that tells a miss where
+the search brought something as good from one where it brought something else. Of an
+identifier that was not found
 it says in how many passages of the collection it stands now: in one (the search failed), in
 several (the collection has grown, or the test is from before this check: a miss that says
 nothing), or in none. When the
