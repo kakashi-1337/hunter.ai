@@ -39,17 +39,17 @@ describe('how hot the machine is, in the line at the bottom of the sidebar', () 
 
   it('says which part is hot, and what waits for it', () => {
     expect(heatNote(COOL)).toBe('')
-    expect(heatNote({ ...COOL, cpu_temp: 93 })).toBe('The processor is at 93°C, at or over its limit of 90°C: a local model is not called, and embedding waits, until it has cooled.')
-    expect(heatNote({ ...COOL, gpu_temp: 86 })).toBe('The graphics card is at 86°C, at or over its limit of 85°C: a local model is not called, and embedding waits, until it has cooled.')
+    expect(heatNote({ ...COOL, cpu_temp: 93 })).toBe('The processor is at 93°C, at or over its limit of 90°C: a local model is not loaded, and embedding waits, until it has cooled.')
+    expect(heatNote({ ...COOL, gpu_temp: 86 })).toBe('The graphics card is at 86°C, at or over its limit of 85°C: a local model is not loaded, and embedding waits, until it has cooled.')
     expect(heatNote({ ...COOL, gpu_temp: 78 })).toBe('The graphics card is at 78°C, close to its limit of 85°C.')
-    expect(heatNote({ ...COOL, cpu_temp: 84, gpu_temp: 86 })).toBe('The graphics card is at 86°C, at or over its limit of 85°C: a local model is not called, and embedding waits, until it has cooled.')
+    expect(heatNote({ ...COOL, cpu_temp: 84, gpu_temp: 86 })).toBe('The graphics card is at 86°C, at or over its limit of 85°C: a local model is not loaded, and embedding waits, until it has cooled.')
     expect(heatNote({ ...COOL, cpu_temp: 84, gpu_temp: 80 })).toBe('The processor is at 84°C, close to its limit of 90°C. The graphics card is at 80°C, close to its limit of 85°C.')
   })
 })
 
 describe('a run that waits for the machine to cool', () => {
   it('says what it waits for while it does', () => {
-    expect(waitingToCool([step()])).toBe('Waiting for the machine to cool before the local model is called: processor at 93 °C, limit 90 °C. The run goes on by itself.')
+    expect(waitingToCool([step()])).toBe('Waiting for the machine to cool before the local model is loaded: processor at 93 °C, limit 90 °C. The run goes on by itself.')
     expect(waitingToCool([step({ name: 'graphics card at 88 °C, limit 85 °C' })])).toContain('graphics card at 88 °C')
   })
 
@@ -67,7 +67,7 @@ describe('a run that waits for the machine to cool', () => {
     const answer: Message = { id: 'm1', chat_id: 'c1', parent_id: null, role: 'assistant', blocks: [], provider: 'ollama', model: 'qwen3:8b',
       fallback_from: null, status: 'streaming', created_at: '2026-11-22T10:00:00Z', siblings: ['m1'] }
 
-    it('the wait stands where the answer will, and goes when the model is called', async () => {
+    it('the wait stands where the answer will, and goes when the model is loaded', async () => {
       useStore.setState({ live: { runId: 'r1', chatId: 'c1', target: 'm1', steps: [step()] } })
       await act(async () => { root.render(createElement(MessageItem, { message: answer })) })
       expect(host.querySelector('[role="status"]')!.textContent).toContain('Waiting for the machine to cool')

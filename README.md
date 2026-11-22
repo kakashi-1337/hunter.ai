@@ -448,22 +448,32 @@ and `shift` are sent as false; Ollama then refuses instead), does not send a req
 is larger than the window by its own count, and says so: "The request does not fit the
 context window of the local model ...", with the two sizes and where to change the window.
 
-### A hot machine: a local model waits for it to cool
+### A hot machine: a local model is loaded when it has cooled
 
-An agent run is one model call after another for as long as the task takes. On a laptop
-that holds the graphics card at full load, and the processor that shares its cooling gets
-hot with it. A laptop that reaches its critical temperature switches itself off in the
-middle of the work, without a line in any log. So before every call to a model on this
-machine, the run's own and a subagent's, HunterAI reads two temperatures: the processor's
-(from `/sys/class/hwmon`) and the graphics card's (from `nvidia-smi`; the hottest card
-where there are several).
+Loading a model reads several GB with the processor at full power. On a laptop that is
+already hot, from a graphics card at full load and the processor that shares its cooling,
+that can take it to its critical temperature, where it switches itself off in the middle
+of the work without a line in any log. So before a call that has to load a model onto
+this machine, the run's own or a subagent's, HunterAI reads two temperatures: the
+processor's (from `/sys/class/hwmon`) and the graphics card's (from `nvidia-smi`; the
+hottest card where there are several).
 
 When one is at its limit, the run waits until that part is five degrees under it, then
 calls the model. The answer says "Waiting for the machine to cool before the local model
-is called ..." with the part and its temperature meanwhile, and the wait is a step of the
+is loaded ..." with the part and its temperature meanwhile, and the wait is a step of the
 run (`cooling`) in the trajectory. A part that has not cooled within three minutes ends
 the run: "Stopped: the processor is at 97 °C and did not cool to 85 °C within 3 minutes
 ...". The model was not called; send the message again when the machine has cooled.
+
+A model that is in memory already is called at once, however hot the machine is. The heat
+is then the model's own: a laptop can be at 96 to 98 °C on the processor, and 86 °C on the
+card, all the while its local model answers. A wait before each of those calls cools
+nothing for long and makes every step of a run slow. So the wait comes where a load does:
+at the first call to a model, at the first call after Ollama dropped it from memory (five
+minutes without a call, unless Ollama is set otherwise), and when a chat changes to another
+local model. When a part is hot, HunterAI asks Ollama what it holds (`/api/ps`); an Ollama
+that does not say is treated as one that has to load the model. A colibri server holds its
+model for as long as it runs.
 
 | Variable | Limit of | Unless set |
 |---|---|---|
@@ -477,8 +487,11 @@ model.
 
 What it does not do:
 
-- It looks before a call, not during one. A call that has started runs to its end, however
-  hot the machine gets meanwhile.
+- It looks before a model is loaded, not while one works. A model in memory answers however
+  hot the machine is, and a call that has started runs to its end.
+- A model counts as in memory when Ollama lists it under its name. Ollama loads a model
+  anew when a call asks for another window than the one it was loaded with (a chat with
+  its own window, a changed setting); that load is not waited for.
 - Only an NVIDIA card is read. Its driver puts no temperature under `/sys/class/hwmon`, so
   `nvidia-smi` is asked, every two seconds at most. A machine without that program, or
   with another make of card, is guarded by the processor's temperature alone.
@@ -487,8 +500,10 @@ What it does not do:
   cloud (their tag ends in `cloud`).
 - The short calls of the decision model (answer check, risk gate) and the summary of a long
   chat are not looked at.
-- 85 °C is a cautious guess at "hot" for a graphics card, not a figure from the maker of
-  yours. If your card is warmer than that in normal work, runs pause often: raise the limit.
+- 90 °C and 85 °C are cautious guesses at "too hot to load a model", not figures from the
+  makers of your parts. A machine that is over them in ordinary work, as the laptop above
+  is, waits at each load in the middle of that work: the model that reads pictures, or
+  another model for the chat. Raise a limit when those waits are too many.
 
 ### colibri: large models from memory and storage
 
@@ -1215,8 +1230,8 @@ text OCR read is also given to the model, to spell what it sees.
 
 A local model is not loaded while the processor is at 90 C or the graphics card at 85 C: the
 call waits up to a minute for that part to cool, then answers with the OCR text alone and
-says why. A laptop cuts its power at the processor's critical temperature without a line in
-any log. `HUNTERAI_MAX_CPU_TEMP` and `HUNTERAI_MAX_GPU_TEMP` set the limits in C (`off`
+says why. A model that is still in memory from the picture before looks at once. A laptop
+cuts its power at the processor's critical temperature without a line in any log. `HUNTERAI_MAX_CPU_TEMP` and `HUNTERAI_MAX_GPU_TEMP` set the limits in C (`off`
 removes one).
 
 ### A picture is decoded before a model gets it

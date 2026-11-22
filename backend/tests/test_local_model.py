@@ -75,6 +75,15 @@ async def test_the_local_model_in_use_is_described_with_what_its_window_costs(cl
 
 
 @respx.mock
+async def test_a_model_ollama_lists_with_the_tag_it_was_not_given_is_the_same_model(client):
+    # Ollama writes "latest" where a model was pulled or called without a tag.
+    await client.put("/api/settings", json={"fallback_model": "mimo"})
+    ollama_with(installed=("mimo:latest",), loaded=[{"name": "mimo:latest", "size": 6 * GB, "size_vram": 6 * GB, "context_length": 16384}])
+    got = (await client.get("/api/system/local")).json()
+    assert (got["model"], got["installed"]) == ("mimo", True) and got["loaded"]["context"] == 16384
+
+
+@respx.mock
 async def test_a_window_too_small_for_the_rules_and_tools_names_the_size_that_is_enough(client, monkeypatch):
     ollama_with()
 
@@ -124,3 +133,65 @@ async def test_the_diagnostics_name_the_local_model_its_window_and_what_runs_now
     assert "\nLocal models loaded: qwen3:8b (6.0 GB, 50%/50% CPU/GPU, window 16,384)\n" in text
     assert "\nLocal model in use: qwen3:8b, window 16,384 of its own 40,960; about 0.9 GB for each 8,192 tokens of window\n" in text
     assert "\nA new chat sends about " in text and " tokens of rules and tools (" in text
+
+
+# ---- what Ollama holds in memory
+
+PS = HOST + "/api/ps"
+
+
+@respx.mock
+@pytest.mark.parametrize("held, model, want", [
+    (["qwen3:8b"], "qwen3:8b", True),
+    (["bge-m3:latest", "qwen3:8b"], "qwen3:8b", True),
+    (["qwen3:latest"], "qwen3", True),                                    # Ollama writes the tag it was not given
+    (["qwen3"], "qwen3:latest", True),
+    (["bge-m3:latest"], "qwen3:8b", False),
+    ([], "qwen3:8b", False),
+    (["qwen3:8b-q4_K_M"], "qwen3:8b", False),                             # another model whose name begins alike
+    (["qwen3:8b"], "qwen3", False),                                       # "qwen3" is qwen3:latest, not any qwen3
+])
+async def test_ollama_is_asked_whether_a_model_is_in_memory(held, model, want):
+    respx.get(PS).mock(return_value=httpx.Response(200, json={"models": [{"name": n, "model": n, "size": 1} for n in held]}))
+    assert await ollama.in_memory(model) is want
+
+
+@respx.mock
+async def test_a_model_is_found_under_either_of_the_names_ollama_gives_it():
+    respx.get(PS).mock(return_value=httpx.Response(200, json={"models": [{"model": "qwen3:8b"}, {"name": "eyes:9b"}, "odd", None]}))
+    assert await ollama.in_memory("qwen3:8b") is True and await ollama.in_memory("eyes:9b") is True
+    assert await ollama.in_memory("odd") is False
+
+
+@respx.mock
+@pytest.mark.parametrize("answer", [
+    httpx.ConnectError("refused"), httpx.ReadTimeout("no answer in time"),
+    httpx.Response(500, text="oops"), httpx.Response(404, json={"error": "an Ollama too old to have the route"}),
+    httpx.Response(200, text="not json"), httpx.Response(200, json=["a", "list"]), httpx.Response(200, json={"models": "none"}),
+    httpx.Response(200, json={}),
+])
+async def test_an_ollama_that_does_not_say_what_it_holds_is_not_guessed_at(answer):
+    respx.get(PS).mock(side_effect=answer) if isinstance(answer, Exception) else respx.get(PS).mock(return_value=answer)
+    assert await ollama.in_memory("qwen3:8b") is None
+
+
+@respx.mock
+async def test_the_question_goes_straight_to_ollama_and_does_not_wait_long(monkeypatch):
+    # A proxy named in the environment is for the providers out there, not for a program on this machine. And the
+    # question stands before a call: an Ollama that is slow to answer it is taken as one that does not say.
+    monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:9")
+    monkeypatch.setenv("ALL_PROXY", "http://127.0.0.1:9")
+    seen = []
+    real = httpx.AsyncClient
+    monkeypatch.setattr(ollama.httpx, "AsyncClient", lambda **kw: (seen.append(kw), real(**kw))[1])
+    respx.get(PS).mock(return_value=httpx.Response(200, json={"models": [{"name": "qwen3:8b"}]}))
+    assert await ollama.in_memory("qwen3:8b") is True
+    assert [kw["trust_env"] for kw in seen] == [False]
+    assert seen[0]["timeout"].read <= 5 and seen[0]["timeout"].connect <= 5
+
+
+@respx.mock
+async def test_the_ollama_that_is_asked_is_the_one_the_calls_go_to(monkeypatch):
+    monkeypatch.setenv("OLLAMA_HOST", "localhost:11500")
+    asked = respx.get("http://localhost:11500/api/ps").mock(return_value=httpx.Response(200, json={"models": [{"name": "qwen3:8b"}]}))
+    assert await ollama.in_memory("qwen3:8b") is True and asked.called

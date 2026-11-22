@@ -79,6 +79,29 @@ def host() -> str:
     return h.replace("0.0.0.0", "127.0.0.1")
 
 
+ASK = httpx.Timeout(3.0, connect=2.0)       # for what Ollama holds in memory: it is asked before a call, not instead of one
+
+
+def same_model(a: str, b: str) -> bool:
+    """Whether two names mean one model: Ollama writes the tag "latest" where it was given none."""
+    return a == b or a + ":latest" == b or a == b + ":latest"
+
+
+async def in_memory(model: str) -> bool | None:
+    """Whether Ollama holds this model in memory now, as /api/ps lists it. None when Ollama does not say: it does
+    not answer, or what answers has no such list (an Ollama from before it had the route)."""
+    try:
+        async with httpx.AsyncClient(timeout=ASK, trust_env=False) as client:
+            r = await client.get(host() + "/api/ps")
+        held = r.json().get("models")
+    except (httpx.HTTPError, ValueError, AttributeError):
+        return None
+    if not isinstance(held, list):
+        return None
+    return any(same_model(str(entry[key]), model) for entry in held if isinstance(entry, dict)
+               for key in ("name", "model") if entry.get(key))
+
+
 def _is_embedder(name: str) -> bool:
     n = name.lower()
     return "embed" in n or n.startswith("bge-")

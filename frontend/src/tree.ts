@@ -511,7 +511,7 @@ export function heat(s: SystemStatus): '' | 'warn' | 'bad' {
 export function heatNote(s: SystemStatus): string {
   const level = heat(s)
   const say = (p: Hot) => (level === 'bad'
-    ? `The ${p.name} is at ${Math.round(p.degrees)}°C, at or over its limit of ${p.limit}°C: a local model is not called, and embedding waits, until it has cooled.`
+    ? `The ${p.name} is at ${Math.round(p.degrees)}°C, at or over its limit of ${p.limit}°C: a local model is not loaded, and embedding waits, until it has cooled.`
     : `The ${p.name} is at ${Math.round(p.degrees)}°C, close to its limit of ${p.limit}°C.`)
   return level ? heatParts(s).filter((p) => heatOf(p) === level).map(say).join(' ') : ''
 }
@@ -519,7 +519,7 @@ export function heatNote(s: SystemStatus): string {
 /** What a live run waits for while it waits for the machine to cool, from its steps. Null when it does not wait. */
 export function waitingToCool(steps: Step[]): string | null {
   const going = [...steps].reverse().find((s) => s.kind === 'cooling' && !s.ended_at)
-  return going ? `Waiting for the machine to cool before the local model is called: ${going.name}. The run goes on by itself.` : null
+  return going ? `Waiting for the machine to cool before the local model is loaded: ${going.name}. The run goes on by itself.` : null
 }
 
 /** The line at the bottom of the sidebar: the models that hold memory now, Ollama's and the one a colibri server
