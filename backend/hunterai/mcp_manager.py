@@ -21,9 +21,10 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
-from mcp import ClientSession, StdioServerParameters
+from mcp import ClientSession, MCPError, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
+from mcp_types import CONNECTION_CLOSED
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, model_validator
 
 from . import config, mcp_scan, rea_tools
@@ -34,8 +35,12 @@ from .types import Risk
 INIT_TIMEOUT = 20.0
 CALL_TIMEOUT = 120.0
 CANCEL_GRACE = 5.0
-MAX_RESTARTS = 1            # after an unexpected end, for the manager's lifetime
+MAX_RESTARTS = 5            # after an unexpected end of a server that had come up, within RESTART_WINDOW
+RESTART_WINDOW = 600.0      # seconds; a server that stops more often than that is left alone
+MAX_FAILED_STARTS = 1       # in a row: a server that does not come up is tried once more
 MAX_FORCED_RESTARTS = 5     # after a call that timed out or stayed busy
+ALIVE_EVERY = 5.0           # seconds between two looks at whether the process of a stdio server is still there
+ENDED_IDLE = "its process ended while nobody called it"
 WALK_DEPTH = 5
 MAX_TOOL_PAGES = 50
 MAX_TOOLS = 2000
@@ -316,6 +321,21 @@ def _kill_group(pidfile: Path) -> None:
             pass
 
 
+def _alive(pidfile: Path) -> bool:
+    """Whether the process a stdio server was started as is still there. True when that cannot be told."""
+    try:
+        os.kill(int(pidfile.read_text().strip()), 0)
+    except ProcessLookupError:
+        return False
+    except (OSError, ValueError):
+        return True
+    return True
+
+
+class _Gone(Exception):
+    """The session ended under a call. The task that owns the server has been told to start it again."""
+
+
 class ServerStatus(BaseModel):
     name: str
     transport: str
@@ -336,6 +356,8 @@ class _Server:
         self.error: str | None = None
         self.restarts = 0
         self.forced = 0
+        self.ended: list[float] = []      # when it stopped after it had come up, within RESTART_WINDOW
+        self.failed_starts = 0            # in a row
         self.session: ClientSession | None = None
         self.task: asyncio.Task | None = None
         self.wake = asyncio.Event()       # stop, forced restart, or a broken session
@@ -474,6 +496,7 @@ class Manager:
             srv.wake.clear()
             srv.force = False
             seen: dict = {}
+            came_up = False
             try:
                 async with AsyncExitStack() as stack:
                     errlog = stack.enter_context(
@@ -484,13 +507,14 @@ class Manager:
                     await session.initialize()
                     skipped = await self._register(srv, session)
                     srv.session, srv.state = session, "ready"
+                    came_up, srv.failed_starts = True, 0
                     notes = [("skipped tools: " + ", ".join(skipped))] if skipped else []
                     held = _held(srv)
                     if held:
                         notes.append(f"{len(held)} tool(s) held for review by the scanner: " + ", ".join(held)[:300])
                     srv.error = "; ".join(notes) or None
                     srv.settled.set()
-                    await srv.wake.wait()
+                    await self._until_it_ends(srv)
             except asyncio.CancelledError:
                 raise
             except BaseException as e:  # noqa: BLE001 - a broken server must not end the app
@@ -505,17 +529,45 @@ class Manager:
             if srv.force:
                 if srv.forced > MAX_FORCED_RESTARTS:
                     break
-            elif srv.restarts >= MAX_RESTARTS:
-                break
-            else:
+            elif not came_up:
+                if srv.failed_starts >= MAX_FAILED_STARTS:
+                    break
+                srv.failed_starts += 1
                 srv.restarts += 1
                 srv.error = srv.error or "the server stopped"
+            else:
+                # A server that worked and stopped is started again every time. One that keeps stopping is left alone:
+                # starting it over and over would only hide that it does not work.
+                now = time.monotonic()
+                srv.ended = [t for t in srv.ended if now - t < RESTART_WINDOW] + [now]
+                srv.error = srv.error or "the server stopped"
+                if len(srv.ended) > MAX_RESTARTS:
+                    srv.error = (f"it stopped {len(srv.ended)} times within {RESTART_WINDOW / 60:.0f} minutes and was not "
+                                 f"started again; the last time: {srv.error}")
+                    break
+                srv.restarts += 1
             srv.state = "restarting"
             srv.settled.clear()
         if not self._stopping:
             srv.state = "dead"
             srv.error = srv.error or "the server stopped"
         srv.settled.set()
+
+    async def _until_it_ends(self, srv: _Server) -> None:
+        """Returns when the server has to be ended: a stop, a forced restart, a session that broke under a call.
+        The process of a stdio server is looked at every ALIVE_EVERY seconds as well: it can end while nobody
+        calls it, and nothing else says so before the next call fails."""
+        if srv.cfg.transport != "stdio":
+            await srv.wake.wait()
+            return
+        pidfile = self._pidfile(srv.cfg)
+        while not srv.wake.is_set():
+            try:
+                await asyncio.wait_for(srv.wake.wait(), ALIVE_EVERY)
+            except TimeoutError:
+                if not _alive(pidfile):
+                    srv.error = ENDED_IDLE
+                    return
 
     async def _register(self, srv: _Server, session: ClientSession) -> list[str]:
         cfg, skipped, cursor, pages = srv.cfg, [], None, 0
@@ -628,12 +680,59 @@ class Manager:
         srv.state = "restarting"
         srv.wake.set()
 
+    @staticmethod
+    def _broken(srv: _Server, session: ClientSession | None, why: str) -> None:
+        """The session is gone (child exit, EOF, transport error): have the task that owns the server start it
+        again. Nothing when that was said already."""
+        if session is not None and srv.session is session:
+            srv.session = None
+            srv.state = "restarting"
+            srv.error = why
+            srv.settled.clear()
+            srv.wake.set()
+
+    async def _back(self, srv: _Server) -> bool:
+        """Whether the server is ready again after it was found gone. Waits as long as a start may take."""
+        try:
+            await asyncio.wait_for(srv.settled.wait(), INIT_TIMEOUT)
+        except TimeoutError:
+            return False
+        return self.available(srv.cfg.name)
+
     async def call_tool(self, server: str, tool: str, arguments: dict,
                         timeout: float = CALL_TIMEOUT) -> ToolResult:
+        """One call of a tool of this server. A stdio server whose process ended while nobody called it is
+        started again first: the call is not lost to it. A server that stops under the call is started again
+        too, and the call is made once more only when the server is one that only reads (risk "read"): any
+        other may have done part of its work."""
         srv = self._servers.get(server)
+        if (srv is not None and self.available(server) and srv.cfg.transport == "stdio"
+                and not _alive(self._pidfile(srv.cfg))):
+            self._broken(srv, srv.session, ENDED_IDLE)
+            await self._back(srv)
         if srv is None or not self.available(server):
-            raise ToolError(f"MCP server {server} is not available")
-        session = srv.session
+            why = (srv.error or "")[:300] if srv is not None else ""
+            raise ToolError(f"MCP server {server} is not available" + (f": {why}" if why else ""))
+        try:
+            return await self._call(srv, tool, arguments, timeout)
+        except _Gone:
+            pass
+        printed = f"What the server printed is in {config.logs_dir() / f'mcp-{server}.log'}."
+        if srv.cfg.risk != "read":
+            raise ToolError(f"MCP server {server} stopped while it ran this call. It is being started again. The call was "
+                            f"not repeated: it may have done part of its work. Call it again if that is safe. {printed}")
+        if not (await self._back(srv) and tool_name(server, tool) in srv.tools):
+            raise ToolError(f"MCP server {server} stopped while it ran this call, and the call could not be made again: "
+                            f"the server did not come up, or no longer offers this tool. {printed}")
+        try:
+            return await self._call(srv, tool, arguments, timeout)
+        except _Gone:
+            raise ToolError(f"MCP server {server} stopped twice while it ran this call: once more after it was started "
+                            f"again. The call seems to be what stops it. {printed}") from None
+
+    async def _call(self, srv: _Server, tool: str, arguments: dict, timeout: float) -> ToolResult:
+        """One call on the session the server has now. _Gone when the session ends under it."""
+        server, session = srv.cfg.name, srv.session
         fut = asyncio.ensure_future(session.call_tool(tool, arguments))
         try:
             done, _ = await asyncio.wait({fut}, timeout=timeout)
@@ -658,14 +757,16 @@ class Manager:
             return _text(fut.result())
         except asyncio.CancelledError:
             raise ToolError(f"MCP server {server} stopped") from None
+        except MCPError as e:
+            if e.code != CONNECTION_CLOSED:
+                # The server answered, with an error of its own in place of a result: it runs, and is left running.
+                return ToolResult(f"The server answered with an error instead of a result: {str(e.message)[:2000]} "
+                                  f"(code {e.code})", is_error=True)
+            self._broken(srv, session, f"{type(e).__name__}: {str(e)[:300]}")
+            raise _Gone from None
         except Exception as e:
-            # The session is gone (child exit, EOF, transport error): let the owner restart it.
-            if srv.session is session:
-                srv.session = None
-                srv.state = "restarting"
-                srv.error = f"{type(e).__name__}: {str(e)[:300]}"
-                srv.wake.set()
-            raise ToolError(f"MCP server {server} stopped") from None
+            self._broken(srv, session, f"{type(e).__name__}: {str(e)[:300]}")
+            raise _Gone from None
 
 
 manager: Manager | None = None

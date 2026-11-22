@@ -12,6 +12,7 @@ import sys
 import time
 from pathlib import Path
 
+from mcp import MCPError
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
@@ -37,6 +38,22 @@ def fail() -> str:
 @mcp.tool()
 def die() -> str:
     os._exit(1)
+
+
+if not Path(os.environ.get("FAKE_WITHOUT_DIE_ONCE_IF") or "/nonexistent").exists():
+    @mcp.tool()
+    def die_once(marker: str) -> str:
+        """Ends the server the first time it is called with this marker file, and answers from then on."""
+        if Path(marker).exists():
+            return "survived"
+        Path(marker).write_text("x")
+        os._exit(1)
+
+
+@mcp.tool()
+def refuse() -> str:
+    """Answers with an error of the protocol in place of a result, and goes on running."""
+    raise MCPError(-32603, "the index is not built yet")
 
 
 @mcp.tool()

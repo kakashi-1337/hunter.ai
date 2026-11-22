@@ -1035,6 +1035,23 @@ Settings restarts that server only.
 its state; each can be switched, checked (restart, ping time, what it printed, and a hint
 when the output looks like a missing runtime, dependency, or key), edited, or removed.
 
+**When a server stops.** A server that worked and then stopped is started again, every
+time it stops. The process of a stdio server is looked at every five seconds, so one that
+ended while nobody called it is back before the next call; a call that still finds it gone
+waits for the restart instead of failing. A server that stops while it runs a call is
+started again as well, and the call is made once more only when the server's `risk` is
+`read`. With any other risk the call may have done part of its work: the model is told
+that it was not repeated, and can call again. A server that stops more than five times
+within ten minutes is left alone ("not working" in the setup check, with the reason);
+switch it off and on under "Manage MCP servers" to try again. One that does not come up
+at all gets one more try, as before.
+
+An error a server answers with in place of a result is not a stop. It goes to the model as
+the tool's error ("The server answered with an error instead of a result: ..."), and the
+server keeps running. Until now such an answer was taken for a stop: the server was ended
+and started again, and after the second one it stayed off until HunterAI was restarted.
+What a server printed is in `~/.hunterai/logs/mcp-<name>.log`.
+
 "Add from a repo, package, or config" takes a GitHub or GitLab URL, an npm package
 (`npm:@scope/name`, with a version or a tag after it if you want one: `@1.2.3`, `@latest`),
 a PyPI package (`pypi:name`, or `pypi:name==1.2.3`), an npmjs.com or pypi.org page, a
