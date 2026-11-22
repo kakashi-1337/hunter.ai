@@ -200,8 +200,8 @@ describe('losing the live stream', () => {
   it('clears the prompt at once when the stream is lost, and gives up when the reload fails', async () => {
     runsByChat['A'] = [run('r1', 'running')]
     await useStore.getState().openChat('A')
-    const [, onEvent, onLost] = stream.mock.calls[0]
-    onEvent({ type: 'permission_request', request: { id: 'p1', tool_call_id: 'c1' } } as never)
+    const [, onEvents, onLost] = stream.mock.calls[0]
+    onEvents([{ type: 'permission_request', request: { id: 'p1', tool_call_id: 'c1' } } as never])
     expect(useStore.getState().asks.map((a) => a.id)).toEqual(['p1'])
     m.getChat.mockRejectedValueOnce(new Error('down'))
     onLost()
@@ -216,6 +216,81 @@ describe('losing the live stream', () => {
     m.answerPermission.mockResolvedValue({ ok: true })
     await useStore.getState().answer('p1', 'deny', 'no')
     expect(m.answerPermission).toHaveBeenCalledWith('r1', 'p1', 'deny', 'no')
+  })
+})
+
+describe('the events of a live run, handed over in batches', () => {
+  const step = (id: string, kind = 'tool_call', over: Record<string, unknown> = {}) => ({ id, run_id: 'r1', seq: 1, kind, name: 'x', status: 'running', started_at: 't', ended_at: null, input_tokens: 0, output_tokens: 0, detail: {}, parent_step_id: null, ...over }) as never
+  const live = async () => {
+    runsByChat['A'] = [run('r1', 'running')]
+    await useStore.getState().openChat('A')
+    return stream.mock.calls[0][1]
+  }
+  const text = () => {
+    const last = useStore.getState().messages.at(-1) as unknown as { blocks: { type: string; text?: string }[] }
+    return last.blocks.filter((b) => b.type === 'text').map((b) => b.text).join('')
+  }
+
+  it('a batch changes the page once, however many events it holds', async () => {
+    const onEvents = await live()
+    m.listQueue.mockClear()
+    let changes = 0
+    const off = useStore.subscribe(() => { changes += 1 })
+    onEvents([
+      { type: 'run_started', run_id: 'r1', assistant_message_id: 'a-r1' }, { type: 'step_started', step: step('s1', 'model_call') },
+      ...Array.from({ length: 200 }, (_, i) => ({ type: 'text_delta' as const, text: `w${i} ` })),
+      { type: 'step_finished', step: step('s1', 'model_call', { status: 'done', ended_at: 't2' }) }, { type: 'step_started', step: step('s2') },
+    ])
+    off()
+    expect(changes).toBe(1)
+    expect(text()).toBe(Array.from({ length: 200 }, (_, i) => `w${i} `).join(''))
+    expect(useStore.getState().live!.steps.map((s) => [s.id, s.status])).toEqual([['s1', 'done'], ['s2', 'running']])
+    expect(m.listQueue).not.toHaveBeenCalled()               // the agent read no waiting message in it
+  })
+
+  it('what a batch asks and answers within itself is not left asked', async () => {
+    const onEvents = await live()
+    onEvents([
+      { type: 'permission_request', request: { id: 'p1', tool_call_id: 'c1' } as never },
+      { type: 'permission_resolved', request_id: 'p1', tool_call_id: 'c1', answer: 'allow_once', note: '' },
+      { type: 'permission_request', request: { id: 'p2', tool_call_id: 'c2' } as never },
+      { type: 'tool_started', tool_call_id: 'c1', step_id: 's1' }, { type: 'tool_started', tool_call_id: 'c3', step_id: 's3' },
+      { type: 'tool_finished', tool_call_id: 'c1', content: 'ok', is_error: false, duration_ms: 3 },
+    ])
+    expect(useStore.getState().asks.map((a) => a.id)).toEqual(['p2'])
+    expect(useStore.getState().runningCalls).toEqual(['c3'])
+  })
+
+  it('the end of the run inside a batch ends the run, and what stands after it in the batch is not applied', async () => {
+    const onEvents = await live()
+    runsByChat['A'] = [run('r1', 'done')]
+    onEvents([
+      { type: 'run_started', run_id: 'r1', assistant_message_id: 'a-r1' }, { type: 'text_delta', text: 'done.' },
+      { type: 'run_finished', status: 'done', error: null, totals: {} as never, message: null },
+      { type: 'permission_request', request: { id: 'late', tool_call_id: 'c9' } as never },
+    ])
+    expect(useStore.getState().live).toBeNull()
+    expect(useStore.getState().asks).toEqual([])
+    await vi.waitFor(() => expect(m.getRun).toHaveBeenCalledWith('r1'))
+  })
+
+  it('the waiting messages are asked for once when the agent read some in a batch', async () => {
+    const onEvents = await live()
+    m.listQueue.mockClear()
+    const note = (id: string) => ({ type: 'step_finished' as const, step: step(id, 'user_note', { status: 'done', ended_at: 't2', detail: { text: 'skip host b' } }) })
+    onEvents([{ type: 'run_started', run_id: 'r1', assistant_message_id: 'a-r1' }, note('n1'), { type: 'text_delta', text: 'ok' }, note('n2')])
+    await vi.waitFor(() => expect(m.listQueue).toHaveBeenCalled())
+    expect(m.listQueue).toHaveBeenCalledTimes(1)
+  })
+
+  it('a batch for a chat that is no longer open changes nothing', async () => {
+    const onEvents = await live()
+    runsByChat['B'] = [run('r2', 'running')]                 // the other chat has a run of its own that is followed
+    await useStore.getState().openChat('B')
+    expect(useStore.getState().live?.runId).toBe('r2')
+    const before = useStore.getState().messages
+    onEvents([{ type: 'run_started', run_id: 'r1', assistant_message_id: 'a-r1' }, { type: 'text_delta', text: 'late' }])
+    expect(useStore.getState().messages).toBe(before)
   })
 })
 

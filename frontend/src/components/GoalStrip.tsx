@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import * as api from '../api'
+import { useSettled } from '../settled'
 import { useStore } from '../store'
 import { goalLine, goalMark, helpers, visible } from '../tree'
 import type { Goal } from '../types'
@@ -26,7 +27,7 @@ export function GoalStrip() {
   const chatId = useStore((s) => s.chat?.id || undefined)
   const steps = useStore((s) => s.live?.steps ?? s.runDetail?.steps)
   const busy = useStore((s) => s.live !== null)
-  const count = steps?.length ?? 0
+  const count = useSettled(steps?.length ?? 0)      // the steps a replay brings within a moment ask for the goal once
   const [goal, setGoal] = useState<Goal | null>(null)
   const [open, setOpen] = useState(() => { try { return localStorage.getItem('goal-strip') !== 'closed' } catch { return true } })
   useEffect(() => {
