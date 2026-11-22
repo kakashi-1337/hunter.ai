@@ -390,13 +390,16 @@ button.link:hover:not(:disabled) { background: none; color: var(--text); }
 .activity-table td { padding: 3px 8px 3px 0; border-bottom: 1px solid var(--line); }
 
 /* messages waiting for the agent's next step */
-.queued { display: flex; flex-direction: column; gap: 3px; margin: 0 0 6px; }
-.queued-item { display: flex; align-items: flex-start; gap: 6px; border: 1px dashed var(--line); border-radius: 6px; padding: 3px 8px; font-size: 12.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.queued { display: flex; flex-direction: column; gap: 3px; margin: 0 0 6px; max-height: 40vh; overflow-y: auto; }
+.queued-item { display: flex; align-items: flex-start; gap: 6px; border: 1px dashed var(--line); border-radius: 6px; padding: 3px 8px; font-size: 12.5px; }
+.queued-item .grow { min-width: 0; }
+.queued-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 .step[data-kind="user_note"] .kind { color: var(--info); }
 
 /* the owner's queued message, shown where the agent read it */
 .owner-note { margin: 8px 0; }
-.owner-note .k { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--info); margin-bottom: 3px; }
+.owner-note .k { display: flex; align-items: center; font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--info); margin-bottom: 3px; }
+.owner-note .k .tools { text-transform: none; letter-spacing: 0; }
 .owner-note .bubble { border-left: 3px solid var(--info); }
 
 /* HunterAI's own confirm and prompt dialogs: above every other dialog */

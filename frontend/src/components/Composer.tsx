@@ -3,7 +3,37 @@ import * as api from '../api'
 import { GO_TEXT, slashCommand, slashMenu, type SlashContext, type SlashItem, type SlashResult } from '../slash'
 import { useChatView, useStore } from '../store'
 import { pruneOptions } from '../tree'
-import type { Upload } from '../types'
+import type { QueuedMessage, Upload } from '../types'
+import { copyText } from './Markdown'
+
+const FOLD_LINES = 3
+const FOLD_CHARS = 300
+
+/** A message that waits for the agent. A long one is folded: the list stands above the message box, and one long
+ * message took the screen. It can be copied, and taken back into the message box to be changed. */
+function Waiting({ q, onEdit, onRemove }: { q: QueuedMessage; onEdit: () => void; onRemove: () => void }) {
+  const [open, setOpen] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const lines = q.text.split('\n')
+  const long = lines.length > FOLD_LINES || q.text.length > FOLD_CHARS
+  const shown = !long || open ? q.text : lines.slice(0, FOLD_LINES).join('\n').slice(0, FOLD_CHARS)
+  const size = lines.length > FOLD_LINES ? `${lines.length.toLocaleString('en-US')} lines` : `${q.text.length.toLocaleString('en-US')} characters`
+  const copy = async () => {
+    setCopied(await copyText(q.text))
+    setTimeout(() => setCopied(false), 1200)
+  }
+  return (
+    <div className="queued-item">
+      <div className="grow">
+        <div className="queued-text">{shown}</div>
+        {long && <div className="hint">{open ? '' : `… ${size} in all. `}<button className="link" onClick={() => setOpen((o) => !o)}>{open ? 'Show less' : 'Show all'}</button></div>}
+      </div>
+      <button className="icon" title="Take it back into the message box to change it" onClick={onEdit}>Edit</button>
+      <button className="icon" onClick={() => void copy()}>{copied ? 'Copied' : 'Copy'}</button>
+      <button className="icon" aria-label="Remove this waiting message" title="Remove" onClick={onRemove}>✕</button>
+    </div>
+  )
+}
 
 export function Composer() {
   const busy = useStore((s) => s.live !== null)
@@ -165,8 +195,8 @@ export function Composer() {
               <div className="hint">{busy ? 'Waiting for the agent\'s next step. Nothing is interrupted: it reads them when the tool it is running has finished, or they are sent when it ends.'
                 : 'The run ended before these were read.'}{!busy && <> <button className="link" onClick={() => void sendQueued()}>Send them now</button></>}</div>
               {queued.map((q) => (
-                <div key={q.id} className="queued-item"><span className="grow">{q.text}</span>
-                  <button className="icon" aria-label="Remove this waiting message" title="Remove" onClick={() => void unqueue(q.id)}>✕</button></div>
+                <Waiting key={q.id} q={q} onRemove={() => void unqueue(q.id)}
+                  onEdit={() => { void unqueue(q.id); edit(text.trim() ? `${text}\n\n${q.text}` : q.text); area.current?.focus() }} />
               ))}
             </div>
           )}
