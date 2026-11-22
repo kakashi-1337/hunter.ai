@@ -464,8 +464,10 @@ the run: "Stopped: the processor is at 97 °C and did not cool to 85 °C within 
 | `HUNTERAI_MAX_CPU_TEMP` | the processor | 90 °C |
 | `HUNTERAI_MAX_GPU_TEMP` | the graphics card | 85 °C |
 
-`off` (or `0`) removes a limit. The same two limits hold up an embedding job before each
-batch, and `look_at_image` before it loads its model.
+`off` (or `0`) removes a limit. Write them into `.env`, or set them where HunterAI is
+started; they are read anew each time, so no restart is needed for the file. The same two
+limits hold up an embedding job before each batch, and `look_at_image` before it loads its
+model.
 
 What it does not do:
 

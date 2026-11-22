@@ -1,6 +1,6 @@
 import time
 
-from hunterai import thermal
+from hunterai import config, thermal
 from hunterai.thermal import Part
 
 CPU = {"name": "processor", "limit": 90.0, "setting": "HUNTERAI_MAX_CPU_TEMP"}
@@ -44,6 +44,16 @@ def test_the_limit_can_be_set_or_turned_off(monkeypatch):
     for raw, want in (("85", 85.0), ("off", None), ("0", None), ("hot", thermal.DEFAULT_LIMIT)):
         monkeypatch.setenv("HUNTERAI_MAX_CPU_TEMP", raw)
         assert thermal.limit() == want
+
+
+def test_a_limit_written_in_the_settings_file_is_read(monkeypatch):
+    # .env.example says to write it there. The file is not put into the environment of the process, so a limit that
+    # was only looked for in that environment stayed at its default whatever the file said.
+    default_limits(monkeypatch)
+    config.env_file().write_text("HUNTERAI_MAX_CPU_TEMP=70\nHUNTERAI_MAX_GPU_TEMP=off\n")
+    assert thermal.limit() == 70.0 and thermal.gpu_limit() is None
+    monkeypatch.setenv("HUNTERAI_MAX_CPU_TEMP", "95")                      # what the process was started with comes first
+    assert thermal.limit() == 95.0
 
 
 def test_the_graphics_card_has_a_limit_of_its_own(monkeypatch):

@@ -6,13 +6,14 @@ the processor that shares its cooling."""
 from __future__ import annotations
 
 import asyncio
-import os
 import shutil
 import subprocess
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
+
+from . import config
 
 HWMON = Path("/sys/class/hwmon")
 SENSORS = ("coretemp", "k10temp", "zenpower")
@@ -40,7 +41,9 @@ class Part:
 
 
 def _limit(setting: str, default: float) -> float | None:
-    raw = (os.environ.get(setting) or "").strip().lower()
+    # Read as the keys are: what the process was started with, then the settings file. The file is not put into
+    # the environment of the process, and .env.example says to write a limit there.
+    raw = (config.env(setting) or "").strip().lower()
     if raw in ("0", "off"):
         return None
     try:
