@@ -140,7 +140,18 @@ async def create_chat(body: ChatIn, conn=Depends(get_conn)):
     chat = await chats.create(conn, body.target_id, body.mode, provider, model, body.options,
                               persona.id if persona else None)
     await _persona_collections(conn, chat.id, persona)
+    await _collections_of_every_chat(conn, chat.id)
     return chat
+
+
+async def _collections_of_every_chat(conn, chat_id: str) -> None:
+    """The collections the owner named for every new chat (the Knowledge control above the message box), beside
+    those of the persona. Without them a new chat has none, and the model's kb_search finds nothing to search."""
+    from ..repo import kb
+    named = await kb.new_chat_collections(conn)
+    if named:
+        have = (await kb.get_chat_kb(conn, chat_id)).collection_ids
+        await kb.set_chat_kb(conn, chat_id, collection_ids=[*have, *named])
 
 
 async def _persona_collections(conn, chat_id: str, persona) -> None:

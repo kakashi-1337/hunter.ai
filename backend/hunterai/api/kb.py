@@ -576,6 +576,23 @@ async def run_search(body: SearchIn, conn=Depends(get_conn)):
     return {"hits": hits, "duration_ms": int((time.monotonic() - began) * 1000)}
 
 
+class NewChatsIn(BaseModel):
+    collection_ids: list[str]
+
+
+@router.get("/new-chats")
+async def get_new_chats(conn=Depends(get_conn)):
+    """The collections every new chat starts with (see api/chats.py). A chat that exists is not touched by them."""
+    return {"collection_ids": await kb.new_chat_collections(conn)}
+
+
+@router.put("/new-chats")
+async def put_new_chats(body: NewChatsIn, conn=Depends(get_conn)):
+    for cid in body.collection_ids:
+        await _collection(conn, cid)
+    return {"collection_ids": await kb.set_new_chat_collections(conn, body.collection_ids)}
+
+
 @router.get("/chats/{chat_id}")
 async def get_chat_kb(chat_id: str, conn=Depends(get_conn)):
     if not await chats.get(conn, chat_id):
