@@ -32,7 +32,7 @@ import asyncio
 import dataclasses
 import json
 
-from . import db, hub, permissions, problems
+from . import cooling, db, hub, permissions, problems
 from .decision import engine as de
 from .modes import build_system
 from .providers import registry
@@ -107,7 +107,12 @@ async def _decision(conn, run_id: str, parent_step: str, name: str, state: str, 
 async def _model_call(conn, run_id: str, parent_step: str, provider_name: str, model: str, system: str,
                       wire: list[WireMessage], options: Options, specs: list[ToolSpec],
                       blocks: list[Block], taken: set[str]) -> list[ToolCall]:
-    """One model call of the subagent; appends to `blocks`, returns the tool calls it made."""
+    """One model call of the subagent; appends to `blocks`, returns the tool calls it made. Like a call of the
+    run itself, one to a model on this machine waits for a hot machine to cool, and fails when it does not."""
+    try:
+        await cooling.before_call(conn, run_id, provider_name, model, parent_step)
+    except cooling.TooHot as e:
+        raise ProviderError("unavailable", str(e), complete=True) from None
     step = await runs.add_step(conn, run_id, "model_call", f"{provider_name}/{model}", {}, parent_step)
     await hub.publish(run_id, {"type": "step_started", "step": step.model_dump()})
     usage, status, detail, calls = Usage(0, 0), "error", {}, []

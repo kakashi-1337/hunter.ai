@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import * as api from '../api'
 import type { KbChunk, KbDocument } from '../types'
-import { FIRST_OF, duplicateJobs, jobEmpty, formatBytes, formatEta, formatRate, jobActions, jobProgress, jobRemovable, jobSource, relPath, sourceLabel } from '../kb'
+import { FIRST_OF, coolingNote, duplicateJobs, jobEmpty, formatBytes, formatEta, formatRate, jobActions, jobProgress, jobRemovable, jobSource, relPath, sourceLabel } from '../kb'
 import { useKb } from '../kbStore'
 import { visible } from '../tree'
 import { confirmBox, promptBox } from '../dialog'
@@ -123,7 +123,7 @@ function Queue() {
             <div className="hint">
               {p.label} · ok {s.ok ?? 0} · unchanged {s.unchanged ?? 0} · skipped {s.skipped ?? 0} · failed {s.failed ?? 0}
               {j.state === 'running' && <> · {formatRate(s.embed_rate)} · ETA {formatEta(s.eta_seconds)}</>}
-              {j.state === 'running' && typeof s.cooling === 'number' && <span className="warn-line"> · cooling down: the processor is at {Math.round(s.cooling)}°C, embedding goes on when it has dropped</span>}
+              {j.state === 'running' && coolingNote(s) && <span className="warn-line"> · {coolingNote(s)}</span>}
             </div>
             {jobEmpty(j) && <div className="warn-line">The source could not be fetched, so nothing was ingested. The reason is on its entry under Documents (filter: failed).</div>}
             {j.state === 'failed' && <div className="warn-line">{j.error} <span className="hint">Staged files are kept for Retry. Cancel frees the space; after 7 days the job is cancelled automatically.</span></div>}

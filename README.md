@@ -448,6 +448,48 @@ and `shift` are sent as false; Ollama then refuses instead), does not send a req
 is larger than the window by its own count, and says so: "The request does not fit the
 context window of the local model ...", with the two sizes and where to change the window.
 
+### A hot machine: a local model waits for it to cool
+
+An agent run is one model call after another for as long as the task takes. On a laptop
+that holds the graphics card at full load, and the processor that shares its cooling gets
+hot with it. A laptop that reaches its critical temperature switches itself off in the
+middle of the work, without a line in any log. So before every call to a model on this
+machine, the run's own and a subagent's, HunterAI reads two temperatures: the processor's
+(from `/sys/class/hwmon`) and the graphics card's (from `nvidia-smi`; the hottest card
+where there are several).
+
+When one is at its limit, the run waits until that part is five degrees under it, then
+calls the model. The answer says "Waiting for the machine to cool before the local model
+is called ..." with the part and its temperature meanwhile, and the wait is a step of the
+run (`cooling`) in the trajectory. A part that has not cooled within three minutes ends
+the run: "Stopped: the processor is at 97 °C and did not cool to 85 °C within 3 minutes
+...". The model was not called; send the message again when the machine has cooled.
+
+| Variable | Limit of | Unless set |
+|---|---|---|
+| `HUNTERAI_MAX_CPU_TEMP` | the processor | 90 °C |
+| `HUNTERAI_MAX_GPU_TEMP` | the graphics card | 85 °C |
+
+`off` (or `0`) removes a limit. Write them into `.env`, or set them where HunterAI is
+started; they are read anew each time, so no restart is needed for the file. The same two
+limits hold up an embedding job before each batch, and `look_at_image` before it loads its
+model.
+
+What it does not do:
+
+- It looks before a call, not during one. A call that has started runs to its end, however
+  hot the machine gets meanwhile.
+- Only an NVIDIA card is read. Its driver puts no temperature under `/sys/class/hwmon`, so
+  `nvidia-smi` is asked, every two seconds at most. A machine without that program, or
+  with another make of card, is guarded by the processor's temperature alone.
+- A model that runs elsewhere is not held up: one of a cloud provider, one of an Ollama or
+  a colibri at another address than this machine's, and the models Ollama runs in its own
+  cloud (their tag ends in `cloud`).
+- The short calls of the decision model (answer check, risk gate) and the summary of a long
+  chat are not looked at.
+- 85 °C is a cautious guess at "hot" for a graphics card, not a figure from the maker of
+  yours. If your card is warmer than that in normal work, runs pause often: raise the limit.
+
 ### colibri: large models from memory and storage
 
 [colibri](https://github.com/JustVugg/colibri) is an engine of its own that runs large
@@ -531,11 +573,13 @@ is never queued a second time. A finished entry of the queue has an ✕ that rem
 entry only, and "Remove duplicate entries" clears the older finished runs of sources that
 were ingested more than once; what was ingested stays in the collection either way.
 
-Embedding thousands of files holds a laptop's processor at full load for a long time. Before
-each batch the job reads the processor temperature, and at `HUNTERAI_MAX_CPU_TEMP` (90 °C
-unless set; `off` disables it) it waits until the temperature is five degrees under that,
-then goes on. The entry in the queue says "cooling down" with the temperature meanwhile.
-The job takes longer; the machine does not switch itself off in the middle of it.
+Embedding thousands of files holds a laptop's processor at full load for a long time, or
+its graphics card when the embedding model runs there. Before each batch the job reads both
+temperatures, and when one is at its limit (`HUNTERAI_MAX_CPU_TEMP`, 90 °C unless set;
+`HUNTERAI_MAX_GPU_TEMP`, 85 °C; `off` disables one) it waits until that part is five
+degrees under it, then goes on. The entry in the queue says "cooling down" with the part
+and its temperature meanwhile. The job takes longer; the machine does not switch itself off
+in the middle of it.
 
 The embedding model does not stay loaded behind its work. Ollama would keep it for five
 minutes after every request, and memory recall makes one on each message you send, attached
@@ -1169,10 +1213,11 @@ of the texts the model quotes OCR read as well (naming the ones it did not, when
 most of the others), and where a description ran into a loop and lines were dropped. The
 text OCR read is also given to the model, to spell what it sees.
 
-A local model is not loaded while the processor is hotter than 90 C: the call waits up to a
-minute for it to cool, then answers with the OCR text alone and says why. A laptop cuts its
-power at the processor's critical temperature without a line in any log.
-`HUNTERAI_MAX_CPU_TEMP` sets the limit in C (`off` removes it).
+A local model is not loaded while the processor is at 90 C or the graphics card at 85 C: the
+call waits up to a minute for that part to cool, then answers with the OCR text alone and
+says why. A laptop cuts its power at the processor's critical temperature without a line in
+any log. `HUNTERAI_MAX_CPU_TEMP` and `HUNTERAI_MAX_GPU_TEMP` set the limits in C (`off`
+removes one).
 
 ### A picture is decoded before a model gets it
 
@@ -1564,9 +1609,12 @@ An error says what is wrong and what to do about it.
   kept as `errors.log.1`). Send that part of the file with the diagnostics when you report
   it.
 
-The bottom of the sidebar shows the processor temperature and the local models Ollama holds
-in memory, asked again every ten seconds: `gemma3:12b loaded (9.8 GB, 60% GPU)`. The line
-turns yellow within ten degrees of `HUNTERAI_MAX_CPU_TEMP` and red at it. It also turns
+The bottom of the sidebar shows how hot the processor and the graphics card are and the
+local models Ollama holds in memory, asked again every ten seconds:
+`CPU 63°C · GPU 71°C · gemma3:12b loaded (9.8 GB, 60% GPU)`. The card is shown only while a
+local model is loaded: asking it wakes a card that a laptop has put to sleep. The line turns
+yellow when a part is within ten degrees of its limit (`HUNTERAI_MAX_CPU_TEMP`,
+`HUNTERAI_MAX_GPU_TEMP`) and red at it; pointing at the line says which part. It also turns
 yellow when a model is partly on the processor, which makes it slow; pointing at the line
 says how Ollama runs each model (in the words of `ollama ps`) and with which window. The
 model a colibri server holds stands in the same line, marked `(colibri)`: it is loaded in

@@ -20,12 +20,40 @@ async def test_the_machine_state_names_the_temperature_and_the_loaded_local_mode
     monkeypatch.delenv("HUNTERAI_MAX_CPU_TEMP", raising=False)
     answers(monkeypatch, {"http://127.0.0.1:11434/api/ps": {"models": [{"name": "mimo:9b", "size": 9 * 2**30, "size_vram": 9 * 2**30}]}})
     assert (await client.get("/api/system/status")).json() == {
-        "cpu_temp": 71.0, "cpu_limit": 90.0, "local_models": [{"name": "mimo:9b", "vram_mb": 9216, "size_mb": 9216, "processor": "100% GPU", "context": None}], "colibri": None,
+        "cpu_temp": 71.0, "cpu_limit": 90.0, "gpu_temp": None, "gpu_limit": 85.0,
+        "local_models": [{"name": "mimo:9b", "vram_mb": 9216, "size_mb": 9216, "processor": "100% GPU", "context": None}], "colibri": None,
         "restart_needed": False, "stopped": [], "page": None}
     answers(monkeypatch, {})                      # Ollama does not answer: unknown, which is not "none loaded"
     monkeypatch.setattr(thermal, "cpu_temp", lambda: None)
     assert (await client.get("/api/system/status")).json() == {
-        "cpu_temp": None, "cpu_limit": 90.0, "local_models": None, "colibri": None, "restart_needed": False, "stopped": [], "page": None}
+        "cpu_temp": None, "cpu_limit": 90.0, "gpu_temp": None, "gpu_limit": 85.0, "local_models": None, "colibri": None,
+        "restart_needed": False, "stopped": [], "page": None}
+
+
+async def test_the_graphics_card_is_asked_only_while_a_local_model_is_loaded(client, monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "dist_dir", lambda: tmp_path)
+    monkeypatch.setenv("HUNTERAI_MAX_GPU_TEMP", "80")
+    asked = []
+
+    async def card():
+        asked.append(1)
+        return 64.0
+    monkeypatch.setattr(thermal, "gpu_temp", card)
+    loaded = {"models": [{"name": "mimo:9b", "size": 9 * 2**30, "size_vram": 9 * 2**30}]}
+    answers(monkeypatch, {"http://127.0.0.1:11434/api/ps": loaded})
+    said = (await client.get("/api/system/status")).json()
+    assert (said["gpu_temp"], said["gpu_limit"]) == (64.0, 80.0) and asked == [1]
+    # Asking wakes a card that a laptop has put to sleep: with no model in memory it is left alone.
+    for ps in ({"models": []}, None):
+        answers(monkeypatch, {"http://127.0.0.1:11434/api/ps": ps} if ps else {})
+        said = (await client.get("/api/system/status")).json()
+        assert (said["gpu_temp"], said["gpu_limit"]) == (None, 80.0)
+    assert asked == [1]
+
+    async def held():
+        return {"model": "qwen3.6-27b", "context": 16384}
+    monkeypatch.setattr(system, "_held_by_colibri", held)                     # colibri holds one: Ollama does not list it
+    assert (await client.get("/api/system/status")).json()["gpu_temp"] == 64.0 and asked == [1, 1]
 
 
 async def test_the_checkup_says_what_is_missing_and_how_to_get_it(client, monkeypatch):

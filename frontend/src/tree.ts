@@ -476,7 +476,7 @@ export function swarmMembers(steps: Step[], callId: string, result: string | nul
 
 const NEAR_LIMIT = 10   // degrees under the limit at which the line turns yellow
 
-/** One line about the machine: how hot the processor is and which local models hold memory. */
+/** One line about the machine: how hot the processor and the graphics card are, and which local models hold memory. */
 const whole = (n: number) => n.toLocaleString('en-US')
 type Loaded = NonNullable<SystemStatus['local_models']>[number]
 const inMemory = (m: Loaded) => ((m.size_mb ?? m.vram_mb) / 1024).toFixed(1)
@@ -490,9 +490,36 @@ function share(m: Loaded): string {
   return part ? `${part[1]}% GPU` : ''
 }
 
-/** How hot the processor is against its limit: '' | 'warn' (within ten degrees) | 'bad' (at or over it). */
+type Hot = { name: string; short: string; degrees: number; limit: number | null }
+/** The parts whose temperature the server read: the processor, and the graphics card where it can be read. */
+function heatParts(s: SystemStatus): Hot[] {
+  const out: Hot[] = []
+  if (s.cpu_temp !== null) out.push({ name: 'processor', short: 'CPU', degrees: s.cpu_temp, limit: s.cpu_limit })
+  if (s.gpu_temp != null) out.push({ name: 'graphics card', short: 'GPU', degrees: s.gpu_temp, limit: s.gpu_limit ?? null })
+  return out
+}
+const heatOf = (p: Hot): '' | 'warn' | 'bad' => (p.limit === null ? '' : p.degrees >= p.limit ? 'bad' : p.degrees >= p.limit - NEAR_LIMIT ? 'warn' : '')
+
+/** How hot the machine is against its limits: '' | 'warn' (a part within ten degrees of its limit) | 'bad' (a part
+ * at or over it). The worse of the processor and the graphics card. */
 export function heat(s: SystemStatus): '' | 'warn' | 'bad' {
-  return s.cpu_temp === null || s.cpu_limit === null ? '' : s.cpu_temp >= s.cpu_limit ? 'bad' : s.cpu_temp >= s.cpu_limit - NEAR_LIMIT ? 'warn' : ''
+  const all = heatParts(s).map(heatOf)
+  return all.includes('bad') ? 'bad' : all.includes('warn') ? 'warn' : ''
+}
+
+/** Which part is hot and what that means, for the one who points at the line. '' when none is. */
+export function heatNote(s: SystemStatus): string {
+  const level = heat(s)
+  const say = (p: Hot) => (level === 'bad'
+    ? `The ${p.name} is at ${Math.round(p.degrees)}°C, at or over its limit of ${p.limit}°C: a local model is not called, and embedding waits, until it has cooled.`
+    : `The ${p.name} is at ${Math.round(p.degrees)}°C, close to its limit of ${p.limit}°C.`)
+  return level ? heatParts(s).filter((p) => heatOf(p) === level).map(say).join(' ') : ''
+}
+
+/** What a live run waits for while it waits for the machine to cool, from its steps. Null when it does not wait. */
+export function waitingToCool(steps: Step[]): string | null {
+  const going = [...steps].reverse().find((s) => s.kind === 'cooling' && !s.ended_at)
+  return going ? `Waiting for the machine to cool before the local model is called: ${going.name}. The run goes on by itself.` : null
 }
 
 /** The line at the bottom of the sidebar: the models that hold memory now, Ollama's and the one a colibri server
@@ -500,7 +527,7 @@ export function heat(s: SystemStatus): '' | 'warn' | 'bad' {
  * what it means when part of it is on the processor; of colibri's, its context; '' when the server does not say. */
 export function machineLine(s: SystemStatus): { text: string; level: '' | 'warn' | 'bad'; about: string } {
   const parts: string[] = []
-  if (s.cpu_temp !== null) parts.push(`CPU ${Math.round(s.cpu_temp)}°C`)
+  for (const p of heatParts(s)) parts.push(`${p.short} ${Math.round(p.degrees)}°C`)
   const held = s.colibri ?? null      // absent from a server from before it asked colibri
   const size = (m: Loaded) => `(${inMemory(m)} GB${share(m) ? `, ${share(m)}` : ''})`
   const loaded = [...(s.local_models ?? []).map((m) => ({ name: m.name, how: size(m) })), ...(held ? [{ name: held.model, how: '(colibri)' }] : [])]

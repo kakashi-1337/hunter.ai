@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import math
 import os
 import shutil
 import time
@@ -468,28 +469,28 @@ async def _then(items, task):
 
 COOL_MARGIN = 5.0            # degrees under the limit at which a job that waited goes on
 COOL_STEP = 3.0              # seconds between two looks at the temperature
+COOLING = {thermal.PROCESSOR: "cooling", thermal.GRAPHICS: "cooling_gpu"}      # where a job says how hot the part is it waits for
 
 
 async def cool_down(conn, job_id: str, check=None, step: float | None = None) -> None:
-    """Before a batch is embedded: when the processor is at its limit (HUNTERAI_MAX_CPU_TEMP),
-    wait until it is a few degrees under it. Hours of embedding otherwise hold a laptop at the
-    temperature where it switches itself off. The job says that it is cooling; `check` lets a
-    pause or a cancel through while it waits."""
-    top, now = thermal.limit(), thermal.cpu_temp()
-    if top is None or now is None or now < top:
-        return
+    """Before a batch is embedded: when the processor or the graphics card is at its limit
+    (HUNTERAI_MAX_CPU_TEMP, HUNTERAI_MAX_GPU_TEMP), wait until it is a few degrees under it. Hours
+    of embedding otherwise hold a laptop at the temperature where it switches itself off. The job
+    says which part it waits for and how hot that is; `check` lets a pause or a cancel through
+    while it waits."""
     shown = None
-    while True:
-        if shown is None or abs(now - shown) >= 1:
-            await jobs.progress(conn, job_id, set={"cooling": now})
-            shown = now
+
+    async def tell(part: thermal.Part) -> None:
+        nonlocal shown
+        if shown is None or shown[0] != part.name or abs(part.degrees - shown[1]) >= 1:
+            await jobs.progress(conn, job_id, set={**dict.fromkeys(COOLING.values()), COOLING[part.name]: part.degrees})
+            shown = (part.name, part.degrees)
         if check is not None:
             await check()
-        await asyncio.sleep(COOL_STEP if step is None else step)
-        now = thermal.cpu_temp()
-        if now is None or now <= top - COOL_MARGIN:
-            break
-    await jobs.progress(conn, job_id, set={"cooling": None})
+
+    await thermal.wait_cool(math.inf, COOL_STEP if step is None else step, COOL_MARGIN, tell)
+    if shown is not None:
+        await jobs.progress(conn, job_id, set=dict.fromkeys(COOLING.values()))
 
 
 def _where(payload: dict) -> str:

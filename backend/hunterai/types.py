@@ -201,7 +201,7 @@ class Step(BaseModel):
     run_id: str
     seq: int
     kind: Literal["model_call", "tool_call", "subagent", "permission", "fallback", "decision", "retrieval", "user_note", "context",
-                  "check"]
+                  "check", "cooling"]
     name: str
     status: str
     started_at: str

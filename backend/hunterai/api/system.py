@@ -145,7 +145,8 @@ async def _held_by_colibri() -> dict | None:
 @router.get("/system/status")
 async def status(request: Request, conn=Depends(get_conn)):
     """Cheap enough to ask every few seconds. `local_models` is null when Ollama does not answer; `colibri` is the
-    model a colibri server holds, null when none does. `stopped` names the services that answered before and do
+    model a colibri server holds, null when none does. `gpu_temp` is null on a machine whose card cannot be read,
+    and while no local model is loaded. `stopped` names the services that answered before and do
     not now; they are looked at once a minute. `page` is the script the built interface starts with: a page that
     runs another one is older than this server."""
     ps = await _fetch(ollama.host() + "/api/ps")
@@ -153,8 +154,11 @@ async def status(request: Request, conn=Depends(get_conn)):
     looked = getattr(request.app.state, "looked", None)
     if looked is None or time.time() - looked >= LOOK_EVERY:
         await checkup(request, conn)
-    return {"cpu_temp": thermal.cpu_temp(), "cpu_limit": thermal.limit(), "local_models": models,
-            "colibri": await _held_by_colibri(),
+    held = await _held_by_colibri()
+    # Asking the card starts a program, and wakes a card that a laptop has put to sleep: only while a model is in memory.
+    card = await thermal.gpu_temp() if models or held else None
+    return {"cpu_temp": thermal.cpu_temp(), "cpu_limit": thermal.limit(), "gpu_temp": card, "gpu_limit": thermal.gpu_limit(),
+            "local_models": models, "colibri": held,
             "restart_needed": stale.restart_needed(), "stopped": request.app.state.stopped, "page": page_script()}
 
 

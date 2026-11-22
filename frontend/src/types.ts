@@ -187,7 +187,7 @@ export interface Step {
   id: string
   run_id: string
   seq: number
-  kind: 'model_call' | 'tool_call' | 'subagent' | 'permission' | 'fallback' | 'decision' | 'retrieval' | 'user_note' | 'context' | 'check'
+  kind: 'model_call' | 'tool_call' | 'subagent' | 'permission' | 'fallback' | 'decision' | 'retrieval' | 'user_note' | 'context' | 'check' | 'cooling'
   parent_step_id?: string | null
   name: string
   status: string
@@ -603,6 +603,10 @@ export interface FindingRow extends Finding {
 export interface SystemStatus {
   cpu_temp: number | null
   cpu_limit: number | null
+  /** The graphics card, like the processor. `gpu_temp` is null where the card cannot be read, and while no local
+   * model is loaded: asking wakes a card that a laptop has put to sleep. Absent: a server from before it read the card. */
+  gpu_temp?: number | null
+  gpu_limit?: number | null
   /** null: Ollama does not answer. `size_mb`: all of the model in memory; `vram_mb`: the part on the GPU; `processor`:
    * where it runs, in the words of `ollama ps`; `context`: the window it was loaded with. The last three are absent
    * from a server that could not tell yet. */

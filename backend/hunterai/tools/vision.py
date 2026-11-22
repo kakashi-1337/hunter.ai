@@ -208,10 +208,10 @@ async def _describe(model: str, seen: pictures.Seen, question: str, read: str, c
             "options": {"num_ctx": NUM_CTX, "num_predict": NUM_PREDICT, "temperature": 0.1, "repeat_penalty": 1.15},
             "messages": [{"role": "user", "content": ask, "images": [base64.b64encode(seen.data).decode()]}]}
     async with embed.embed_lock(LOCK_TIMEOUT):
-        cool, degrees = await thermal.cool_enough(thermal.WAIT, thermal.STEP)
-        if not cool:
-            raise ToolError(f"the processor is at {degrees:.0f} C, too hot to load a local model without risking a "
-                            f"shutdown (the limit is {thermal.limit():.0f} C); let the machine cool and ask again")
+        hot = await thermal.wait_cool(thermal.WAIT, thermal.STEP)
+        if hot is not None:
+            raise ToolError(f"the {hot.name} is at {hot.degrees:.0f} C, too hot to load a local model without risking a "
+                            f"shutdown (the limit is {hot.limit:.0f} C); let the machine cool and ask again")
         r = await client.post(f"{ollama.host()}/api/chat", json=body)
     if r.status_code != 200:
         refused = error_from_status(r.status_code, r.text, None)        # with the words Ollama gave, when it gave any
