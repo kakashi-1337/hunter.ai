@@ -268,8 +268,10 @@ _URL = re.compile(r"https?://[^\s'\"<>|;&)]+", re.I)
 _V4_TOKEN = re.compile(r"(?<![\w.-])(\d{1,3}(?:\.\d{1,3}){3})(?::(\d{1,5}))?(?![\w.-])")
 _LOCAL_TOKEN = re.compile(r"(?<![\w.-])(localhost|ip6-localhost|\[::1\])(?::(\d{1,5}))?(?![\w.-])")
 _NAME_TOKEN = re.compile(r"(?<![\w.@-])([a-z0-9-]+(?:\.[a-z0-9-]+)+)(?::(\d{1,5}))?(?![\w.-])")
+# File endings. Some are top-level domains as well (.zip, .mov, .map, .java, .py, .sh, .rs, .md): a name that ends
+# so is far more often a file of the work than a host, and a host of that ending is still found in a URL.
 _NOT_TLDS = frozenset("sh py js ts txt json xml yml yaml md log html csv conf cfg out zip gz tar "
-                      "php go rs c h".split())
+                      "php go rs c h map java mov".split())
 # The last part of a host name: a top-level domain of the internet (tools/tlds.txt says where the list is from),
 # or one of the endings people give the hosts of their own networks and labs.
 TLDS = frozenset(line for line in Path(__file__).with_name("tlds.txt").read_text().split() if line.isalpha())
@@ -286,6 +288,17 @@ _CODE_FLAG = re.compile(_RUNS_CODE + r"(?:-[a-z]{0,3}[cepr]|--eval|--print|eval)
 _CODE_FED = re.compile(_RUNS_CODE.removesuffix(r"[ \t]+") + r"(?:[ \t]+-)?[ \t]*$")              # in front of <<
 _CODE_FILE = re.compile(r">[ \t]*['\"]?[^\s'\"<>|;&]+\.(?:py|js|mjs|cjs|ts|tsx|jsx|rb|pl|php|go|rs|java|c|cc|cpp|cs|lua|kt|swift)"
                         r"(?![\w.-])")                                                           # the line writes a source file
+# The file a program is given to run stands first behind it and its switches: "perl nikto.pl", "bash deploy.app".
+_RUNS_FILE = re.compile(r"(?:^|[\s;|&('\"])(?:python[\d.]*|node|nodejs|bun|deno|perl|ruby|php|lua|rscript|bash|sh|zsh|dash|ksh)"
+                        r"(?:[ \t]+-[\w=.:,-]+)*[ \t]+")
+# The name of a setting stands first behind "git config" and its switches: user.email, core.editor.
+_GIT_SETTING = re.compile(r"(?:^|[\s;|&('\"])git[ \t]+config(?:[ \t]+-[\w=.:,-]+)*[ \t]+")
+# user@host names a host where a command logs into it, and in git's user@host:path. Anywhere else it is an email
+# address: the user name of a login form, the author of a commit.
+_AT_HOST = re.compile(r"(?<![\w.@-])[\w.+-]*\w@([a-z0-9-]+(?:\.[a-z0-9-]+)+)(?![\w.-])")
+_LOGS_IN = re.compile(r"(?:^|[\s/'\"(])(?:ssh|autossh|scp|sftp|rsync|mosh|ssh-copy-id|telnet|ftp|lftp)[ \t]")
+_GIT = re.compile(r"(?:^|[\s/'\"(])git[ \t]")
+_NEXT_COMMAND = re.compile(r"[|;&\n]")
 _CALL = re.compile(r"(?<![$\w.])[a-z_][\w.]*\((?!\))")       # a name with a bracket behind it that holds something
 _ARROW = re.compile(r"=>")
 CALLS_OF_A_PROGRAM = 2      # in a quoted text or a here-document that no known program runs: from here on it is one
@@ -326,14 +339,14 @@ def _regions(text: str) -> list[tuple[int, int, str, bool]]:
     return out
 
 
-def _programs(text: str) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
+def _programs(text: str, regions: list[tuple[int, int, str, bool]]) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
     """(the program texts of a command, the stretches of them that stand outside the program's own quotes). A
     name in such a stretch is a name of the program, not a host. Program text: what is quoted for a program that
     runs code (python -c, node -e), a here-document for one or into a source file, and any quoted text or
     here-document that calls CALLS_OF_A_PROGRAM things or has an arrow function."""
     programs: list[tuple[int, int]] = []
     bare: list[tuple[int, int]] = []
-    for start, end, how, given in _regions(text):
+    for start, end, how, given in regions:
         body = text[start:end]
         if not (given or len(_CALL.findall(body)) >= CALLS_OF_A_PROGRAM or _ARROW.search(body)):
             continue
@@ -356,12 +369,24 @@ def _programs(text: str) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
     return programs, bare
 
 
+def _redirected(text: str, at: int) -> bool:
+    """Whether the word at `at` stands behind > or <: what a command writes to or reads from. Not behind <<<,
+    which hands the program the word itself."""
+    i = at - 1
+    while i >= 0 and text[i] in " \t":
+        i -= 1
+    return i >= 0 and (text[i] == ">" or (text[i] == "<" and not text.startswith("<", i - 1)))
+
+
 def extract_hosts(command: str) -> list[HostUse]:
     """Best-effort hosts named in a shell string. Never resolved by HunterAI.
 
     A URL and an address count wherever they stand. A bare name (shop.acme.dev) counts when it ends like a host
     (a top-level domain, an ending of a private network, or any ending with a port behind it), is not called
-    (os.open(...)), and does not stand in program text outside the program's own quotes."""
+    (os.open(...)), and does not stand in program text outside the program's own quotes. It does not count where
+    the command itself says it is something else: outside quotes the last part of a path (out/app.page) and the
+    file a command writes to or reads from (> scan.dev); the file an interpreter runs (perl nikto.pl); the name
+    of a setting (user.email=..., git config user.name). A name behind user@ counts where a command logs into it."""
     out: dict[tuple[str, int | None], HostUse] = {}
 
     def add(h: HostUse) -> None:
@@ -384,7 +409,9 @@ def extract_hosts(command: str) -> list[HostUse]:
             add(HostUse("::1", port, ("::1",)))
         else:
             add(HostUse(m.group(1), port))
-    programs, bare = _programs(text)
+    regions = _regions(text)
+    programs, bare = _programs(text, regions)
+    first_word = {x.end() for pattern in (_RUNS_FILE, _GIT_SETTING) for x in pattern.finditer(rest)}
     for m in _NAME_TOKEN.finditer(rest):
         name, last = m.group(1), m.group(1).rsplit(".", 1)[-1]
         if not (last.isalpha() and len(last) >= 2) or last in _NOT_TLDS:
@@ -395,10 +422,27 @@ def extract_hosts(command: str) -> list[HostUse]:
             continue                                            # re.search(...), and self.name in a program
         if rest.startswith("{", m.start() - 1) and any(a <= m.start() < b for a, b in programs):
             continue                                            # f"{self.name}" and `${user.id}`: put into a text, not named in it
+        if rest.startswith("=", m.end()) or m.start() in first_word:
+            continue                                            # user.name=..., git config user.email; perl nikto.pl
+        # What the shell itself reads as a file. Not in a quoted text, where / and > are the text's own:
+        # sed 's/old.acme.io/new.acme.io/', curl -d '<host>evil.dev</host>'.
+        if not any(a <= m.start() < b for a, b, _, _ in regions):
+            if rest.startswith("/", m.start() - 1) and not rest.startswith("//", max(0, m.start() - 2)):
+                continue                                        # out/app.page: the last part of a path (//host/share is a host)
+            if _redirected(rest, m.start()):
+                continue                                        # > scan.dev: what the command writes to
         try:
             add(HostUse(normalize_host(name), int(m.group(2)) if m.group(2) else None))
         except ValueError:
             pass
+    for m in _AT_HOST.finditer(rest):
+        began = max((x.end() for x in _NEXT_COMMAND.finditer(rest, 0, m.start())), default=0)
+        command = rest[began:m.start()]                          # the command this stands in, as far as it has come
+        if _LOGS_IN.search(command) or (_GIT.search(command) and rest.startswith(":", m.end())):
+            try:
+                add(HostUse(normalize_host(m.group(1))))
+            except ValueError:
+                pass
     return list(out.values())
 
 
