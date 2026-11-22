@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react'
 import * as api from '../api'
 import * as build from '../build'
-import { heat, machineLine, reloadNotice, restartNotice, stoppedNotice } from '../tree'
+import { heatNote, machineLine, reloadNotice, restartNotice, stoppedNotice } from '../tree'
 import type { SystemStatus } from '../types'
 
 const EVERY_MS = 10_000
 
-/** How hot the processor is and which local models are loaded, asked again every ten seconds while the page is in view.
+/** How hot the processor and the graphics card are and which local models are loaded, asked again every ten seconds
+ * while the page is in view.
  * Above it, when the server is not the code on disk, the notice to restart it; when this page is older than the
  * interface that is built now, the notice to reload it; and the parts that were in use and do not run now, with the
  * way to the setup check, which says how to start each again. */
@@ -22,10 +23,8 @@ export function MachineStatus({ onSetup }: { onSetup?: () => void }) {
   }, [])
   if (!status) return <div className="machine hint">local · 127.0.0.1</div>
   const { text, level, about } = machineLine(status)
-  const hot = heat(status)
-  const title = [hot === 'bad' ? `At or over the limit of ${status.cpu_limit}°C: look_at_image waits for the processor to cool before it loads its model.`
-    : hot === 'warn' ? `Close to the limit of ${status.cpu_limit}°C.` : '', about].filter(Boolean).join(' ')
-    || 'The processor temperature and the local models that hold memory now.'
+  const title = [heatNote(status), about].filter(Boolean).join(' ')
+    || 'How hot the processor and the graphics card are, and the local models that hold memory now.'
   const restart = restartNotice(status)
   const stale = reloadNotice(status, build.ownScript())
   const down = stoppedNotice(status)

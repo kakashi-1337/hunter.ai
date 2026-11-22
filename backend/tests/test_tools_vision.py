@@ -255,6 +255,22 @@ async def test_a_local_model_is_not_loaded_onto_a_hot_machine(conn, tmp_path, mo
 
 
 @respx.mock
+async def test_a_hot_graphics_card_keeps_the_model_from_loading_as_well(conn, tmp_path, monkeypatch):
+    chat_route = ollama()
+
+    async def card():
+        return 91.0
+    monkeypatch.setattr(thermal, "gpu_temp", card)
+    monkeypatch.delenv("HUNTERAI_MAX_GPU_TEMP", raising=False)
+    monkeypatch.setattr(thermal, "WAIT", 0.01)
+    monkeypatch.setattr(thermal, "STEP", 0.001)
+    shot = tmp_path / "p.png"; shot.write_bytes(PNG)
+    block, _ = await look(conn, image=str(shot))
+    assert not chat_route.called and not block.is_error
+    assert "the graphics card is at 91 C" in block.content and "limit is 85 C" in block.content and "LOGIN user password" in block.content
+
+
+@respx.mock
 @pytest.mark.parametrize("raw, want", [("0", 0), ("45", 45), ("soon", 120), ("-5", 120), ("99999", 600)])
 async def test_how_long_the_model_stays_loaded_can_be_set(conn, tmp_path, monkeypatch, raw, want):
     chat_route = ollama()

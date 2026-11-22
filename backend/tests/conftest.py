@@ -144,6 +144,16 @@ def gate_off(monkeypatch):
     monkeypatch.setattr(runner, "GATE_DEFAULT", False)
 
 
+@pytest.fixture(autouse=True)
+def machine_of_no_temperature(tmp_path, monkeypatch):
+    """No test reads how hot the machine is that it runs on: a suite at full load on a laptop would wait for it
+    to cool, and stop runs when it does not. A test about heat sets the readings it wants."""
+    from hunterai import thermal
+    monkeypatch.setattr(thermal, "HWMON", tmp_path / "no-hwmon")
+    monkeypatch.setattr(thermal, "NVIDIA_SMI", "no-nvidia-smi-in-a-test")
+    monkeypatch.setattr(thermal, "_gpu", None)
+
+
 @pytest.fixture
 def fake_bin(tmp_path, monkeypatch):
     """fake_bin(name, script): an executable shell script on PATH; FAKE_OUT points at tmp_path."""

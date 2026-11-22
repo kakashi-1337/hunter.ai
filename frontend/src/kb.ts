@@ -63,6 +63,13 @@ export function formatEta(seconds: number | null | undefined): string {
   return `${Math.floor(h / 24)}d ${h % 24}h`
 }
 
+/** What a running job says while it waits for the machine to cool, with the part it waits for. Null when it does
+ * not wait. A server from before it read the graphics card names no part: it waited for the processor. */
+export function coolingNote(stats: Job['stats']): string | null {
+  const [part, degrees] = typeof stats.cooling_gpu === 'number' ? ['graphics card', stats.cooling_gpu] : ['processor', stats.cooling]
+  return typeof degrees === 'number' ? `cooling down: the ${part} is at ${Math.round(degrees)}°C, embedding goes on when it has dropped` : null
+}
+
 export const formatRate = (rate: number | null | undefined): string => (rate ? `${rate} chunks/s` : '—')
 
 export function formatBytes(n: number): string {

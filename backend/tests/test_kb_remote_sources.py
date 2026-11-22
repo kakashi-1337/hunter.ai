@@ -499,6 +499,43 @@ async def test_embedding_waits_for_a_hot_processor_and_says_so(conn, monkeypatch
     await pipeline.cool_down(conn, job.id, step=0)
 
 
+async def test_embedding_waits_for_a_hot_graphics_card_and_names_the_part(conn, monkeypatch):
+    from hunterai import thermal
+    from hunterai.kb import pipeline
+    from hunterai.repo import jobs
+    for name in ("HUNTERAI_MAX_CPU_TEMP", "HUNTERAI_MAX_GPU_TEMP"):
+        monkeypatch.delenv(name, raising=False)                                  # the limits are 90 and 85
+    job = await jobs.enqueue(conn, "ingest", {"collection_id": "c"})
+    card, seen = [88.0, 84.0, 80.0], []
+
+    async def gpu():
+        return card.pop(0)
+
+    async def check():
+        stats = (await jobs.get(conn, job.id)).stats
+        seen.append((stats.get("cooling"), stats.get("cooling_gpu")))
+    monkeypatch.setattr(thermal, "cpu_temp", lambda: 70.0)
+    monkeypatch.setattr(thermal, "gpu_temp", gpu)
+    await pipeline.cool_down(conn, job.id, check, step=0)
+    assert seen == [(None, 88.0), (None, 84.0)] and card == []                   # the card's own number; 84 is under 85: not enough
+    stats = (await jobs.get(conn, job.id)).stats
+    assert stats["cooling"] is None and stats["cooling_gpu"] is None
+    processor = [95.0, 85.0]
+    monkeypatch.setattr(thermal, "cpu_temp", lambda: processor.pop(0))
+
+    async def cool():
+        return 60.0
+    monkeypatch.setattr(thermal, "gpu_temp", cool)
+    seen.clear()
+    await pipeline.cool_down(conn, job.id, check, step=0)
+    assert seen == [(95.0, None)]
+    processor, card = [95.0, 84.0, 84.0], [70.0, 88.0, 79.0]                     # one wait, first for the one, then for the other
+    monkeypatch.setattr(thermal, "gpu_temp", gpu)
+    seen.clear()
+    await pipeline.cool_down(conn, job.id, check, step=0)
+    assert seen == [(95.0, None), (None, 88.0)]
+
+
 async def test_a_clone_whose_host_does_not_resolve_is_tried_once_more(fake_bin, tmp_path, monkeypatch):
     monkeypatch.setattr(gitsrc, "RESOLVE_RETRY_PAUSE", 0)
     flaky = ("#!/bin/sh\nif [ ! -f " + str(tmp_path) + "/tried ]; then touch " + str(tmp_path) + "/tried; "

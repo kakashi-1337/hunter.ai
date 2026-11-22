@@ -12,7 +12,7 @@ import dataclasses
 import time
 from typing import Awaitable, Callable
 
-from . import checks, context, hub, permissions, pictures, problems, savepoint, secrets, uploads
+from . import checks, context, cooling, hub, permissions, pictures, problems, savepoint, secrets, uploads
 from .modes import build_system
 from .providers import registry
 from .providers.base import (Options, ProviderError, Stop, TextDelta, ThinkingDelta,
@@ -250,9 +250,14 @@ async def _fitted(conn, run_id: str, provider, provider_name: str, model: str, s
 async def _attempt(conn, run_id: str, mid: str, provider_name: str, model: str, system: str,
                    wire: list[WireMessage], options: Options, acc: _Attempt,
                    specs: list[ToolSpec] | None = None) -> None:
-    """One model call. Raises ProviderError; always closes its trajectory step.
+    """One model call. Raises ProviderError; always closes its trajectory step. A model on this machine is called
+    once the machine is cool enough for it (cooling.py): _Stopped when it does not cool.
 
     Tool calls the model makes are left in acc.calls for the caller to run."""
+    try:
+        await cooling.before_call(conn, run_id, provider_name, model)
+    except cooling.TooHot as e:
+        raise _Stopped(str(e)) from None
     step = await runs.add_step(conn, run_id, "model_call", f"{provider_name}/{model}", {})
     await hub.publish(run_id, {"type": "step_started", "step": step.model_dump()})
     usage = Usage(0, 0)
