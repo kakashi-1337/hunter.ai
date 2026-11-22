@@ -260,16 +260,28 @@ no results, and no error text of tools, only the errors of model calls ("timed o
 it says what happened without holding a target's data. At 20 MB it is renamed to
 `activity.jsonl.1` and a new one starts. `HUNTERAI_ACTIVITY_LOG=off` stops it.
 
-### When a server is down: no hammering
+### When a server is down, or a command cannot work: no hammering
 
-A model can get stuck asking a dead server for the same thing until its turns are spent.
-Each agent (the main loop of a run, and every subagent) keeps count. The same call that
-failed twice in a row with the same result is not run a third time: the model is told to
-do something else. A host whose answers have all been server errors (5xx), rate limits
-(429) or timeouts gets a line added to the result from the fourth failure in a row, and is
-not called again in that run after the eighth; one good answer from it clears the count. A
-call that succeeds can be repeated freely. Only tools that name their host are counted per
-host (`web_fetch`, the browser, `caido_send`); what a shell command does is not looked into.
+A model can get stuck asking a dead server for the same thing, or running a command that
+cannot work, until its turns are spent. Each agent (the main loop of a run, and every
+subagent) keeps count:
+
+- **The same call that failed twice with the same result is not run a third time**: the
+  model is told to do something else. A command that ends with an error code is a failed
+  call (it was none before: the tool had run), and how long it took is no part of its
+  result (each result says it, so no two were the same). Two failing calls taken in turns
+  are counted each for itself. Any call that works in between starts every count again,
+  because something may have changed: an edit, then the same test once more, is not held up.
+- **A model that answers three refusals in a row with one more refused call is stuck, and
+  the run ends there** with a word for you that names the call, instead of going on to the
+  limit of turns (a local model spends each of those turns at full load).
+- A host whose answers have all been server errors (5xx), rate limits (429) or timeouts
+  gets a line added to the result from the fourth failure in a row, and is not called again
+  in that run after the eighth; one good answer from it clears the count.
+
+A call that succeeds can be repeated freely. Only tools that name their host are counted
+per host (`web_fetch`, the browser, `caido_send`); a shell command is not looked into for
+the hosts it names.
 
 ### Slash commands
 
@@ -983,7 +995,7 @@ To know before you set one:
 - `*.example.com` on a scope list covers the subdomains, not `example.com` itself; list both when both are meant. A scope entry that fits no form (`*.example.*`, free text) is shown to the model but matches no host.
 - `web_search` is not checked against scope: the query goes to search engines, not to the target.
 - A background process ends when its shell exits, when you kill it, when its chat is deleted, or when the app stops. A foreground command shows its output when it ends.
-- A run stops after 25 model turns (Settings), after 3 invalid tool calls in a row, and runs at most 20 tool calls per turn.
+- A run stops after 25 model turns (Settings), after 3 invalid tool calls in a row, after 3 refused calls in a row (a model that keeps sending a call that failed the same way twice), and runs at most 20 tool calls per turn.
 - A run waiting for your answer has no timeout. If the app stops meanwhile, the run ends as interrupted and the call does not run.
 - Fallback to Ollama happens only on the first model call of a run; after a tool has run, a provider error ends the run.
 - The model can end this chat's own processes without asking.

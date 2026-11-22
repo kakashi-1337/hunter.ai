@@ -425,6 +425,11 @@ async def _tool_loop(conn, run_id: str, mid: str, chat, provider: str, model: st
             bad = bad + 1 if outcome.invalid else 0
             if bad >= MAX_BAD_CALLS:
                 raise _Stopped(f"The model sent {MAX_BAD_CALLS} invalid tool calls in a row.")
+            stuck = guard.stuck()
+            if stuck:       # it answers each refusal with the call that was refused: more turns would be more of the same
+                for left in calls[n + 1:]:
+                    await record(ToolResultBlock(tool_call_id=left.id, is_error=True, content="Not run: this run was stopped."))
+                raise _Stopped(stuck)
         turn += 1
         await _hand_over_queued(conn, run_id, mid, chat.id, acc, publish)
         await _next_turn(conn, run_id, mid, provider, model, system,
