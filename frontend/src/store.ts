@@ -125,29 +125,40 @@ export const useStore = create<State>((set, get) => {
     waiting(id).then((queued) => { if (get().activeChatId === id) set({ queued }) }).catch(() => {})
   }
 
-  const onEvent = (chatId: string, userMessageId: string | null) => (e: RunEvent) => {
+  /** The events of the live run, as the stream hands them over: together, and applied together, so that the page
+   * changes once for a batch and not once for each event in it. */
+  const onEvents = (chatId: string, userMessageId: string | null) => (batch: RunEvent[]) => {
     const s = get()
     if (s.activeChatId !== chatId || !s.live) return
     losses = 0
-    const { messages, target } = applyEvent(s.messages, e, s.live.target, userMessageId)
-    const live = { ...s.live, target, steps: stepsFromEvents(s.live.steps, e) }
-    if (e.type === 'run_finished') {
-      stopStream = null
-      set({ messages, live: null, asks: [], runningCalls: [], error: e.status === 'error' ? e.error : s.error })
-      void guard(async () => {
-        await reloadChat(chatId)
-        await get().refreshLists()
-        await get().selectRun(live.runId)
-        // What the run did not get to read goes out as the next message when it ended well; after a stop or an
-        // error it stays in view, for the owner to send or drop.
-        if (get().activeChatId !== chatId) return
-        if (e.status === 'done') await get().sendQueued()
-        else set({ queued: await waiting(chatId) })
-      })
-    } else {
-      set({ messages, live, asks: pendingAsks(s.asks, e), runningCalls: runningCalls(s.runningCalls, e) })
-      if (e.type === 'step_finished' && e.step.kind === 'user_note') void waiting(chatId).then((queued) => { if (get().activeChatId === chatId) set({ queued }) }).catch(() => {})
+    let { messages, live, asks, runningCalls: calls } = s
+    let read = false                // the agent read a waiting message: the list of those that still wait is asked for once
+    for (const e of batch) {
+      const next = applyEvent(messages, e, live.target, userMessageId)
+      messages = next.messages
+      live = { ...live, target: next.target, steps: stepsFromEvents(live.steps, e) }
+      if (e.type === 'run_finished') {
+        const runId = live.runId
+        stopStream = null
+        set({ messages, live: null, asks: [], runningCalls: [], error: e.status === 'error' ? e.error : s.error })
+        void guard(async () => {
+          await reloadChat(chatId)
+          await get().refreshLists()
+          await get().selectRun(runId)
+          // What the run did not get to read goes out as the next message when it ended well; after a stop or an
+          // error it stays in view, for the owner to send or drop.
+          if (get().activeChatId !== chatId) return
+          if (e.status === 'done') await get().sendQueued()
+          else set({ queued: await waiting(chatId) })
+        })
+        return                      // nothing of this run comes after its end
+      }
+      asks = pendingAsks(asks, e)
+      calls = runningCalls(calls, e)
+      read = read || (e.type === 'step_finished' && e.step.kind === 'user_note')
     }
+    set({ messages, live, asks, runningCalls: calls })
+    if (read) void waiting(chatId).then((queued) => { if (get().activeChatId === chatId) set({ queued }) }).catch(() => {})
   }
 
   /** The stream dropped. The run may still be going: reload, and follow it again when it is. */
@@ -182,7 +193,7 @@ export const useStore = create<State>((set, get) => {
       live: { runId: started.run_id, chatId, target: null, steps: [] }, asks: [], runningCalls: [],
       selectedRunId: started.run_id, runDetail: null,
     })
-    stopStream = streamRun(started.run_id, onEvent(chatId, started.user_message_id), onLost(chatId))
+    stopStream = streamRun(started.run_id, onEvents(chatId, started.user_message_id), onLost(chatId))
   }
 
   /** Resolves true once the server accepted the request, whatever happens to the view afterwards. */

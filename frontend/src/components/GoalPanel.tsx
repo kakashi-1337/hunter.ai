@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import * as api from '../api'
+import { useSettled } from '../settled'
 import { useStore } from '../store'
 import { triageFacts, visible } from '../tree'
 import type { Finding, FindingStatus, Goal, Severity } from '../types'
@@ -12,7 +13,7 @@ const STATUSES: FindingStatus[] = ['open', 'confirmed', 'false_positive', 'dupli
 /** The chat's goal record and the findings recorded against its target. All text is plain. */
 export function GoalPanel({ onClose }: { onClose: () => void }) {
   const chat = useStore((s) => s.chat)
-  const steps = useStore((s) => s.live?.steps.length ?? 0)
+  const steps = useSettled(useStore((s) => s.live?.steps.length ?? 0))     // a burst of steps asks once
   const setError = useStore((s) => s.setError)
   const [goal, setGoal] = useState<Goal | null>(null)
   const [findings, setFindings] = useState<Finding[]>([])
