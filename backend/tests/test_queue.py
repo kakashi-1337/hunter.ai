@@ -39,6 +39,9 @@ async def test_a_message_sent_while_the_agent_works_reaches_it_at_its_next_step(
     assert sent.startswith("scan finished: 3 hosts") and f"<<<OWNER_MESSAGE {nonce}>>>" in sent
     assert sent.index("skip host b, it is out of scope") < sent.index("and keep it quiet") < sent.index(f"<<<END_OWNER_MESSAGE {nonce}>>>")
     assert f"<<<OWNER_MESSAGE {nonce}>>>" in p.calls[0]["system"] and "from the owner" in p.calls[0]["system"]
+    # Reported: a model read such a message beside a goal record that said something else, and weighed the two.
+    assert "their latest message. It overrides earlier messages, summaries, notes and the goal record" in p.calls[0]["system"]
+    assert len(queue.rule(nonce)) <= 414          # what it was before it said so: a local model's window has no room to spare
     note = [s for s in run.steps if s.kind == "user_note"]
     assert len(note) == 1 and note[0].status == "done" and "skip host b" in note[0].detail["text"]
     assert msg.blocks[-1].text == "Skipping host b as you asked."
