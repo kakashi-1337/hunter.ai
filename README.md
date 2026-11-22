@@ -360,6 +360,12 @@ the run ends before the agent takes another step, what is still waiting is sent 
 next message; after a stop or an error it stays in view for you to send or remove. Queued
 messages are text only.
 
+The model is told that such a message is your latest word: where it differs from an
+earlier message, from a summary or a memory note, or from the chat's goal record, your
+message decides, and the goal record is brought in line with it. The message stays in
+every later request of the chat, however much the request has to be cut down to fit the
+model (see the next section).
+
 ### A chat longer than the model's context window
 
 Every model call sends the whole chat. A chat that has outgrown its model's window is
@@ -379,6 +385,14 @@ summary is a model's account of the earlier part, so it can leave something out;
 result says how long it was, and the tool can be run again. Subagents are not covered (they
 stop after 12 turns). The Anthropic list no longer offers the models before Claude 4.6,
 whose window is 200K tokens; a chat that already uses one keeps it.
+
+What you sent while the agent worked is never cut. It stands at the end of a tool result,
+and it is no part of what the tool gave: a result that is cut down keeps your words whole
+behind its first 300 characters, and whoever writes a summary is given them as the user's
+words. (Cut down with the rest, a message sent during a long run was read by the one model
+call after it and was missing from every later one. With a local model's window that is
+nearly every run of more than a few steps, and the agent went back to what it had been
+doing before you wrote.)
 
 The system prompt and the tool definitions cannot be made smaller, so the chat is measured
 against the room they leave. With a small window that is most of it: see the next section.

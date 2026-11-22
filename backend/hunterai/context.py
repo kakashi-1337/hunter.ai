@@ -8,6 +8,10 @@ fit() makes the request smaller when it is close to the window, in this order:
 2. old tool results are cut down to how they began, oldest first (the latest are kept whole)
 3. the older turns are summarized by the chat's model, and the summary is kept for the next calls
 
+What the owner sent during the work stands at the end of a tool result (repo/queue.py). It is no part of what the
+tool gave: a result that is cut down keeps it whole, and the summary is told it as the user's words. Cut down with
+the rest, a message was read by the one model call after it and by none of the later ones.
+
 Only the request is changed. What is stored, and what the owner sees in the chat, stays whole.
 When a provider refuses a request for its size all the same (a window that is not known, a
 count that was off), the engine asks for a harder fit and makes the call once more.
@@ -22,7 +26,7 @@ from dataclasses import replace
 from .providers import registry
 from . import hub
 from .providers.base import Options, ProviderError, TextDelta, ToolSpec, Usage, WireMessage
-from .repo import runs, summaries
+from .repo import queue, runs, summaries
 from .types import TextBlock, ToolResultBlock
 
 CHARS_PER_TOKEN = 3.0       # counted on the careful side: a request has to fit, so its size is put high
@@ -97,20 +101,23 @@ async def window(provider_name: str, model: str, options: Options) -> int | None
         return None
 
 
-def stub(wire: list[WireMessage], need: int, keep: int = KEEP_RESULTS) -> tuple[list[WireMessage], int]:
+def stub(wire: list[WireMessage], need: int, keep: int = KEEP_RESULTS, *, owner: str | None = None
+         ) -> tuple[list[WireMessage], int]:
     """Cut old tool results down to how they began, oldest first, until `need` characters are
     saved. Returns (a new list, how many were cut). The latest `keep` and the short ones stay
-    whole, and nothing that was passed in is changed."""
+    whole, and nothing that was passed in is changed. `owner` is the code of the chat's owner
+    messages: what stands in a block of that code at the end of a result is kept as it is."""
     spots = [(i, j) for i, m in enumerate(wire) for j, b in enumerate(m.blocks) if b.type == "tool_result"]
     out, saved, cut = list(wire), 0, 0
     for i, j in spots[:max(0, len(spots) - keep)]:
         if saved >= need:
             break
         b = out[i].blocks[j]
-        if len(b.content) <= STUB_OVER or b.content.startswith(STUB_MARK):
+        own, said = queue.split(b.content, owner)
+        if len(own) <= STUB_OVER or own.startswith(STUB_MARK):
             continue
-        short = (f"{STUB_MARK} this result was {len(b.content)} characters. It began:]\n{b.content[:STUB_HEAD]}\n"
-                 "[Run the tool again if you need the rest.]")
+        short = (f"{STUB_MARK} this result was {len(own)} characters. It began:]\n{own[:STUB_HEAD]}\n"
+                 "[Run the tool again if you need the rest.]") + (queue.block(owner, [said]) if said is not None else "")
         blocks = list(out[i].blocks)
         blocks[j] = ToolResultBlock(tool_call_id=b.tool_call_id, content=short, is_error=b.is_error)
         out[i] = replace(out[i], blocks=blocks)
@@ -119,8 +126,9 @@ def stub(wire: list[WireMessage], need: int, keep: int = KEEP_RESULTS) -> tuple[
     return out, cut
 
 
-def _told(wire: list[WireMessage], limit: int) -> str:
-    """The messages as text for the summary: what was said, each call by name, each result by how it began."""
+def _told(wire: list[WireMessage], limit: int, *, owner: str | None = None) -> str:
+    """The messages as text for the summary: what was said, each call by name, each result by how it began, and
+    what the owner sent during the work (a block of the code `owner` at the end of a result) as the user's words."""
     parts = []
     for m in wire:
         lines = []
@@ -132,7 +140,10 @@ def _told(wire: list[WireMessage], limit: int) -> str:
             elif b.type == "tool_call":
                 lines.append(f"[called {b.name} {json.dumps(b.arguments, ensure_ascii=False)[:300]}]")
             elif b.type == "tool_result":
-                lines.append(f"[result{' (error)' if b.is_error else ''}: {b.content[:STUB_HEAD]}]")
+                own, said = queue.split(b.content, owner)
+                lines.append(f"[result{' (error)' if b.is_error else ''}: {own[:STUB_HEAD]}]")
+                if said is not None:
+                    lines.append(f"[the user wrote this while the assistant worked: {said}]")
         if lines:
             parts.append(("Assistant:" if m.role == "assistant" else "User:") + "\n" + "\n".join(lines))
     text = "\n\n".join(parts)
@@ -191,7 +202,8 @@ async def _write(conn, run_id: str, provider_name: str, model: str, told: str) -
 
 
 async def _summarize(conn, run_id: str, provider_name: str, model: str, system: str, wire: list[WireMessage],
-                     specs: list[ToolSpec] | None, budget: int, told_limit: int) -> tuple[list[WireMessage], int]:
+                     specs: list[ToolSpec] | None, budget: int, told_limit: int, owner: str | None = None
+                     ) -> tuple[list[WireMessage], int]:
     """Replace the older turns by a summary so that what is left fits `budget`. The cut is after
     an assistant message, so what is kept begins with the user's words; the latest user message
     is always kept. Returns (the new list, how many messages the summary stands for)."""
@@ -201,7 +213,7 @@ async def _summarize(conn, run_id: str, provider_name: str, model: str, system: 
         return wire, 0
     fixed = size(system, [], specs) + SUMMARY_ROOM
     upto = next((c for c in cuts if fixed + size("", wire[c:]) <= budget), cuts[-1])     # keep as much as fits
-    text = await _write(conn, run_id, provider_name, model, _told(wire[:upto], told_limit))
+    text = await _write(conn, run_id, provider_name, model, _told(wire[:upto], told_limit, owner=owner))
     if text is None:
         text = (f"{upto} earlier messages were left out to fit the model's context window, and a summary of them could "
                 "not be written. Ask the user for anything you need from them.")
@@ -242,13 +254,15 @@ async def fit(conn, run_id: str, provider_name: str, model: str, system: str, wi
                      "results_cut": 0, "messages_summarized": 0, "summary_used": True}
     budget = now // 2 if hard else fixed + int(free * TARGET)
     cut = summarized = 0
+    chat_id = await _chat_of(conn, run_id)
+    owner = await queue.nonce(conn, chat_id) if chat_id else None       # what the owner sent during the work is not cut down
     for keep in (KEEP_RESULTS, 1):          # the latest results stay whole while there is room for them; the last one always does
         if now > budget:
-            out, more = stub(out, now - budget, keep)
+            out, more = stub(out, now - budget, keep, owner=owner)
             cut, now = cut + more, size(system, out, specs)
     if now > budget:
         out, summarized = await _summarize(conn, run_id, provider_name, model, system, out, specs, budget,
-                                           told_limit=budget if room is None else int(room * TARGET))
+                                           told_limit=budget if room is None else int(room * TARGET), owner=owner)
         now = size(system, out, specs)
     if out is wire or (hard and now >= before):
         return wire, None
