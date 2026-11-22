@@ -192,9 +192,9 @@ async def call(conn, *, chat_id: str, run_id: str, tc: ToolCall, offered: Collec
     began = time.monotonic()
     refused = False               # the guard stopped this call: its refusal is not counted as another failure
 
-    async def finish(text: str, is_error: bool, invalid: bool = False) -> Outcome:
+    async def finish(text: str, is_error: bool, invalid: bool = False, exit_code: int | None = None) -> Outcome:
         if guard is not None and not invalid and not refused:
-            text += guard.after(tc, text, is_error)
+            text += guard.after(tc, text, is_error, exit_code)
         await publish({"type": "tool_finished", "tool_call_id": tc.id, "content": text,
                        "is_error": is_error,
                        "duration_ms": int((time.monotonic() - began) * 1000)})
@@ -475,4 +475,5 @@ async def call(conn, *, chat_id: str, run_id: str, tc: ToolCall, offered: Collec
         done = await runs.patch_step(conn, step.id, status="error" if is_error else "done",
                                      detail=detail, close=True)
         await publish({"type": "step_finished", "step": done.model_dump()})
-    return await finish(text, is_error)
+    code = meta.get("exit_code")
+    return await finish(text, is_error, exit_code=code if isinstance(code, int) else None)
