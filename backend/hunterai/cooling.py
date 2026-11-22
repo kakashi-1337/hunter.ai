@@ -1,14 +1,20 @@
-"""Before a model on this machine is called, a processor or a graphics card that is at its limit is given
-time to cool. An agent run is one model call after another for as long as the task takes: nothing else in it
-lets a hot laptop cool, and one that reaches its critical temperature switches itself off in the middle of the
-work (see thermal.py). The wait is a step of the run, so the owner sees what the run is waiting for."""
+"""Before a model is loaded onto this machine, a processor or a graphics card that is at its limit is given
+time to cool: loading reads several GB with the processor at full power, and a laptop that reaches its critical
+temperature under it switches itself off in the middle of the work (see thermal.py). The wait is a step of the
+run, so the owner sees what the run is waiting for.
+
+A model that is in memory already is called at once, however hot the machine is. The heat is then the model's
+own: the owner's laptop is at 96 to 98 C all the while its local model answers, 86 C on the graphics card. A wait
+before each of those calls cools nothing for long, makes every step of a run slow, and stops the run when the
+machine does not get five degrees under a limit it is over in ordinary work."""
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from urllib.parse import urlsplit
 
 from . import hub, thermal
-from .providers import colibri, ollama
+from .providers import colibri, ollama, registry
 from .repo import runs
 
 WAIT = 180.0        # seconds a run waits for the machine to cool, then it stops
@@ -37,17 +43,50 @@ def here(provider_name: str, model: str) -> bool:
     return provider_name == colibri.NAME and _on_this_machine(colibri.address())
 
 
-def _stopped(part: thermal.Part) -> str:
+class _InMemory(Exception):
+    """The model is in memory: the call loads nothing, so there is nothing to wait for."""
+
+
+async def loads(provider_name: str, model: str) -> bool:
+    """Whether a call to this model makes the machine load it. True when nobody says what is in memory: an Ollama
+    that does not answer the question, a colibri server that is not there."""
+    if provider_name == colibri.NAME:       # a colibri server holds its model from its start to its end
+        return (await registry.get(colibri.NAME).served()).state != "ok"
+    return await ollama.in_memory(model) is not True
+
+
+async def wait_to_load(provider_name: str, model: str, wait: float, step: float, margin: float = 0.0,
+                       tell: Callable[[thermal.Part], Awaitable[None]] | None = None) -> thermal.Part | None:
+    """thermal.wait_cool for a call to a model on this machine: it waits only when the call loads the model. What
+    is in memory is asked once, and only when a part is hot: a cool machine is asked nothing."""
+    asked = False
+
+    async def first(part: thermal.Part) -> None:
+        nonlocal asked
+        if not asked:
+            asked = True
+            if not await loads(provider_name, model):
+                raise _InMemory
+        if tell is not None:
+            await tell(part)
+    try:
+        return await thermal.wait_cool(wait, step, margin, first)
+    except _InMemory:
+        return None
+
+
+def _stopped(part: thermal.Part, model: str) -> str:
     return (f"Stopped: the {part.name} is at {part.degrees:.0f} °C and did not cool to {part.limit - thermal.MARGIN:.0f} °C "
-            f"within {WAIT / 60:.0f} minutes (its limit is {part.limit:.0f} °C). The local model was not called: a machine "
-            f"this hot can switch itself off under the load. Let it cool and send the message again. {part.setting} sets "
-            "the limit in °C (off: no limit).")
+            f"within {WAIT / 60:.0f} minutes (its limit is {part.limit:.0f} °C). The local model {model} was not called: "
+            "it is not in memory as far as can be told, and loading a model onto a machine this hot can switch the machine "
+            f"off. Let it cool and send the message again. {part.setting} sets the limit in °C (off: no limit).")
 
 
 async def before_call(conn, run_id: str, provider_name: str, model: str, parent_step: str | None = None) -> None:
     """Returns when the machine is cool enough for a call to this model, which is at once for a model that runs
-    elsewhere and for a machine that is not at a limit. A hot one gets up to WAIT seconds to drop a few degrees
-    under the limit, shown as a "cooling" step of the run; TooHot when it has not by then."""
+    elsewhere, for one that is in memory, and for a machine that is not at a limit. A hot machine that has to load
+    the model gets up to WAIT seconds to drop a few degrees under the limit, shown as a "cooling" step of the run;
+    TooHot when it has not by then."""
     if not here(provider_name, model):
         return
     step = None
@@ -61,7 +100,7 @@ async def before_call(conn, run_id: str, provider_name: str, model: str, parent_
 
     status, still = "error", None
     try:
-        still = await thermal.wait_cool(WAIT, STEP, thermal.MARGIN, tell)
+        still = await wait_to_load(provider_name, model, WAIT, STEP, thermal.MARGIN, tell)
         status = "done" if still is None else "error"
     except asyncio.CancelledError:
         status = "cancelled"
@@ -71,4 +110,4 @@ async def before_call(conn, run_id: str, provider_name: str, model: str, parent_
             done = await asyncio.shield(runs.finish_step(conn, step.id, status))
             await asyncio.shield(hub.publish(run_id, {"type": "step_finished", "step": done.model_dump()}))
     if still is not None:
-        raise TooHot(_stopped(still))
+        raise TooHot(_stopped(still, model))

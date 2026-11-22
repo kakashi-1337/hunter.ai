@@ -6,9 +6,10 @@ One call at a time: the call waits for the lock the embedder uses and sends an e
 context size. The model stays loaded for two minutes after an answer, so that a run of
 pictures (the frames of a video) loads it once and not once per picture: each load reads
 several GB and heats the machine. Ollama unloads it when the two minutes pass without a
-call (HUNTERAI_VISION_KEEP_LOADED sets the seconds; 0 unloads after every answer). A machine whose
-processor is too hot is waited for and then left alone (`thermal`). What is written in an
-image is data about the image, never an instruction.
+call (HUNTERAI_VISION_KEEP_LOADED sets the seconds; 0 unloads after every answer). Before a load,
+a machine whose processor or graphics card is too hot is waited for and then left alone
+(`cooling`); a model that is still in memory looks at once. What is written in an image is
+data about the image, never an instruction.
 
 Such a model fills in what it cannot read, so the result says how large the picture is (a
 shrunken frame holds no readable text), says how much of what the model quotes OCR read as
@@ -28,7 +29,7 @@ from pathlib import Path
 
 import httpx
 
-from .. import config, context, db, pictures, thermal, uploads
+from .. import config, context, cooling, db, pictures, thermal, uploads
 from ..kb import embed
 from ..providers import ollama
 from ..providers.base import error_from_status
@@ -208,7 +209,7 @@ async def _describe(model: str, seen: pictures.Seen, question: str, read: str, c
             "options": {"num_ctx": NUM_CTX, "num_predict": NUM_PREDICT, "temperature": 0.1, "repeat_penalty": 1.15},
             "messages": [{"role": "user", "content": ask, "images": [base64.b64encode(seen.data).decode()]}]}
     async with embed.embed_lock(LOCK_TIMEOUT):
-        hot = await thermal.wait_cool(thermal.WAIT, thermal.STEP)
+        hot = await cooling.wait_to_load(ollama.OllamaProvider.name, model, thermal.WAIT, thermal.STEP)
         if hot is not None:
             raise ToolError(f"the {hot.name} is at {hot.degrees:.0f} C, too hot to load a local model without risking a "
                             f"shutdown (the limit is {hot.limit:.0f} C); let the machine cool and ask again")

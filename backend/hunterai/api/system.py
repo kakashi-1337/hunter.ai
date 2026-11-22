@@ -88,10 +88,6 @@ def _loaded(m: dict) -> dict:
             "context": window if isinstance(window, int) and window > 0 else None}
 
 
-def _same(a: str, b: str) -> bool:
-    return a == b or a + ":latest" == b or a == b + ":latest"
-
-
 @router.get("/system/local")
 async def local_model(conn=Depends(get_conn)):
     """The local model in use (the fallback model) and its window: what the model takes at most, what a token
@@ -100,12 +96,12 @@ async def local_model(conn=Depends(get_conn)):
     model = await store.get(conn, "fallback_model", engine.DEFAULT_FALLBACK_MODEL)
     tags, ps = await asyncio.gather(_fetch(ollama.host() + "/api/tags"), _fetch(ollama.host() + "/api/ps"))
     names = [str(m.get("name")) for m in (tags or {}).get("models") or [] if isinstance(m, dict)]
-    installed = any(_same(n, model) for n in names)
+    installed = any(ollama.same_model(n, model) for n in names)
     said = await registry.get(LOCAL).described(model) if installed else None
     limit, cost = said or (None, None)
     setting = ollama.default_num_ctx()
     before = await overhead(conn)
-    now = next((_loaded(m) for m in (ps or {}).get("models") or [] if isinstance(m, dict) and _same(str(m.get("name")), model)), None)
+    now = next((_loaded(m) for m in (ps or {}).get("models") or [] if isinstance(m, dict) and ollama.same_model(str(m.get("name")), model)), None)
     return {"answers": tags is not None, "model": model, "installed": installed, "window": min(setting, limit) if limit else setting,
             "limit": limit, "bytes_per_token": cost,
             "overhead": {k: before[k] for k in ("tokens", "tools", "on_demand")},

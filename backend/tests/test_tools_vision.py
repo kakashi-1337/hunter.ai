@@ -242,9 +242,15 @@ def test_the_tool_tells_the_model_to_send_pictures_at_their_original_size():
     assert "original size" in said and "one picture" in said
 
 
+def in_memory(*names):
+    """What Ollama says it holds in memory."""
+    return respx.get(f"{OLLAMA}/api/ps").mock(return_value=httpx.Response(200, json={"models": [{"name": n} for n in names]}))
+
+
 @respx.mock
 async def test_a_local_model_is_not_loaded_onto_a_hot_machine(conn, tmp_path, monkeypatch):
     chat_route = ollama()
+    in_memory("plain:8b")                   # the chat model that made the heat, not the one that reads pictures
     monkeypatch.setattr(thermal, "cpu_temp", lambda: 98.0)
     monkeypatch.setattr(thermal, "WAIT", 0.01)
     monkeypatch.setattr(thermal, "STEP", 0.001)
@@ -255,8 +261,23 @@ async def test_a_local_model_is_not_loaded_onto_a_hot_machine(conn, tmp_path, mo
 
 
 @respx.mock
+async def test_a_model_that_is_in_memory_looks_at_once_on_a_hot_machine(conn, tmp_path, monkeypatch):
+    # The frames of a video: the model that reads them stays in memory from one to the next, and so does the heat.
+    chat_route = ollama()
+    asked = in_memory("plain:8b", "eyes:9b")
+    monkeypatch.setattr(thermal, "cpu_temp", lambda: 98.0)
+    monkeypatch.setattr(thermal, "WAIT", 0.01)
+    monkeypatch.setattr(thermal, "STEP", 0.001)
+    shot = tmp_path / "p.png"; shot.write_bytes(PNG)
+    block, _ = await look(conn, image=str(shot))
+    assert chat_route.called and asked.call_count == 1 and not block.is_error
+    assert "A login form with two fields." in block.content and "too hot" not in block.content
+
+
+@respx.mock
 async def test_a_hot_graphics_card_keeps_the_model_from_loading_as_well(conn, tmp_path, monkeypatch):
     chat_route = ollama()
+    in_memory()
 
     async def card():
         return 91.0

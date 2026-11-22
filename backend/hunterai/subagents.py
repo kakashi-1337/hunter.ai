@@ -108,7 +108,8 @@ async def _model_call(conn, run_id: str, parent_step: str, provider_name: str, m
                       wire: list[WireMessage], options: Options, specs: list[ToolSpec],
                       blocks: list[Block], taken: set[str]) -> list[ToolCall]:
     """One model call of the subagent; appends to `blocks`, returns the tool calls it made. Like a call of the
-    run itself, one to a model on this machine waits for a hot machine to cool, and fails when it does not."""
+    run itself, one that has to load a model onto this machine waits for a hot machine to cool, and fails when it
+    does not."""
     try:
         await cooling.before_call(conn, run_id, provider_name, model, parent_step)
     except cooling.TooHot as e:

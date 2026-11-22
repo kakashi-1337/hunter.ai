@@ -113,7 +113,7 @@ export function MessageItem({ message }: { message: Message }) {
   // The check of the folder runs inside the run, before its first change and after its answer: say so while it does.
   const liveSteps = useStore((s) => (s.live && s.live.target === message.id ? s.live.steps : null))
   const checking = streaming && liveSteps ? runningCheck(liveSteps) : null
-  // A local model is called once the machine is cool enough for it: the wait can take minutes, and nothing else shows it.
+  // A local model is loaded once the machine is cool enough for it: the wait can take minutes, and nothing else shows it.
   const cooling = streaming && liveSteps ? waitingToCool(liveSteps) : null
   const { index, count } = siblingPosition(message)
   const isUser = message.role === 'user'

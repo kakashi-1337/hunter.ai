@@ -250,8 +250,8 @@ async def _fitted(conn, run_id: str, provider, provider_name: str, model: str, s
 async def _attempt(conn, run_id: str, mid: str, provider_name: str, model: str, system: str,
                    wire: list[WireMessage], options: Options, acc: _Attempt,
                    specs: list[ToolSpec] | None = None) -> None:
-    """One model call. Raises ProviderError; always closes its trajectory step. A model on this machine is called
-    once the machine is cool enough for it (cooling.py): _Stopped when it does not cool.
+    """One model call. Raises ProviderError; always closes its trajectory step. A model that has to be loaded
+    onto this machine is called once the machine is cool enough for that (cooling.py): _Stopped when it does not cool.
 
     Tool calls the model makes are left in acc.calls for the caller to run."""
     try:
