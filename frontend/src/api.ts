@@ -160,6 +160,9 @@ export const jobAction = (id: string, action: JobAction) => request<Job>('POST',
 export const kbSearch = (collectionIds: string[], query: string, limit = 8) =>
   request<{ hits: KbHit[]; duration_ms: number }>('POST', '/api/kb/search', { collection_ids: collectionIds, query, limit })
 export const getChatKb = (chatId: string) => request<ChatKb>('GET', `/api/kb/chats/${chatId}`)
+/** The collections every new chat starts with. A chat that exists is not touched by them. */
+export const getNewChatKb = () => request<{ collection_ids: string[] }>('GET', '/api/kb/new-chats')
+export const putNewChatKb = (collection_ids: string[]) => request<{ collection_ids: string[] }>('PUT', '/api/kb/new-chats', { collection_ids })
 export const putChatKb = (chatId: string, patch: Partial<Pick<ChatKb, 'collection_ids' | 'always_retrieve'>>) =>
   request<ChatKb>('PUT', `/api/kb/chats/${chatId}`, patch)
 export const ingestGit = (collectionId: string, url: string, again = false) =>

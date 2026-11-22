@@ -9,7 +9,7 @@ from typing import Literal
 
 from ..db import new_id, now
 from ..types import ChatKb, Chunk, ChunkDraft, Collection, Document, JobItem
-from . import jobs
+from . import jobs, settings
 
 CHUNK_NS = uuid.UUID("9d2f6c1e-5b7a-4c3d-8e21-48756e7465ca")
 STATUSES = ("ok", "skipped", "failed", "processing")
@@ -307,6 +307,28 @@ async def set_chat_kb(conn, chat_id: str, *, collection_ids: builtins.list[str] 
                                [(chat_id, c) for c in dict.fromkeys(collection_ids)])
     await conn.commit()
     return await get_chat_kb(conn, chat_id)
+
+
+# ---- which collections every new chat starts with
+
+NEW_CHATS = "kb_new_chats"      # the setting: the ids the owner named
+
+
+async def new_chat_collections(conn) -> builtins.list[str]:
+    """The collections every new chat starts with: those the owner named that still exist, by name as a chat
+    lists its own. None unless he named some: a chat without a collection is the usual one."""
+    named = await settings.get(conn, NEW_CHATS, [])
+    if not isinstance(named, builtins.list) or not named:
+        return []
+    marks = ",".join("?" * len(named))
+    rows = await (await conn.execute(
+        f"select id from kb_collections where id in ({marks}) order by name collate nocase", [str(c) for c in named])).fetchall()
+    return [r["id"] for r in rows]
+
+
+async def set_new_chat_collections(conn, collection_ids: builtins.list[str]) -> builtins.list[str]:
+    await settings.put(conn, NEW_CHATS, builtins.list(collection_ids))      # read back each once: see above
+    return await new_chat_collections(conn)
 
 
 # ---- index browser: one chunk at a time

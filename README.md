@@ -219,6 +219,12 @@ when the collection is created.
   `<<<KB_REFERENCE ... untrusted>>>` lines with the rule that they are data, not
   instructions. The answer cites them as [n], and "Sources" under it shows each passage.
   Without the switch, the agent can still look things up itself with the `kb_search` tool.
+- **In every new chat.** A chat reads only the collections attached to it, and a new chat
+  has none: the agent's `kb_search` then answers "No knowledge collection is attached to
+  this chat", whatever it searches for. Tick "every new chat" beside a collection in the
+  same "+ Knowledge" list, and each chat you start from then on has that collection
+  attached, next to those of its persona. Chats that exist keep what they have: attach it
+  to them by hand. Detaching it in one chat changes that chat only.
 - **Looking inside.** Click a document in the list to read its chunks, correct one (it is
   embedded again), delete one, or remove the document from the index. "+ Note" adds text
   by hand. "Re-embed" embeds the whole collection again with another embedder, as a job;
