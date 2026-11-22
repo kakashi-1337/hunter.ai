@@ -270,10 +270,98 @@ _LOCAL_TOKEN = re.compile(r"(?<![\w.-])(localhost|ip6-localhost|\[::1\])(?::(\d{
 _NAME_TOKEN = re.compile(r"(?<![\w.@-])([a-z0-9-]+(?:\.[a-z0-9-]+)+)(?::(\d{1,5}))?(?![\w.-])")
 _NOT_TLDS = frozenset("sh py js ts txt json xml yml yaml md log html csv conf cfg out zip gz tar "
                       "php go rs c h".split())
+# The last part of a host name: a top-level domain of the internet (tools/tlds.txt says where the list is from),
+# or one of the endings people give the hosts of their own networks and labs.
+TLDS = frozenset(line for line in Path(__file__).with_name("tlds.txt").read_text().split() if line.isalpha())
+PRIVATE_ENDINGS = frozenset(("local", "internal", "lan", "home", "corp", "localdomain", "intranet", "private", "test",
+                             "example", "invalid", "onion", "alt", "htb", "thm", "lab"))
+# Where program text stands in a command. Its names are the properties of its objects (object.keys, self.name),
+# and thousands of them end like a domain: in 187 source files of this project 906 such names did, 613 of them
+# after every name that is called or assigned to was left out. A host a program talks to stands in its quotes.
+_HEREDOC = re.compile(r"<<-?[ \t]*(['\"]?)([a-z_][a-z0-9_]*)\1")
+# A program that runs code, with nothing but its own switches behind it: "python3 -u", not "python3 exploit.py",
+# whose -c and whose lines on standard input are the script's own.
+_RUNS_CODE = r"(?:^|[\s;|&(])(?:python[\d.]*|node|nodejs|bun|deno|perl|ruby|php|lua|rscript)(?:[ \t]+-[\w=.:,-]+)*[ \t]+"
+_CODE_FLAG = re.compile(_RUNS_CODE + r"(?:-[a-z]{0,3}[cepr]|--eval|--print|eval)[ \t]*$")       # in front of a quoted text
+_CODE_FED = re.compile(_RUNS_CODE.removesuffix(r"[ \t]+") + r"(?:[ \t]+-)?[ \t]*$")              # in front of <<
+_CODE_FILE = re.compile(r">[ \t]*['\"]?[^\s'\"<>|;&]+\.(?:py|js|mjs|cjs|ts|tsx|jsx|rb|pl|php|go|rs|java|c|cc|cpp|cs|lua|kt|swift)"
+                        r"(?![\w.-])")                                                           # the line writes a source file
+_CALL = re.compile(r"(?<![$\w.])[a-z_][\w.]*\((?!\))")       # a name with a bracket behind it that holds something
+_ARROW = re.compile(r"=>")
+CALLS_OF_A_PROGRAM = 2      # in a quoted text or a here-document that no known program runs: from here on it is one
+
+
+def _regions(text: str) -> list[tuple[int, int, str, bool]]:
+    """What a command quotes: (start, end, how it is quoted, whether a program that runs code was given it).
+    How: ' or " for a quoted text of the shell, "<" for the lines of a here-document. Read as a shell would read
+    them, as far as that is needed here: a backslash keeps the character behind it out of it."""
+    out, i, n = [], 0, len(text)
+    while i < n:
+        ch = text[i]
+        if ch == "\\":
+            i += 2
+        elif ch == "'":
+            end = text.find("'", i + 1)
+            end = n if end < 0 else end
+            out.append((i + 1, end, "'", bool(_CODE_FLAG.search(text[max(0, i - 200):i]))))
+            i = end + 1
+        elif ch == '"':
+            j = i + 1
+            while j < n and text[j] != '"':
+                j += 2 if text[j] == "\\" else 1
+            out.append((i + 1, min(j, n), '"', bool(_CODE_FLAG.search(text[max(0, i - 200):i]))))
+            i = j + 1
+        elif text.startswith("<<", i) and not text.startswith("<<<", i) and (m := _HEREDOC.match(text, i)):
+            line_end = text.find("\n", m.end())
+            if line_end < 0:
+                break
+            line_start = text.rfind("\n", 0, i) + 1
+            close = re.compile(r"^[ \t]*" + re.escape(m.group(2)) + r"[ \t]*$", re.MULTILINE).search(text, line_end + 1)
+            end = close.start() if close else n
+            given = bool(_CODE_FED.search(text[line_start:i]) or _CODE_FILE.search(text[line_start:line_end]))
+            out.append((line_end + 1, end, "<", given))
+            i = close.end() if close else n
+        else:
+            i += 1
+    return out
+
+
+def _programs(text: str) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
+    """(the program texts of a command, the stretches of them that stand outside the program's own quotes). A
+    name in such a stretch is a name of the program, not a host. Program text: what is quoted for a program that
+    runs code (python -c, node -e), a here-document for one or into a source file, and any quoted text or
+    here-document that calls CALLS_OF_A_PROGRAM things or has an arrow function."""
+    programs: list[tuple[int, int]] = []
+    bare: list[tuple[int, int]] = []
+    for start, end, how, given in _regions(text):
+        body = text[start:end]
+        if not (given or len(_CALL.findall(body)) >= CALLS_OF_A_PROGRAM or _ARROW.search(body)):
+            continue
+        programs.append((start, end))
+        inside, at, i = None, start, start      # inside: the quote of the program that is open; at: where bare text began
+        while i < end:
+            ch = text[i]
+            escaped = ch == "\\" and i + 1 < end
+            quote = text[i + 1] if escaped and how == '"' and text[i + 1] == '"' else (None if escaped else ch if ch in "'\"`" else None)
+            if quote is not None and inside is None:
+                bare.append((at, i))
+                inside = quote
+            elif quote is not None and quote == inside:
+                inside, at = None, i + (2 if escaped else 1)
+            elif ch == "\n" and inside in ("'", '"'):
+                inside, at = None, i            # a quote that was never closed on its line (an apostrophe in a comment)
+            i += 2 if escaped else 1
+        if inside is None:
+            bare.append((at, end))
+    return programs, bare
 
 
 def extract_hosts(command: str) -> list[HostUse]:
-    """Best-effort hosts named in a shell string. Never resolved by HunterAI."""
+    """Best-effort hosts named in a shell string. Never resolved by HunterAI.
+
+    A URL and an address count wherever they stand. A bare name (shop.acme.dev) counts when it ends like a host
+    (a top-level domain, an ending of a private network, or any ending with a port behind it), is not called
+    (os.open(...)), and does not stand in program text outside the program's own quotes."""
     out: dict[tuple[str, int | None], HostUse] = {}
 
     def add(h: HostUse) -> None:
@@ -285,7 +373,7 @@ def extract_hosts(command: str) -> list[HostUse]:
             add(host_of_url(m.group(0)))
         except ToolError:
             pass
-    rest = _URL.sub(" ", text)
+    rest = _URL.sub(lambda m: " " * len(m.group(0)), text)      # the same length: places in it are places in the command
     for m in _V4_TOKEN.finditer(rest):
         ip = _canonical_ip(m.group(1))
         if ip:
@@ -296,10 +384,17 @@ def extract_hosts(command: str) -> list[HostUse]:
             add(HostUse("::1", port, ("::1",)))
         else:
             add(HostUse(m.group(1), port))
+    programs, bare = _programs(text)
     for m in _NAME_TOKEN.finditer(rest):
         name, last = m.group(1), m.group(1).rsplit(".", 1)[-1]
         if not (last.isalpha() and len(last) >= 2) or last in _NOT_TLDS:
             continue
+        if not (last in TLDS or last in PRIVATE_ENDINGS or m.group(2)):
+            continue                                            # shot.png, nginx.service, object.keys
+        if rest.startswith("(", m.end()) or any(a <= m.start() < b for a, b in bare):
+            continue                                            # re.search(...), and self.name in a program
+        if rest.startswith("{", m.start() - 1) and any(a <= m.start() < b for a, b in programs):
+            continue                                            # f"{self.name}" and `${user.id}`: put into a text, not named in it
         try:
             add(HostUse(normalize_host(name), int(m.group(2)) if m.group(2) else None))
         except ValueError:

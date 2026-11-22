@@ -73,6 +73,21 @@ async def test_allow_for_chat_does_not_cover_another_command_or_cwd(conn):
     assert req.cwd == "/tmp" and len(await grants.list(conn, chat.id)) == 1
 
 
+async def test_a_program_in_a_command_is_not_asked_about_for_its_names(conn):
+    """Reported with the permission box on screen: a chat that allows the tool, a target with a scope, and a
+    command that runs a JavaScript program. It asked, with seven of the program's names listed as hosts."""
+    from tests.test_hosts_in_commands import REPORTED
+    chat, run_id = await seeded_run(conn, scope={"in": ["*.acme.test"], "out": []}, permissions=ALLOW)
+    command = REPORTED.replace("node -e", "true")              # the same text, and nothing has to be installed to run it
+    out, events, steps = await call(conn, chat, run_id, "execute", command=command)
+    assert not out.block.is_error and "exit code: 0" in out.block.content
+    assert not [e for e in events if e["type"] == "permission_request"]
+    assert [s.detail.get("hosts") for s in steps if s.kind == "tool_call"] == [[]]
+    # A host the program names in its quotes is still the owner's to answer for.
+    req, _, _ = await ask(conn, chat, run_id, "execute", "deny", cid="c2", command=command.replace('require("http")', 'require("http"); const to = "other.test"'))
+    assert [h["host"] for h in req.hosts] == ["other.test"] and any("other.test is not in this target's in-scope list" in w for w in req.warnings)
+
+
 async def test_out_of_scope_host_in_a_command_warns(conn):
     chat, run_id = await seeded_run(conn, scope={"in": ["*.acme.test"], "out": []}, permissions=ALLOW)
     req, _, _ = await ask(conn, chat, run_id, "execute", "deny", command="curl https://other.test")
