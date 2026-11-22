@@ -363,7 +363,10 @@ What to know before adding somebody else's skill:
 
 You do not have to stop a run to tell the agent something. While it works, the Send button
 becomes **Queue**: your message is kept, shown above the composer, and handed to the model
-with its next model call, after the tool it is running has finished. Nothing is
+with its next model call, after the tool it is running has finished. A waiting message of
+more than three lines is folded (**Show all** unfolds it), and each has **Edit** (it goes
+back into the message box and off the list), **Copy** and ✕. Where the agent read it, in
+its answer, the message has **Copy** and **Send again** beside the answer's own buttons. Nothing is
 interrupted. The model receives it at the end of the last tool result, inside a block
 marked with a code that is made on your machine for that chat and named in the system
 prompt; only a block with that code counts as you, so a web page or a file cannot pose as

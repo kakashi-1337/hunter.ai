@@ -69,6 +69,34 @@ function AnswerCheck({ block }: { block: AnswerCheckBlock }) {
   )
 }
 
+/** What the owner sent while the agent worked, at the place where the agent read it. It can be copied, and sent
+ * once more: it waits for the agent's next step while a run is going, and is a message of its own otherwise. It
+ * is part of the answer it stands in, so it goes when that answer is deleted. */
+export function OwnerNote({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false)
+  const [sent, setSent] = useState(false)
+  const copy = async () => {
+    setCopied(await copyText(text))
+    setTimeout(() => setCopied(false), 1200)
+  }
+  const again = async () => {
+    setSent(await useStore.getState().queueMessage(text))
+    setTimeout(() => setSent(false), 1200)
+  }
+  return (
+    <div className="owner-note">
+      <div className="k">
+        <span>You, while the agent worked (read here)</span>
+        <span className="tools">
+          <button className="icon" title="Send this message to the agent once more" onClick={() => void again()}>{sent ? 'Sent' : 'Send again'}</button>
+          <button className="icon" onClick={() => void copy()}>{copied ? 'Copied' : 'Copy'}</button>
+        </span>
+      </div>
+      <div className="bubble">{text}</div>
+    </div>
+  )
+}
+
 export function MessageItem({ message }: { message: Message }) {
   const busy = useStore((s) => s.live !== null)
   const { edit, retry, remove, switchBranch } = useStore.getState()
@@ -151,7 +179,7 @@ export function MessageItem({ message }: { message: Message }) {
             ) : item.kind === 'text' ? (
               <Markdown key={i} text={item.text} />
             ) : item.kind === 'note' ? (
-              <div key={i} className="owner-note"><div className="k">You, while the agent worked (read here)</div><div className="bubble">{item.text}</div></div>
+              <OwnerNote key={i} text={item.text} />
             ) : item.kind === 'notice' ? (
               <div key={i} className={`answer-notice ${item.level}`} role="note">{item.text}</div>
             ) : (
