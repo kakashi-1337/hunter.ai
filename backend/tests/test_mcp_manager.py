@@ -2,7 +2,9 @@ import asyncio
 import contextlib
 import dataclasses
 import json
+import os
 import re
+import signal
 import sys
 import time
 from pathlib import Path
@@ -47,14 +49,125 @@ async def test_tools_register_under_the_server_prefix_with_the_config_risk(fake)
     assert (await m.call_tool("fake", "echo", {"text": "hi"})).text == "hi"
     assert (await m.call_tool("fake", "fail", {})).is_error
 
-async def test_dead_server_restarts_once_then_stays_dead(fake):
+def pid_of(m) -> int:
+    """The process the fake server runs as now."""
+    return int(Manager._pidfile(m._servers["fake"].cfg).read_text())
+
+
+async def back(m, restarts: int) -> None:
+    await eventually(lambda: m.status()[0].state == "ready" and m.status()[0].restarts == restarts)
+
+
+async def test_an_error_the_server_answers_with_is_passed_on_and_the_server_is_left_running(fake):
     m = await fake()
-    with pytest.raises(ToolError): await m.call_tool("fake", "die", {})
-    await eventually(lambda: m.status()[0].state == "ready")
-    assert m.status()[0].restarts == 1 and registry.get("fake_echo") is not None
+    was = pid_of(m)
+    for _ in range(3):                                                       # more often than it would have survived
+        r = await m.call_tool("fake", "refuse", {})
+        assert r.is_error and "the index is not built yet" in r.text and "-32603" in r.text
+    s = m.status()[0]
+    assert alive(was) and pid_of(m) == was and (s.state, s.restarts) == ("ready", 0)
+    assert (await m.call_tool("fake", "echo", {"text": "hi"})).text == "hi"
+
+
+async def test_a_server_that_stops_is_started_again_each_time(fake):
+    m = await fake()
+    for n in (1, 2, 3):
+        with pytest.raises(ToolError): await m.call_tool("fake", "die", {})
+        await back(m, n)
+        assert registry.get("fake_echo") is not None and (await m.call_tool("fake", "echo", {"text": "hi"})).text == "hi"
+
+
+async def test_a_server_that_keeps_stopping_is_left_alone_and_says_why(fake, monkeypatch):
+    monkeypatch.setattr(mcp_manager, "MAX_RESTARTS", 2)
+    m = await fake()
+    for n in (1, 2):
+        with pytest.raises(ToolError): await m.call_tool("fake", "die", {})
+        await back(m, n)
     with pytest.raises(ToolError): await m.call_tool("fake", "die", {})
     await eventually(lambda: m.status()[0].state == "dead")
-    assert registry.get("fake_echo") is None and m.status()[0].error and not m.available("fake")
+    s = m.status()[0]
+    assert registry.get("fake_echo") is None and not m.available("fake") and s.restarts == 2
+    assert s.error.startswith("it stopped 3 times within 10 minutes and was not started again")
+    with pytest.raises(ToolError, match="is not available: it stopped 3 times"): await m.call_tool("fake", "echo", {"text": "hi"})
+
+
+async def test_stops_of_long_ago_do_not_count(fake, monkeypatch):
+    monkeypatch.setattr(mcp_manager, "MAX_RESTARTS", 1)
+    monkeypatch.setattr(mcp_manager, "RESTART_WINDOW", 0.3)
+    m = await fake()
+    for n in (1, 2, 3):
+        with pytest.raises(ToolError): await m.call_tool("fake", "die", {})
+        await back(m, n)
+        await asyncio.sleep(0.4)
+
+
+async def test_a_server_that_does_not_come_up_is_tried_once_more_and_no_more(fake):
+    m = await fake(args=["-c", "import sys; sys.exit(3)"])
+    s = m.status()[0]
+    assert s.state == "dead" and s.restarts == 1 and s.error and registry.get("fake_echo") is None
+
+
+async def test_one_more_try_is_for_each_time_it_does_not_come_up_not_once_for_good(fake, tmp_path):
+    # Its first start fails and so does its third: each time the next one works.
+    flaky = ("import os, sys\ncount = sys.argv[1]\nn = int(open(count).read()) if os.path.exists(count) else 0\n"
+             "open(count, 'w').write(str(n + 1))\nif n in (0, 2): sys.exit(3)\nos.execv(sys.executable, [sys.executable, sys.argv[2]])\n")
+    m = await fake(args=["-c", flaky, str(tmp_path / "starts"), FAKE])
+    assert (m.status()[0].state, m.status()[0].restarts) == ("ready", 1)
+    with pytest.raises(ToolError): await m.call_tool("fake", "die", {})
+    await back(m, 3)
+    assert (await m.call_tool("fake", "echo", {"text": "hi"})).text == "hi"
+
+
+async def test_a_server_that_ended_while_nobody_called_it_is_started_before_the_next_call(fake, monkeypatch):
+    monkeypatch.setattr(mcp_manager, "ALIVE_EVERY", 60)                      # nothing but the call notices
+    m = await fake()
+    was = pid_of(m)
+    os.kill(was, signal.SIGKILL)
+    await eventually(lambda: not alive(was))
+    assert (await m.call_tool("fake", "echo", {"text": "hi"})).text == "hi"   # the call is not lost to it
+    assert m.status()[0].restarts == 1 and pid_of(m) != was
+
+
+async def test_a_server_that_ended_while_nobody_called_it_is_noticed_without_a_call(fake, monkeypatch):
+    monkeypatch.setattr(mcp_manager, "ALIVE_EVERY", 0.05)
+    m = await fake()
+    os.kill(pid_of(m), signal.SIGKILL)
+    await back(m, 1)
+    assert registry.get("fake_echo") is not None
+
+
+async def test_a_call_that_stops_a_read_only_server_is_made_once_more(fake, tmp_path):
+    m = await fake(risk="read")
+    assert (await m.call_tool("fake", "die_once", {"marker": str(tmp_path / "m")})).text == "survived"
+    assert m.status()[0].restarts == 1
+
+
+async def test_a_call_that_stops_another_server_is_not_repeated_and_says_so(fake, tmp_path):
+    m = await fake()                                                         # risk execute: it may have done part of its work
+    with pytest.raises(ToolError) as e:
+        await m.call_tool("fake", "die_once", {"marker": str(tmp_path / "m")})
+    said = str(e.value)
+    assert "MCP server fake stopped while it ran this call" in said and "was not repeated" in said
+    assert str(config.logs_dir() / "mcp-fake.log") in said
+    await back(m, 1)
+    assert (await m.call_tool("fake", "die_once", {"marker": str(tmp_path / "m")})).text == "survived"      # the model's own second call
+
+
+async def test_a_call_that_stops_a_read_only_server_twice_is_given_up(fake):
+    m = await fake(risk="read")
+    with pytest.raises(ToolError, match="stopped twice while it ran this call"):
+        await m.call_tool("fake", "die", {})
+    await back(m, 2)
+
+
+async def test_a_call_is_not_repeated_on_a_tool_the_restarted_server_no_longer_offers(fake, tmp_path):
+    marker = str(tmp_path / "m")
+    m = await fake(risk="read", env={"FAKE_WITHOUT_DIE_ONCE_IF": marker})
+    assert registry.get("fake_die_once") is not None
+    with pytest.raises(ToolError, match="stopped while it ran this call"):
+        await m.call_tool("fake", "die_once", {"marker": marker})
+    await back(m, 1)
+    assert registry.get("fake_die_once") is None
 
 async def test_stop_ends_the_server_and_its_children(fake):
     m = await fake()
