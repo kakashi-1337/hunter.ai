@@ -32,6 +32,11 @@ async def test_a_bench_is_stored_with_its_models_and_cases(conn):
     assert await bench.get(conn, "nothing") is None
 
 
+async def test_a_bench_can_begin_with_a_note(conn):
+    made = await bench.create(conn, a_set(), [QWEN], 1, "This set names tools HunterAI does not have at the moment: x.")
+    assert made.note == "This set names tools HunterAI does not have at the moment: x." and made.status == "running"
+
+
 async def test_the_cases_of_a_bench_are_the_briefs_of_the_set(conn):
     long = cases.parse('[[case]]\nid = "one"\ngroup = "honesty"\nprompt = "' + "p" * 600 + '"\n[case.expect]\nanswer_any = ["x"]\n', "own:long")
     made = await bench.create(conn, long, [QWEN], 1)

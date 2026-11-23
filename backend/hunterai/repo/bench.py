@@ -81,13 +81,14 @@ def _result(r) -> BenchResult:
                        created_at=r["created_at"])
 
 
-async def create(conn, set_: CaseSet, models: builtins.list[ModelRef], repeats: int) -> BenchRun:
+async def create(conn, set_: CaseSet, models: builtins.list[ModelRef], repeats: int, note: str = "") -> BenchRun:
     """A bench that is running. The cases are kept as they are now: the set's file can change afterwards."""
     rid = new_id()
     await conn.execute(
-        "insert into bench_runs(id,set_id,set_name,repeats,models_json,cases_json,status,created_at) values(?,?,?,?,?,?,?,?)",
+        "insert into bench_runs(id,set_id,set_name,repeats,models_json,cases_json,status,note,created_at)"
+        " values(?,?,?,?,?,?,?,?,?)",
         (rid, set_.id, set_.name, repeats, json.dumps([m.model_dump() for m in models]),
-         json.dumps([c.model_dump() for c in briefs(set_)]), "running", now()))
+         json.dumps([c.model_dump() for c in briefs(set_)]), "running", note, now()))
     await conn.commit()
     return await get(conn, rid)
 
