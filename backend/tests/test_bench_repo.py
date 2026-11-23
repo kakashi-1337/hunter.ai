@@ -75,6 +75,32 @@ async def test_results_come_back_in_the_order_they_were_added(conn):
     assert await bench.results(conn, other.id) == []
 
 
+async def test_the_marks_of_a_bench_are_its_results_without_answers_and_calls(conn):
+    made = await bench.create(conn, a_set(), [QWEN, MIMO], 1)
+    await bench.add_result(conn, made.id, QWEN, "c0", 1, "pass", [], ran(Call("cve", {}), answer="No record."), 1500)
+    await bench.add_result(conn, made.id, MIMO, "c0", 1, "skipped", ["skipped"])
+    first, second = await bench.marks(conn, made.id)
+    assert first.model_dump() == {"provider": "ollama", "model": "qwen:9b", "case_id": "c0", "repeat": 1, "status": "pass",
+                                  "turns": 2, "input_tokens": 120, "output_tokens": 30, "duration_ms": 1500}
+    assert (second.model, second.status, second.duration_ms) == ("mimo:9b", "skipped", 0)
+    other = await bench.create(conn, a_set(), [QWEN], 1)
+    assert await bench.marks(conn, other.id) == []
+
+
+async def test_the_runs_of_one_cell_come_back_in_the_order_of_their_repeats(conn):
+    made = await bench.create(conn, a_set(), [QWEN, MIMO], 2)
+    for ref in (QWEN, MIMO):
+        for case in ("c0", "c1"):
+            for repeat in (1, 2):
+                await bench.add_result(conn, made.id, ref, case, repeat, "pass", [], ran(answer=f"{ref.model} {case} {repeat}"), 1)
+    other = await bench.create(conn, a_set(), [MIMO], 1)
+    await bench.add_result(conn, other.id, MIMO, "c1", 1, "pass", [], ran(answer="another bench"), 1)
+    got = await bench.cell(conn, made.id, MIMO, "c1")
+    assert [(g.repeat, g.answer) for g in got] == [(1, "mimo:9b c1 1"), (2, "mimo:9b c1 2")]
+    assert await bench.cell(conn, made.id, ModelRef(provider="other", model="mimo:9b"), "c1") == []
+    assert await bench.cell(conn, made.id, MIMO, "c9") == []
+
+
 async def test_an_answer_longer_than_8000_characters_is_cut(conn):
     made = await bench.create(conn, a_set(), [QWEN], 1)
     long = await bench.add_result(conn, made.id, QWEN, "c0", 1, "pass", [], ran(answer="a" * 8001), 1)

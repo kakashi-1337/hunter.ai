@@ -63,6 +63,19 @@ class BenchResult(BaseModel):
     created_at: str
 
 
+class Mark(BaseModel):
+    """A result as the table of a bench needs it: without its lines, calls and answer."""
+    provider: str
+    model: str
+    case_id: str
+    repeat: int
+    status: Literal["pass", "fail", "error", "skipped"]
+    turns: int
+    input_tokens: int
+    output_tokens: int
+    duration_ms: int
+
+
 def _cut(text: str, most: int) -> str:
     return text if len(text) <= most else text[:most] + "…"
 
@@ -133,6 +146,22 @@ async def get(conn, run_id: str) -> BenchRun | None:
 async def results(conn, run_id: str) -> builtins.list[BenchResult]:
     """The results of a bench in the order they were added."""
     rows = await (await conn.execute("select * from bench_results where run_id=? order by rowid", (run_id,))).fetchall()
+    return [_result(r) for r in rows]
+
+
+async def marks(conn, run_id: str) -> builtins.list[Mark]:
+    """Every result of a bench in the order they were added, as the table needs them."""
+    rows = await (await conn.execute(
+        "select provider, model, case_id, repeat, status, turns, input_tokens, output_tokens, duration_ms"
+        " from bench_results where run_id=? order by rowid", (run_id,))).fetchall()
+    return [Mark(**dict(r)) for r in rows]
+
+
+async def cell(conn, run_id: str, ref: ModelRef, case_id: str) -> builtins.list[BenchResult]:
+    """The runs of one case on one model, by repeat."""
+    rows = await (await conn.execute(
+        "select * from bench_results where run_id=? and provider=? and model=? and case_id=? order by repeat, rowid",
+        (run_id, ref.provider, ref.model, case_id))).fetchall()
     return [_result(r) for r in rows]
 
 

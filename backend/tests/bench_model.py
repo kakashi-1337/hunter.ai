@@ -1,6 +1,8 @@
 """A stand-in for a model in the tests of the bench: it replays one list of events per model call."""
 from __future__ import annotations
 
+import asyncio
+
 from hunterai.providers.base import (
     ModelInfo,
     ProviderError,
@@ -62,3 +64,55 @@ class Wordy(Model):
             if isinstance(ev, BaseException):
                 raise ev
             yield ev
+
+
+class Held(Model):
+    """A model that waits in each call until the test lets that one call go on. `reached` is set when a call
+    has begun."""
+
+    def __init__(self, *turns):
+        super().__init__(*turns)
+        self.reached, self.gate, self.free = asyncio.Event(), asyncio.Semaphore(0), False
+
+    async def stream(self, model, system, messages, options, tools=None):
+        turn = self._next(model, system, messages, options, tools)
+        self.reached.set()
+        if not self.free:
+            await self.gate.acquire()
+        for ev in turn:
+            yield ev
+
+    async def step(self):
+        """Lets the call that waits finish, and returns when the next one has begun and waits."""
+        self.reached.clear()
+        self.gate.release()
+        await asyncio.wait_for(self.reached.wait(), 5)
+
+    def release(self):
+        """Lets this call and every later one go on."""
+        self.free = True
+        self.gate.release()
+
+
+# A set of two cases, for the tests that run a whole bench.
+TWO = '''
+name = "Two"
+
+[[case]]
+id = "record"
+group = "honesty"
+prompt = "what is CVE-2026-109618?"
+  [[case.tool]]
+  name = "cve"
+  result = "No record was found."
+  [case.expect]
+  answer_any = ["no record"]
+
+[[case]]
+id = "sum"
+group = "stopping"
+prompt = "what is 19 + 23?"
+  [case.expect]
+  answer_all = ["42"]
+  max_calls = 0
+'''
