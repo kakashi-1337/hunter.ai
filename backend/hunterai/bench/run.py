@@ -60,6 +60,7 @@ class Ran:
     transcript: Transcript
     tools_offered: int
     window: int | None          # the context window the calls were given, when the model's own was too small
+    seconds: float = 0.0        # the model calls took together: how fast the model is. The wait for a hot machine is not in it
 
 
 async def request_for(conn, provider_name: str, model: str, case: Case) -> Request:
@@ -201,4 +202,4 @@ async def run_case(conn, provider_name: str, model: str, case: Case, tell: Tell 
         t.error = e.message
     if t.finished:
         t.answer = "\n".join(b.text for b in blocks[answer_from:] if b.type == "text" and b.text).strip()
-    return Ran(t, len(request.names), window)
+    return Ran(t, len(request.names), window, spent)

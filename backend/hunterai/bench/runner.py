@@ -217,8 +217,9 @@ async def _all(conn, state: _State, bench: BenchRun, set_: CaseSet) -> None:
                     raise
                 except Exception as e:  # noqa: BLE001 - one run that breaks is the error of that run, not the end of hours of them
                     verdict = score.Verdict(status="error", reasons=[problems.own_failure(e, "running this test")])
-                took = int((time.monotonic() - began) * 1000)
-                await store.add_result(conn, bench.id, ref, case.id, repeat, verdict.status, verdict.reasons, t, took)
+                # The time of a run is the model's: a pause for a hot machine would make the model after it look slow.
+                took = ran.seconds if ran is not None else time.monotonic() - began
+                await store.add_result(conn, bench.id, ref, case.id, repeat, verdict.status, verdict.reasons, t, int(took * 1000))
                 if ran is not None and ran.tools_offered > most:
                     most = ran.tools_offered
                     await store.note_tools(conn, bench.id, most)

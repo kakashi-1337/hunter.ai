@@ -622,6 +622,29 @@ async def test_the_time_spent_cooling_is_not_the_models_time(conn, monkeypatch):
     assert (t.timed_out, t.finished) == (False, True)
 
 
+async def test_a_run_says_how_long_its_model_calls_took_and_no_wait_for_the_machine_is_in_it(conn, monkeypatch):
+    class Dawdles(Model):
+        async def stream(self, model, system, messages, options, tools=None):
+            turn = self._next(model, system, messages, options, tools)
+            await asyncio.sleep(0.1)
+            for ev in turn:
+                yield ev
+
+    async def slow_to_cool(wait, step, margin, tell):
+        await asyncio.sleep(0.5)
+    monkeypatch.setattr(cooling, "here", lambda provider, model: True)
+    monkeypatch.setattr(thermal, "wait_cool", slow_to_cool)
+    use(LOOKUP, says("No record."), cls=Dawdles)
+    ran = await asyncio.wait_for(go(conn), 10)
+    # two calls of a tenth of a second each; the two waits before them come to a whole second
+    assert ran.transcript.finished and 0.19 <= ran.seconds < 0.9
+
+
+async def test_a_run_on_a_provider_that_is_not_there_took_no_time(conn):
+    ran = await run.run_case(conn, "nowhere", "m", case())
+    assert ran.transcript.error == "Unknown provider: nowhere" and ran.seconds == 0
+
+
 # ---- nothing is kept
 
 async def test_nothing_is_written_to_chats_messages_runs_or_steps(conn):

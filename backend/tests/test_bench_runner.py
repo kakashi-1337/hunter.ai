@@ -93,6 +93,29 @@ async def test_the_time_a_run_took_is_stored(conn):
     assert all(50 <= r.duration_ms < 5000 for r in results)
 
 
+async def test_the_wait_for_a_hot_machine_is_not_in_the_time_that_is_stored(conn, monkeypatch):
+    """The time is the model's: a model that ran after a pause for the machine is not the slower one for it."""
+    async def slow_to_cool(wait, step, margin, tell):
+        await asyncio.sleep(0.6)
+    monkeypatch.setattr(cooling, "here", lambda provider, model: True)
+    monkeypatch.setattr(thermal, "wait_cool", slow_to_cool)
+    use(says("no record, 42"))
+    _, results = await stored(conn, await bench())
+    assert len(results) == 2 and all(r.duration_ms < 400 for r in results)
+
+
+async def test_a_run_that_broke_keeps_the_time_until_it_broke(conn):
+    class Breaks(Model):
+        async def stream(self, model, system, messages, options, tools=None):
+            self._next(model, system, messages, options, tools)
+            await asyncio.sleep(0.06)
+            raise RuntimeError("the adapter broke")
+            yield                                   # (a stream is a generator)
+    use(cls=Breaks)
+    _, results = await stored(conn, await bench())
+    assert [r.status for r in results] == ["error", "error"] and all(50 <= r.duration_ms < 5000 for r in results)
+
+
 async def test_the_number_of_offered_tools_is_the_most_a_model_of_the_bench_was_offered(conn):
     """A model that takes no tools is offered none; the bench says what the others faced."""
     use(says("no record, 42"), cls=Wordy)
