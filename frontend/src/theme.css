@@ -393,15 +393,19 @@ button.link:hover:not(:disabled) { background: none; color: var(--text); }
 .activity-table td { padding: 3px 8px 3px 0; border-bottom: 1px solid var(--line); }
 
 /* the bench: the same scripted tests for every model */
-.bench-models { display: flex; flex-direction: column; gap: 6px; max-height: 180px; overflow-y: auto; border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
+/* Two boxes that scroll by themselves stand in the body of the dialog, a column that scrolls too. A box that scrolls may be
+   shrunk to nothing by such a column, so neither of them shrinks: a long table below would hide the models and the list. */
+.bench-models { display: flex; flex-direction: column; gap: 6px; max-height: 180px; overflow-y: auto; border: 1px solid var(--line); border-radius: 6px; padding: 8px; flex: none; }
 .bench-models .provider { color: var(--muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: .04em; }
 .bench-models .check { align-items: center; font-size: 12.5px; overflow-wrap: anywhere; } .bench-models .check input { margin-top: 0; }
 .bench-error, .bench-note, .bench-cloud { color: var(--warn); overflow-wrap: anywhere; }
-.bench-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; max-height: 132px; overflow-y: auto; }
+.bench-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; max-height: 132px; overflow-y: auto; flex: none; }
 .bench-list li { display: flex; align-items: center; gap: 8px; font-size: 12.5px; }
 .bench-list li.on { color: var(--accent); }
 .bench-opened { display: flex; flex-direction: column; gap: 6px; }
 .bench-opened .section { margin: 0; }
+/* a model's name is told apart by its letters' case too, so the head over a cell's runs is not put in capitals */
+.bench-detail .section { text-transform: none; letter-spacing: 0; }
 .bench-progress { color: var(--info); }
 .bench-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
 .bench-table th, .bench-table td { text-align: left; padding: 3px 8px 3px 0; border-bottom: 1px solid var(--line); vertical-align: top; }
