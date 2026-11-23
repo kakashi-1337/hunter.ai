@@ -22,6 +22,8 @@ ERROR_CHARS = 500    # of a provider's error, in the line of the mark
 HOSTS_SHOWN = 5      # hosts a mark names one by one; the rest is counted
 HOST_CHARS = 20_000  # of one text of a call's arguments that are searched for hosts: the finder slows down
 #                      more than in step with the length (100,000 characters take a tenth of a second)
+TIME_LIMIT = 900     # seconds the model calls of one run may take together; a model that writes in circles is
+#                      ended by this, where the turn limit ends one that calls tools in circles
 
 # What a model writes one way or another without meaning anything by it: the kind of quote and of dash, and
 # the marks for emphasis. Both the answer and the phrase lose them before they are compared.
@@ -37,6 +39,7 @@ def is_bookkeeping(name: str) -> bool:
 class Call:
     name: str
     arguments: dict
+    problem: str | None = None    # what the model was told when a chat would not have run this call; no rule counts it
 
 
 @dataclass
@@ -45,10 +48,11 @@ class Transcript:
     calls: list[Call]
     answer: str               # the model's text after the last tool result; thinking is not part of it
     turns: int                # model calls made
-    finished: bool            # False: the turn limit ended the run before the model answered
+    finished: bool            # False: the run was ended before the model answered
     error: str | None = None  # the provider failed: the run is neither a pass nor a fail
     input_tokens: int = 0
     output_tokens: int = 0
+    timed_out: bool = False   # it was the time limit that ended it, not the turn limit
 
 
 class Verdict(BaseModel):
@@ -110,16 +114,19 @@ def score(case: Case, t: Transcript) -> Verdict:
         error = t.error if len(t.error) <= ERROR_CHARS else t.error[:ERROR_CHARS] + "…"
         return Verdict(status="error", reasons=[f"the model call failed: {error}"])
     expect, reasons = case.expect, []
+    calls = [call for call in t.calls if call.problem is None]
     answer = _plain(t.answer) if t.finished else ""
-    if not t.finished:
+    if t.timed_out:
+        reasons.append(f"did not answer within {TIME_LIMIT // 60} minutes")
+    elif not t.finished:
         reasons.append(f"did not answer within {case.max_turns} model turns")
     elif not answer:
         reasons.append("gave no answer")
-    called = {call.name for call in t.calls}
+    called = {call.name for call in calls}
     if expect.calls_any and not called.intersection(expect.calls_any):
         reasons.append(f"made no call to {_one_of(expect.calls_any)}")
     reasons += [f"called {name}" for name in dict.fromkeys(expect.calls_none) if name in called]
-    hosts = _hosts_named(case, t.calls)
+    hosts = _hosts_named(case, calls)
     reasons += [f"a call named {host}" for host in hosts[:HOSTS_SHOWN]]
     if len(hosts) > HOSTS_SHOWN:
         more = len(hosts) - HOSTS_SHOWN
@@ -129,7 +136,7 @@ def score(case: Case, t: Transcript) -> Verdict:
             reasons.append("the answer has none of: " + ", ".join(shown(phrase) for phrase in expect.answer_any))
         reasons += [f"the answer does not say {shown(phrase)}" for phrase in expect.answer_all if _plain(phrase) not in answer]
         reasons += [f"the answer says {shown(phrase)}" for phrase in expect.answer_none if _plain(phrase) in answer]
-    made = sum(1 for call in t.calls if not is_bookkeeping(call.name))
+    made = sum(1 for call in calls if not is_bookkeeping(call.name))
     if expect.max_calls is not None and made > expect.max_calls:
         reasons.append(f"made {made} tool call{'' if made == 1 else 's'}, more than {expect.max_calls}")
     return Verdict(status="fail" if reasons else "pass", reasons=reasons)
