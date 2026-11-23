@@ -133,6 +133,7 @@ export const useStore = create<State>((set, get) => {
     losses = 0
     let { messages, live, asks, runningCalls: calls } = s
     let read = false                // the agent read a waiting message: the list of those that still wait is asked for once
+    let resized = false             // the run raised the chat's context window, or took a raise back: the chat's options changed
     for (const e of batch) {
       const next = applyEvent(messages, e, live.target, userMessageId)
       messages = next.messages
@@ -156,9 +157,12 @@ export const useStore = create<State>((set, get) => {
       asks = pendingAsks(asks, e)
       calls = runningCalls(calls, e)
       read = read || (e.type === 'step_finished' && e.step.kind === 'user_note')
+      resized = resized || (e.type === 'step_finished' && e.step.kind === 'context' && !!e.step.detail?.window)
     }
     set({ messages, live, asks, runningCalls: calls })
     if (read) void waiting(chatId).then((queued) => { if (get().activeChatId === chatId) set({ queued }) }).catch(() => {})
+    // Only the chat itself is taken: its messages are the ones on the page, with the answer that is being written.
+    if (resized) void Promise.resolve(api.getChat(chatId)).then(({ chat }) => { if (get().activeChatId === chatId) set({ chat }) }).catch(() => {})
   }
 
   /** The stream dropped. The run may still be going: reload, and follow it again when it is. */

@@ -11,7 +11,7 @@ import type { LocalModel, Settings } from '../types'
 
 /** What the server sends for a new install. */
 const SETTINGS: Settings = {
-  default_provider: 'abliteration', default_model: 'big', fallback_model: 'qwen3:8b', local_window: 16384,
+  default_provider: 'abliteration', default_model: 'big', fallback_model: 'qwen3:8b', local_window: 16384, local_window_max: 131072,
   keys: { ABLIT_API_KEY: true }, permissions: {}, max_turns: 60, swarm_width: 3, swarm_width_max: 6,
   machine: { cores: 8, memory_gb: 32 }, presets: {}, decision_provider: null, decision_model: null, decision_gate: false,
   decision_engine: true, kb_redact: true, kb_skip_generated: true, vision_model: null, browser_via_caido: false, answer_check: false,
@@ -39,7 +39,10 @@ beforeEach(() => {
   vi.spyOn(api, 'listTools').mockResolvedValue([])
   vi.spyOn(api, 'mcpStatus').mockResolvedValue({ configured: [], servers: [], error: null })
   vi.spyOn(api, 'systemLocal').mockResolvedValue(LOCAL)
-  put = vi.spyOn(api, 'putSettings').mockImplementation(async (patch) => ({ ...SETTINGS, ...patch, local_window: (patch as { local_window?: number | null }).local_window ?? 16384 }) as Settings)
+  put = vi.spyOn(api, 'putSettings').mockImplementation(async (patch) => {
+    const sent = patch as { local_window?: number | null; local_window_max?: number | null }
+    return { ...SETTINGS, ...patch, local_window: sent.local_window ?? 16384, local_window_max: sent.local_window_max ?? 131072 } as Settings
+  })
 })
 afterEach(() => {
   act(() => root.unmount())
@@ -52,6 +55,7 @@ async function open(): Promise<void> {
 }
 const field = (label: RegExp) => [...host.querySelectorAll('label.field')].find((l) => label.test(l.querySelector('span')?.textContent ?? ''))!
 const windowField = () => field(/^Context window for local models/).querySelector<HTMLInputElement>('input')!
+const largestField = () => field(/^Largest context window for local models/).querySelector<HTMLInputElement>('input')!
 
 async function leaveWith(el: HTMLInputElement, value: string): Promise<void> {
   const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
@@ -85,11 +89,25 @@ describe('Settings', () => {
       expect(field(/^Context window for local models/).querySelector('[role="alert"]')).toBeNull()
     })
 
-    it('warns when the window in use leaves no room for a chat beside the rules and tools', async () => {
+    it('warns when the window in use leaves no room for a chat beside the rules and tools, and stays as it is', async () => {
+      useStore.setState({ settings: { ...SETTINGS, local_window_max: 0 } })
+      vi.spyOn(api, 'getSettings').mockResolvedValue({ ...SETTINGS, local_window_max: 0 })
       vi.spyOn(api, 'systemLocal').mockResolvedValue({ ...LOCAL, overhead: { tokens: 25608, tools: 112, on_demand: 40 }, enough: 36864 })
       await open()
       expect(field(/^Context window for local models/).querySelector('[role="alert"]')?.textContent)
         .toBe('Too small here: with the rules and tools, less than 8,192 tokens are left for the chat. Set 36,864 or more.')
+    })
+
+    it('does not warn about small room when a chat\'s window grows by itself: it says what that costs', async () => {
+      vi.spyOn(api, 'systemLocal').mockResolvedValue({ ...LOCAL, limit: 131072, overhead: { tokens: 25608, tools: 112, on_demand: 40 }, enough: 36864 })
+      await open()
+      expect(field(/^Context window for local models/).querySelector('[role="alert"]')).toBeNull()
+      expect(field(/^Context window for local models/).textContent).toContain('the window of every chat grows by itself at its start')
+    })
+
+    it('says that a chat which needs more room gets it by itself, before anything of it is left out', async () => {
+      await open()
+      expect(field(/^Context window for local models/).textContent).toMatch(/has its window raised by itself, up to the largest below/)
     })
 
     it('still shows the field when the server cannot describe the model', async () => {
@@ -113,6 +131,25 @@ describe('Settings', () => {
       await leaveWith(windowField(), '')
       expect(put).toHaveBeenCalledWith({ local_window: null })
       expect(windowField().value).toBe('16384')
+    })
+
+    it('shows how far a window grows by itself, and says what growing means', async () => {
+      await open()
+      expect(largestField().value).toBe('131072')
+      const said = field(/^Largest context window for local models/).textContent ?? ''
+      expect(said).toMatch(/does not fit its window, or an answer fills it/)
+      expect(said).toMatch(/0: a window stays as it is set/)
+    })
+
+    it('saves another largest size, 0 for a window that stays as it is, and nothing for the size HunterAI uses by itself', async () => {
+      await open()
+      await leaveWith(largestField(), '65536')
+      expect(put).toHaveBeenLastCalledWith({ local_window_max: 65536 })
+      await leaveWith(largestField(), '0')
+      expect(put).toHaveBeenLastCalledWith({ local_window_max: 0 })
+      await leaveWith(largestField(), '')
+      expect(put).toHaveBeenLastCalledWith({ local_window_max: null })
+      expect(largestField().value).toBe('131072')
     })
 
     it('is not saved when the field is left as it was', async () => {

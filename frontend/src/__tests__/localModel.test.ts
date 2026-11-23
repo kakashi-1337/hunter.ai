@@ -104,6 +104,20 @@ describe('what the window setting says about the local model in use', () => {
     expect(warn).toBe('Too small here: with the rules and tools, less than 8,192 tokens are left for the chat. Set 36,864 or more.')
   })
 
+  it('does not warn when a chat\'s window grows by itself as far as that takes, and says what that costs', () => {
+    const { lines, warn } = localWindowHint(LOCAL, 16384, 131072)
+    expect(warn).toBeNull()
+    expect(lines[lines.length - 1]).toBe('With the rules and tools, less than 8,192 tokens are left for a chat here, so the window of every chat grows by itself '
+      + 'at its start: one more load of the model. Set 36,864 or more to spare new chats that.')
+    expect(localWindowHint(LOCAL, 36864, 131072).lines).toHaveLength(3)                  // large enough: nothing to say
+  })
+
+  it('still warns when a window may not grow that far, or the model does not take it', () => {
+    expect(localWindowHint(LOCAL, 16384, 32768).warn).toBe('Too small here: with the rules and tools, less than 8,192 tokens are left for the chat. Set 36,864 or more.')
+    expect(localWindowHint(LOCAL, 16384, 0).warn).toBe('Too small here: with the rules and tools, less than 8,192 tokens are left for the chat. Set 36,864 or more.')
+    expect(localWindowHint({ ...LOCAL, limit: 32768 }, 16384, 131072).warn).toMatch(/^Too small here: .* gemma3:12b takes 32,768 at most\./)
+  })
+
   it('does not warn once the window is large enough', () => {
     expect(localWindowHint(LOCAL, 36864).warn).toBeNull()
     expect(localWindowHint(LOCAL, 65536).warn).toBeNull()

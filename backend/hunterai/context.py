@@ -15,6 +15,10 @@ the rest, a message was read by the one model call after it and by none of the l
 Only the request is changed. What is stored, and what the owner sees in the chat, stays whole.
 When a provider refuses a request for its size all the same (a window that is not known, a
 count that was off), the engine asks for a harder fit and makes the call once more.
+
+A local model's window is not a given: HunterAI sets it with each call. Before anything is made smaller for
+such a model, the engine asks roomier() for the window that holds the request as it is, and gives the call that
+one. fit() then finds nothing to do, until the window is as large as the owner lets it grow.
 """
 from __future__ import annotations
 
@@ -101,6 +105,37 @@ async def window(provider_name: str, model: str, options: Options) -> int | None
         return None
 
 
+def _room(tokens: int, options: Options) -> int:
+    """The characters a request may have in a window of `tokens`: the rest is kept free for the answer."""
+    return int((tokens - min(options.max_tokens or OUTPUT_RESERVE, tokens // 4)) * CHARS_PER_TOKEN)
+
+
+def _free(tokens: int, options: Options, fixed: int) -> int:
+    """The characters a window of `tokens` leaves for the chat itself, beside the system prompt and the tool
+    definitions (`fixed`)."""
+    return max(0, _room(tokens, options) - fixed)
+
+
+async def roomier(provider_name: str, model: str, system: str, wire: list[WireMessage], options: Options,
+                  specs: list[ToolSpec] | None = None) -> int | None:
+    """The larger window a call to this model is to get, so that its request is sent as it is: the smallest the
+    provider can give that holds it, and the largest it can give when none does (less is then left out). None when
+    the window stays: the request fits it, or the provider has no larger one (only a provider that sets the window
+    of each call itself has any)."""
+    try:
+        larger = getattr(registry.get(provider_name), "larger_windows", None)
+        if larger is None:
+            return None
+        now, sizes = await window(provider_name, model, options), await larger(model, options)
+    except Exception:  # noqa: BLE001 - a provider that cannot say leaves the window as it is
+        return None
+    fixed = size(system, [], specs)
+    chat = size(system, wire, specs) - fixed
+    if now is None or not sizes or chat <= _free(now, options, fixed) * HEADROOM:
+        return None
+    return next((n for n in sizes if chat <= _free(n, options, fixed) * HEADROOM), sizes[-1])
+
+
 def stub(wire: list[WireMessage], need: int, keep: int = KEEP_RESULTS, *, owner: str | None = None
          ) -> tuple[list[WireMessage], int]:
     """Cut old tool results down to how they began, oldest first, until `need` characters are
@@ -180,14 +215,17 @@ async def _stored(conn, run_id: str, wire: list[WireMessage]) -> list[WireMessag
     return _with_summary(wire, upto, held[1]) if upto < len(wire) else wire
 
 
-async def _write(conn, run_id: str, provider_name: str, model: str, told: str) -> str | None:
-    """The summary of `told`, written by the chat's own model. None when it could not be had."""
+async def _write(conn, run_id: str, provider_name: str, model: str, told: str, window: int | None = None) -> str | None:
+    """The summary of `told`, written by the chat's own model. None when it could not be had. `window`: the context
+    window the chat set for its calls. The summary is one of them: `told` was measured for that window, and a local
+    model is loaded again for every call that names another."""
     step = await runs.add_step(conn, run_id, "context", "summary of the earlier messages", {})
     await hub.publish(run_id, {"type": "step_started", "step": step.model_dump()})
     text, status, detail, usage = "", "error", {}, Usage(0, 0)
     try:
         ask = [WireMessage("user", [TextBlock(text="The earlier part of the session:\n\n" + told)])]
-        async for ev in registry.get(provider_name).stream(model, SUMMARY_SYSTEM, ask, Options(max_tokens=SUMMARY_TOKENS)):
+        async for ev in registry.get(provider_name).stream(model, SUMMARY_SYSTEM, ask,
+                                                           Options(max_tokens=SUMMARY_TOKENS, context_window=window)):
             if isinstance(ev, TextDelta):
                 text += ev.text
             elif isinstance(ev, Usage):
@@ -202,8 +240,8 @@ async def _write(conn, run_id: str, provider_name: str, model: str, told: str) -
 
 
 async def _summarize(conn, run_id: str, provider_name: str, model: str, system: str, wire: list[WireMessage],
-                     specs: list[ToolSpec] | None, budget: int, told_limit: int, owner: str | None = None
-                     ) -> tuple[list[WireMessage], int]:
+                     specs: list[ToolSpec] | None, budget: int, told_limit: int, owner: str | None = None,
+                     window: int | None = None) -> tuple[list[WireMessage], int]:
     """Replace the older turns by a summary so that what is left fits `budget`. The cut is after
     an assistant message, so what is kept begins with the user's words; the latest user message
     is always kept. Returns (the new list, how many messages the summary stands for)."""
@@ -213,7 +251,7 @@ async def _summarize(conn, run_id: str, provider_name: str, model: str, system: 
         return wire, 0
     fixed = size(system, [], specs) + SUMMARY_ROOM
     upto = next((c for c in cuts if fixed + size("", wire[c:]) <= budget), cuts[-1])     # keep as much as fits
-    text = await _write(conn, run_id, provider_name, model, _told(wire[:upto], told_limit, owner=owner))
+    text = await _write(conn, run_id, provider_name, model, _told(wire[:upto], told_limit, owner=owner), window)
     if text is None:
         text = (f"{upto} earlier messages were left out to fit the model's context window, and a summary of them could "
                 "not be written. Ask the user for anything you need from them.")
@@ -235,12 +273,12 @@ async def fit(conn, run_id: str, provider_name: str, model: str, system: str, wi
         # Nobody says how large the window is: use the summary this chat already needed once, and no more.
         out = await _stored(conn, run_id, wire)
         return (out, {"summary_used": True}) if out is not wire else (wire, None)
-    room = None if tokens is None else int((tokens - min(options.max_tokens or OUTPUT_RESERVE, tokens // 4)) * CHARS_PER_TOKEN)
     # The system prompt and the tool definitions cannot be made smaller. The chat is measured against what they
     # leave: with a local model's window they fill most of it, and against the whole of it the chat was cut down
     # to its last message while a third of the window stayed empty.
     fixed = size(system, [], specs)
-    free = None if room is None else max(0, room - fixed)
+    room = None if tokens is None else _room(tokens, options)
+    free = None if tokens is None else _free(tokens, options, fixed)
     if not hard and before - fixed <= free * HEADROOM:
         return wire, None
     out = await _stored(conn, run_id, wire)
@@ -262,7 +300,8 @@ async def fit(conn, run_id: str, provider_name: str, model: str, system: str, wi
             cut, now = cut + more, size(system, out, specs)
     if now > budget:
         out, summarized = await _summarize(conn, run_id, provider_name, model, system, out, specs, budget,
-                                           told_limit=budget if room is None else int(room * TARGET), owner=owner)
+                                           told_limit=budget if room is None else int(room * TARGET), owner=owner,
+                                           window=options.context_window)
         now = size(system, out, specs)
     if out is wire or (hard and now >= before):
         return wire, None

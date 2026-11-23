@@ -246,6 +246,8 @@ export interface Settings {
   fallback_model: string
   /** Tokens of context every call to a local (Ollama) model gets, unless the chat sets its own. */
   local_window: number
+  /** How far the window of a chat on a local model grows by itself, in tokens. 0: a window stays as it is set. */
+  local_window_max: number
   keys: Record<string, boolean>
   permissions: Policy
   max_turns: number
@@ -367,6 +369,8 @@ export type RunEvent =
   | { type: 'permission_request'; request: PermissionRequest }
   | { type: 'permission_resolved'; request_id: string; tool_call_id: string; answer: PermissionDecision | 'cancelled' | 'interrupted'; note: string }
   | { type: 'fallback'; from_provider: string; from_model: string; to_provider: string; to_model: string; reason: string }
+  /** The model writes its answer again (in a larger context window): `blocks` is what the message holds now. */
+  | { type: 'answer_restarted'; blocks: Block[] }
   | { type: 'run_finished'; status: RunSummary['status']; error: string | null; totals: Totals; message: Omit<Message, 'siblings'> | null }
 
 // ---- knowledge base

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   withAuto, applyEvent, branchLabel, callDurations, canApprove, cardStatus, formatDuration, messageText, pendingAsks, pruneOptions, renderItems,
-  appendTail, commandLine, parseArgs, scanSummary, scanToolLine, citedNumbers, unknownCitations, decisionSummary, sourcesNote, sourcesOf, triageFacts, gateLine, parseLines, runningCalls, siblingPosition, stepSummary, stepsFromEvents, toolCards, visible, type ToolCard,
+  appendTail, commandLine, parseArgs, windowStepLine, scanSummary, scanToolLine, citedNumbers, unknownCitations, decisionSummary, sourcesNote, sourcesOf, triageFacts, gateLine, parseLines, runningCalls, siblingPosition, stepSummary, stepsFromEvents, toolCards, visible, type ToolCard,
 } from '../tree'
 import type { Message, PermissionRequest, RunEvent, Step } from '../types'
 
@@ -45,6 +45,26 @@ describe('applyEvent', () => {
       { type: 'text_delta', text: 'echo: ' }, { type: 'text_delta', text: 'hi' },
     ])
     expect(messages[1].blocks).toEqual([{ type: 'thinking', text: 'hmm' }, { type: 'text', text: 'echo: hi' }])
+  })
+  it('takes the half answer off the page when the model writes it again in a larger window', () => {
+    const { messages } = run([
+      started, { type: 'thinking_delta', text: 'plan' }, { type: 'text_delta', text: 'The first thing is the' },
+      { type: 'answer_restarted', blocks: [] }, { type: 'text_delta', text: 'The whole answer.' },
+    ])
+    expect(messages[1].blocks).toEqual([{ type: 'text', text: 'The whole answer.' }])
+    expect(messages[1].status).toBe('streaming')
+  })
+  it('keeps what the run did before the answer that is written again', () => {
+    const done: Message['blocks'] = [
+      { type: 'tool_call', id: 'c1', name: 'execute', arguments: { command: 'id' } },
+      { type: 'tool_result', tool_call_id: 'c1', content: 'uid=1000', is_error: false },
+    ]
+    const { messages } = run([
+      started, { type: 'tool_call', id: 'c1', name: 'execute', arguments: { command: 'id' }, error: null },
+      { type: 'tool_finished', tool_call_id: 'c1', content: 'uid=1000', is_error: false, duration_ms: 5 },
+      { type: 'text_delta', text: 'You are' }, { type: 'answer_restarted', blocks: done }, { type: 'text_delta', text: 'You are uid 1000.' },
+    ])
+    expect(messages[1].blocks).toEqual([...done, { type: 'text', text: 'You are uid 1000.' }])
   })
   it('ignores deltas when no run has started', () => {
     const before = [user]
@@ -200,6 +220,23 @@ describe('panel helpers', () => {
       .toBe('anthropic/x · made to fit its context: the summary of the earlier messages was used')
     expect(stepSummary(step({ kind: 'permission', detail: { decision: 'ask', answer: 'deny', rule: 'preset' } }))).toBe('ask → deny · preset')
     expect(stepSummary(step({ kind: 'permission', detail: { decision: 'allow', rule: 'chat-risk' } }))).toBe('allow · chat-risk')
+  })
+})
+
+describe('a step that changed the context window of a local model', () => {
+  const step = (detail: object, kind = 'context') => ({ id: 's', kind, name: 'context window 16,384 → 32,768', status: 'done', detail }) as unknown as Step
+  it('says why the window was raised', () => {
+    expect(windowStepLine(step({ window: { from: 16384, to: 32768, why: 'request' } }))).toBe('The chat did not fit the window it had.')
+    expect(windowStepLine(step({ window: { from: 16384, to: 32768, why: 'answer' } }))).toBe('The answer filled the window it had: it is written again in this one.')
+  })
+  it('says why a raise was taken back, in the words of the call that failed', () => {
+    expect(windowStepLine(step({ window: { from: 32768, to: 16384, why: 'failed', error: 'HTTP 500: model requires more system memory' } })))
+      .toBe('The model did not answer with the larger window (HTTP 500: model requires more system memory): the one it had is used again.')
+    expect(windowStepLine(step({ window: { from: 32768, to: 16384, why: 'failed' } }))).toBe('The model did not answer with the larger window: the one it had is used again.')
+  })
+  it('is nothing for a step that changed no window', () => {
+    expect(windowStepLine(step({ characters: 400 }))).toBeNull()                         // the summary of the earlier messages
+    expect(windowStepLine(step({ window: { from: 1, to: 2, why: 'request' } }, 'model_call'))).toBeNull()
   })
 })
 

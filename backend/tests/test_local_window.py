@@ -1,6 +1,10 @@
 """A local model gets a request that fits the window it is given. The case that was reported:
 the chat's own model cannot be reached, the local one answers in its place, and it has to know
-what the chat was about. Ollama is the real provider here, against a stand-in server."""
+what the chat was about. Ollama is the real provider here, against a stand-in server.
+
+The window stays as it is set in these tests: growing is switched off for them. What they show is what is done
+with a window that cannot get larger, which is also what is done with one that has grown as far as it may
+(test_window_grows.py has the growing)."""
 import json
 
 import httpx
@@ -15,6 +19,13 @@ from hunterai.tools import native
 from hunterai.types import TextBlock
 
 HOST = "http://127.0.0.1:11434"
+
+
+@pytest.fixture(autouse=True)
+def window_stays(monkeypatch):
+    monkeypatch.setenv(ollama.MOST_CTX_ENV, "0")
+
+
 SUMMARY = "The user is mapping the login of shop.example. /admin answered 403; /api/v2/users lists accounts without a session."
 ANSWER = "Next I would try the account list with another user's id."
 LATEST = "What should we try next on that endpoint?"
@@ -195,4 +206,4 @@ async def test_a_local_answer_cut_by_its_full_window_says_so_under_it(conn):
     assert [b.type for b in msg.blocks] == ["text", "notice"]
     assert msg.blocks[-1].kind == "cut_off"
     assert msg.blocks[-1].text.startswith("The answer was cut off: the context window of the local model (16,384 tokens) was full.")
-    assert 'Raise "Context window for local models" in Settings' in msg.blocks[-1].text
+    assert 'Raise "Context window" under Options for this chat' in msg.blocks[-1].text

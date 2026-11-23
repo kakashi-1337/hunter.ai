@@ -113,6 +113,8 @@ def text(check: dict, status: dict, settings: dict, servers, tools, now: float |
         f"Default model: {settings.get('default_provider')}/{settings.get('default_model')}",
         f"Fallback model: {settings.get('fallback_model') or 'none'}",
         f"Context window for local models: {settings.get('local_window')}",
+        f"Largest context window for local models: {settings.get('local_window_max')}"
+        + ("" if settings.get("local_window_max") else " (a window stays as it is set)"),
         *_local(local),
         "Keys: " + "; ".join(f"{name}: {'set' if has else 'none'}" for name, has in sorted((settings.get("keys") or {}).items())),
         f"Proxy for targets: {'set' if settings.get('upstream_proxy') else 'none'}",

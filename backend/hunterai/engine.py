@@ -32,6 +32,8 @@ DEFAULT_MAX_TURNS = 25      # model calls per run (setting "max_turns")
 MAX_TURNS_LIMIT = 200
 MAX_BAD_CALLS = 3           # invalid tool calls in a row
 MAX_CALLS_PER_TURN = 20
+CIRCLE_TAIL = 120           # characters at the end of what a model wrote that are looked for earlier in it
+CIRCLE_TIMES = 3            # found that often, the model goes round in a circle
 INTERRUPTED_ASK = "The app stopped while this run was waiting for a permission answer."
 
 _sleep = asyncio.sleep
@@ -61,6 +63,11 @@ class _Attempt:
         self.stop: str | None = None      # why the last model call ended, in the provider's word
         self.produced = 0                 # output tokens of the last model call
         self.notice: NoticeBlock | None = None    # what the owner has to know about how the answer ended
+        self.window: int | None = None    # the context window this run raised a local model's to: its later calls get it too
+        self.window_was: int | None = None        # the window before the run raised it the first time
+        self.grew: NoticeBlock | None = None      # that the window was raised, and from what, for the owner
+        self.stuck: NoticeBlock | None = None     # that the window could not be raised: the model did not answer with it
+        self.circles = False              # the last model call filled its window by saying one thing over and over
         self.goal: NoticeBlock | None = None      # the answer says complete while items of the goal record are open
         self.changes: ChangesBlock | None = None  # what the run changed in the work folder (coding mode)
 
@@ -72,7 +79,8 @@ class _Attempt:
         """What is stored: the run's blocks, then the word about how the answer ended and about the open items of
         the goal record, what the run changed in the work folder, the knowledge-base sources and the answer check,
         when there are any."""
-        return [*self.items, *(b for b in (self.notice, self.goal, self.changes, self.sources, self.check) if b is not None)]
+        return [*self.items, *(b for b in (self.grew, self.stuck, self.notice, self.goal, self.changes, self.sources,
+                                           self.check) if b is not None)]
 
     def wire_blocks(self) -> list[Block]:
         """What goes back to the model: never a block that is only the owner's to read."""
@@ -321,6 +329,148 @@ async def _attempt(conn, run_id: str, mid: str, provider_name: str, model: str, 
                                                   "step": done.model_dump()}))
 
 
+async def _mark(conn, run_id: str, kind: str, name: str, detail: dict) -> None:
+    """A step of the run for something that takes no time: it is there, and done."""
+    step = await runs.add_step(conn, run_id, kind, name, detail)
+    await hub.publish(run_id, {"type": "step_started", "step": step.model_dump()})
+    step = await runs.patch_step(conn, step.id, status="done", close=True)
+    await hub.publish(run_id, {"type": "step_finished", "step": step.model_dump()})
+
+
+async def _raise_window(conn, run_id: str, provider_name: str, model: str, options: Options, acc: _Attempt,
+                        to: int, why: str):
+    """Give this call and the later ones of the run a context window of `to` tokens: a step of the run, a word under
+    the answer, and the chat's own window from now on when the model is the chat's own (one that answers in place of
+    the chat's model gets it for this run only: the size is not the other model's). Returns the options to call
+    with, and what takes all of it back when the model does not answer with that window.
+
+    A window of another size is another load of the model, on a machine that may just have been answering: the
+    machine is given the time to cool that any load gets (cooling.py), before anything is changed. _Stopped when it
+    does not cool."""
+    try:
+        await cooling.before_call(conn, run_id, provider_name, model, reload=True)
+    except cooling.TooHot as e:
+        raise _Stopped(str(e)) from None
+    before = await registry.get(provider_name).window_for(model, options)
+    await _mark(conn, run_id, "context", f"context window {before:,} → {to:,}", {"window": {"from": before, "to": to, "why": why}})
+    run = await runs.get(conn, run_id)
+    chat = await chats.get(conn, run.chat_id) if run else None
+    own = chat is not None and (chat.provider, chat.model) == (provider_name, model)
+    if own:
+        await chats.update(conn, chat.id, options={**(chat.options or {}), "context_window": to})
+    held = (acc.window, acc.window_was, acc.grew)
+    acc.window, acc.window_was = to, before if acc.window_was is None else acc.window_was
+    acc.grew = NoticeBlock(kind="window", text=problems.window_grew(acc.window_was, to, again=why == "answer", kept=own))
+
+    async def back(error: ProviderError) -> None:
+        acc.window, acc.window_was, acc.grew = held
+        now = await chats.get(conn, chat.id) if own else None
+        if now is not None and (now.options or {}).get("context_window") == to:     # not what the owner set meanwhile
+            was = (chat.options or {}).get("context_window")
+            rest = {k: v for k, v in now.options.items() if k != "context_window"}
+            await chats.update(conn, chat.id, options={**rest, "context_window": was} if was else rest)
+        await _mark(conn, run_id, "context", f"context window {to:,} → {before:,}",
+                    {"window": {"from": to, "to": before, "why": "failed", "error": error.message[:300]}})
+
+    return options.model_copy(update={"context_window": to}), back
+
+
+async def _stays(provider_name: str, model: str, options: Options, acc: _Attempt, tried: int, error: ProviderError) -> None:
+    """The model answers with the window it had and did not with one of `tried` tokens: that size is not tried for
+    it again (loading a model that does not fit takes its time, and the machine's), and the owner is told."""
+    provider = registry.get(provider_name)
+    refuse = getattr(provider, "too_large", None)
+    if refuse is not None:
+        refuse(model, tried)
+    acc.stuck = NoticeBlock(kind="window", text=problems.window_stayed(await provider.window_for(model, options), tried,
+                                                                       error.message))
+
+
+async def _restart(run_id: str, acc: _Attempt, mark: int, blocks: list[Block]) -> None:
+    """Put `blocks` in place of what the run wrote from `mark` on, and tell the page of whoever watches the run. The
+    stored message follows with the next thing that is written: until then it keeps the answer that was cut off,
+    which is what should be left of the run if HunterAI stops here."""
+    acc.items[mark:] = blocks
+    await hub.publish(run_id, {"type": "answer_restarted", "blocks": [b.model_dump() for b in acc.items]})
+
+
+async def _call(conn, run_id: str, mid: str, provider_name: str, model: str, system: str,
+                wire: list[WireMessage], options: Options, acc: _Attempt,
+                specs: list[ToolSpec] | None = None) -> None:
+    """One model call of the run (_attempt), with the context window of a local model made larger when the call
+    needs it. A chat that does not fit the window gets the next size that holds it before anything of it is left
+    out (context.roomier). An answer that filled the window is taken back and written again in the next size, once:
+    not one that called a tool, and not one that says the same thing over and over. The window stays that size for
+    the rest of the run.
+
+    A model that does not answer with the larger window is called with the one it had: the chat is then shortened
+    as before, and an answer that was cut off stays as it was."""
+    if acc.window:
+        options = options.model_copy(update={"context_window": acc.window})
+    args = (conn, run_id, mid, provider_name, model, system, wire)
+    mark, acc.circles = len(acc.items), False
+    larger = await context.roomier(provider_name, model, system, wire, options, specs)
+    if larger:
+        raised, back = await _raise_window(conn, run_id, provider_name, model, options, acc, larger, "request")
+        try:
+            await _attempt(*args, raised, acc, specs)
+            options = raised
+        except ProviderError as e:
+            if acc.output or context.is_overflow(e):
+                raise
+            await back(e)
+            await _attempt(*args, options, acc, specs)
+            await _stays(provider_name, model, options, acc, larger, e)
+    else:
+        await _attempt(*args, options, acc, specs)
+    sizes = await _larger(provider_name, model, options) if _window_filled(options, acc) else []
+    acc.circles = bool(sizes) and _circles(acc.items[mark:])
+    if not sizes or acc.circles:
+        return
+    cut = (acc.items[mark:], acc.stop, acc.produced)
+    raised, back = await _raise_window(conn, run_id, provider_name, model, options, acc, sizes[0], "answer")
+    await _restart(run_id, acc, mark, [])
+    try:
+        await _attempt(*args, raised, acc, specs)
+    except ProviderError as e:
+        if acc.output:
+            raise
+        await back(e)
+        await _restart(run_id, acc, mark, cut[0])
+        acc.stop, acc.produced = cut[1:]
+        await _stays(provider_name, model, options, acc, sizes[0], e)
+
+
+def _window_filled(options: Options, acc: _Attempt) -> bool:
+    """Whether the model call that just ended is one to make again with more room: it stopped at a limit, which was
+    not the one the chat sets for an answer, and it called no tool (its calls are run, and the next call gets the
+    room it needs)."""
+    return (problems.at_limit(acc.stop) and not acc.calls
+            and not (options.max_tokens and acc.produced >= options.max_tokens))
+
+
+def _circles(blocks: list[Block]) -> bool:
+    """Whether what a model wrote goes round in a circle: its last CIRCLE_TAIL characters stand in it CIRCLE_TIMES
+    times or more. Its thinking counts as its answer does. Such a model fills any window. (What is shorter than
+    that is its own end, and stands in itself once.)"""
+    said = "".join(b.text for b in blocks if b.type in ("text", "thinking"))
+    tail = said[-CIRCLE_TAIL:]
+    found, at = 0, said.find(tail)
+    while at != -1 and found < CIRCLE_TIMES:
+        found, at = found + 1, said.find(tail, at + 1)
+    return found >= CIRCLE_TIMES
+
+
+async def _larger(provider_name: str, model: str, options: Options) -> list[int]:
+    """The windows a call to this model could be given in place of the one it has, smallest first. None for a
+    provider that does not set the window of a call itself, and none when it cannot say."""
+    try:
+        ask = getattr(registry.get(provider_name), "larger_windows", None)
+        return await ask(model, options) if ask is not None else []
+    except Exception:  # noqa: BLE001 - the window stays as it is
+        return []
+
+
 async def _generate(conn, run_id: str, mid: str, chat, system: str, wire: list[WireMessage],
                     acc: _Attempt, specs: list[ToolSpec] | None = None
                     ) -> tuple[str, str, str | None]:
@@ -329,7 +479,7 @@ async def _generate(conn, run_id: str, mid: str, chat, system: str, wire: list[W
     options = Options(**(chat.options or {}))
     args = (conn, run_id, mid)
     try:
-        await _attempt(*args, chat.provider, chat.model, system, wire, options, acc, specs)
+        await _call(*args, chat.provider, chat.model, system, wire, options, acc, specs)
         return chat.provider, chat.model, None
     except ProviderError as e:
         err = e
@@ -338,7 +488,7 @@ async def _generate(conn, run_id: str, mid: str, chat, system: str, wire: list[W
     if err.kind == "rate_limit" and err.retry_after:
         await _sleep(min(err.retry_after, MAX_RATE_LIMIT_WAIT))
         try:
-            await _attempt(*args, chat.provider, chat.model, system, wire, options, acc, specs)
+            await _call(*args, chat.provider, chat.model, system, wire, options, acc, specs)
             return chat.provider, chat.model, None
         except ProviderError as e:
             err = e
@@ -357,7 +507,7 @@ async def _generate(conn, run_id: str, mid: str, chat, system: str, wire: list[W
     await hub.publish(run_id, {
         "type": "fallback", "from_provider": chat.provider, "from_model": chat.model,
         "to_provider": FALLBACK_PROVIDER, "to_model": fb_model, "reason": reason})
-    await _attempt(*args, FALLBACK_PROVIDER, fb_model, system, wire, options, acc, specs)
+    await _call(*args, FALLBACK_PROVIDER, fb_model, system, wire, options, acc, specs)
     return FALLBACK_PROVIDER, fb_model, f"{chat.provider}/{chat.model}"
 
 
@@ -369,7 +519,7 @@ async def _next_turn(conn, run_id: str, mid: str, provider: str, model: str, sys
     pause when the provider could not be reached or did not answer in time (the tools' work
     should not be lost to one failed connection)."""
     try:
-        await _attempt(conn, run_id, mid, provider, model, system, wire, options, acc, specs)
+        await _call(conn, run_id, mid, provider, model, system, wire, options, acc, specs)
     except ProviderError as e:
         if acc.output:
             raise
@@ -379,7 +529,7 @@ async def _next_turn(conn, run_id: str, mid: str, provider: str, model: str, sys
             await _sleep(RETRY_PAUSE)
         else:
             raise
-        await _attempt(conn, run_id, mid, provider, model, system, wire, options, acc, specs)
+        await _call(conn, run_id, mid, provider, model, system, wire, options, acc, specs)
 
 
 class _Stopped(Exception):
@@ -572,12 +722,14 @@ async def _ending(chat, provider_name: str, model: str, acc: _Attempt) -> Notice
     provider's filter. The answer looks finished otherwise, and stops in the middle of a sentence."""
     try:
         options = Options(**(chat.options or {}))
+        if acc.window:              # the run raised it: that is the window the answer was written in
+            options = options.model_copy(update={"context_window": acc.window})
         window = None
         window_for = getattr(registry.get(provider_name), "window_for", None)
         if window_for is not None and problems.at_limit(acc.stop):
             window = await window_for(model, options)
         said = problems.cut_off(acc.stop, provider=provider_name, max_tokens=options.max_tokens,
-                                output_tokens=acc.produced, window=window)
+                                output_tokens=acc.produced, window=window, circles=acc.circles)
         return NoticeBlock(kind=said[0], text=said[1]) if said else None
     except Exception:  # noqa: BLE001 - the run is done; a word that cannot be made is left out
         return None

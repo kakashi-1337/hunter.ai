@@ -223,8 +223,9 @@ async def test_the_rules_and_tools_of_a_new_chat_are_measured_against_the_local_
 
 @respx.mock
 async def test_rules_and_tools_that_fill_the_window_fail_with_the_size_to_set(conn, monkeypatch):
-    """25,608 tokens for a window of 16,384: the first request of every chat is refused."""
+    """25,608 tokens for a window of 16,384 that stays as it is: the first request of every chat is refused."""
     monkeypatch.setenv("HUNTERAI_OLLAMA_NUM_CTX", "16384")
+    monkeypatch.setenv("HUNTERAI_OLLAMA_MAX_CTX", "0")
     ollama_with(MODEL)
     respx.get(SERVER + "/api/system/status").mock(return_value=httpx.Response(200, json={"restart_needed": False, "stopped": []}))
     respx.get(SERVER + "/api/system/overhead").mock(return_value=httpx.Response(200, json={"tokens": 25608, "tools": 112, "on_demand": 40, "window": 16384}))
@@ -234,6 +235,25 @@ async def test_rules_and_tools_that_fill_the_window_fail_with_the_size_to_set(co
         'for local models is 16,384. Raise "Context window for local models" in Settings to 36,864 or more (a larger window '
         "needs more memory), or switch off the MCP servers you do not need"))]
     assert code == 1
+
+
+@respx.mock
+async def test_a_window_that_grows_by_itself_makes_small_room_a_thing_to_know_and_no_failure(conn, monkeypatch):
+    """The same 25,608 tokens for a window of 16,384: the chat's window is raised before its first request goes out.
+    It works, and every new chat begins with one more load of the model."""
+    ollama_with(MODEL)
+    respx.get(SERVER + "/api/system/status").mock(return_value=httpx.Response(200, json={"restart_needed": False, "stopped": []}))
+    respx.get(SERVER + "/api/system/overhead").mock(return_value=httpx.Response(200, json={"tokens": 25608, "tools": 112, "on_demand": 40, "window": 16384}))
+    code, lines = await run(conn, "window")
+    assert said(lines, "local window") == [("note", (
+        "a new chat sends about 25,608 tokens of rules and tools (112 tools, and 40 more that are loaded on demand); the window "
+        "for local models is 16,384. A chat's window grows by itself when it needs more room, up to 131,072 tokens, and the "
+        'model is loaded again for each size. Raise "Context window for local models" in Settings to 36,864 or more to spare '
+        "new chats that (a larger window needs more memory), or switch off the MCP servers you do not need"))]
+    assert code == 0
+    monkeypatch.setenv("HUNTERAI_OLLAMA_MAX_CTX", "32768")           # it may not grow as far as that takes
+    code, lines = await run(conn, "window")
+    assert said(lines, "local window")[0][0] == "FAIL" and code == 1
 
 
 @respx.mock
@@ -247,8 +267,10 @@ async def test_the_running_server_counts_the_tools_of_mcp_servers_too(conn):
 
 
 @respx.mock
-async def test_rules_and_tools_that_fit_but_leave_no_room_for_the_chat_fail_too(conn):
-    """12,000 of 16,384: the request is accepted, and the conversation has to be summarized from its second turn on."""
+async def test_rules_and_tools_that_fit_but_leave_no_room_for_the_chat_fail_too(conn, monkeypatch):
+    """12,000 of 16,384, in a window that stays as it is: the request is accepted, and the conversation has to be
+    summarized from its second turn on."""
+    monkeypatch.setenv("HUNTERAI_OLLAMA_MAX_CTX", "0")
     ollama_with(MODEL)
     respx.get(SERVER + "/api/system/status").mock(return_value=httpx.Response(200, json={"restart_needed": False, "stopped": []}))
     respx.get(SERVER + "/api/system/overhead").mock(return_value=httpx.Response(200, json={"tokens": 12000, "tools": 60, "on_demand": 0, "window": 16384}))

@@ -146,6 +146,27 @@ async def test_the_window_for_local_models_is_16384_tokens_until_the_owner_sets_
     assert cleared.json()["local_window"] == 16384 and ollama.default_num_ctx() == 16384
 
 
+async def test_a_local_window_grows_to_131072_tokens_at_most_until_the_owner_sets_another_size(client):
+    from hunterai.providers import ollama
+    assert (await client.get("/api/settings")).json()["local_window_max"] == 131072
+    saved = await client.put("/api/settings", json={"local_window_max": 65536})
+    assert saved.status_code == 200 and saved.json()["local_window_max"] == 65536 and ollama.largest_num_ctx() == 65536
+    assert "HUNTERAI_OLLAMA_MAX_CTX=65536" in config.env_file().read_text().splitlines()
+    off = await client.put("/api/settings", json={"local_window_max": 0})             # 0: a window stays as it is set
+    assert off.status_code == 200 and off.json()["local_window_max"] == 0 and ollama.largest_num_ctx() == 0
+    for bad in (100, 2047, 2_000_000, -1):
+        r = await client.put("/api/settings", json={"local_window_max": bad})
+        assert r.status_code == 400 and "0, or 2,048 to 1,048,576" in r.json()["detail"]
+    for not_a_number in ("many", 1.5):
+        assert (await client.put("/api/settings", json={"local_window_max": not_a_number})).status_code == 422
+    assert (await client.get("/api/settings")).json()["local_window_max"] == 0
+    cleared = await client.put("/api/settings", json={"local_window_max": None})      # back to HunterAI's own
+    assert cleared.json()["local_window_max"] == 131072 and ollama.largest_num_ctx() == 131072
+    assert "HUNTERAI_OLLAMA_MAX_CTX=" in config.env_file().read_text().splitlines()    # emptied, not a word in its place
+    assert (await client.put("/api/settings", json={"max_turns": 10})).json()["local_window_max"] == 131072   # another save leaves it
+    assert (await client.get("/api/settings")).json()["local_window"] == 16384         # and it is not the window a call starts with
+
+
 async def test_a_window_written_into_the_env_file_by_hand_is_what_settings_shows(client):
     config.env_file().write_text("HUNTERAI_OLLAMA_NUM_CTX=24576\n")
     assert (await client.get("/api/settings")).json()["local_window"] == 24576
