@@ -47,6 +47,11 @@ DEFAULT_NUM_CTX = 16384
 MIN_NUM_CTX = 2048
 MAX_NUM_CTX = 1_048_576
 NUM_CTX_ENV = "HUNTERAI_OLLAMA_NUM_CTX"
+# A window grows by itself when a call needs more room: doubled until the request fits, then written into the chat
+# as its own. This is how large it may get that way; past it a chat is shortened as before. The owner raised the
+# window of a chat by hand to this size when an answer was cut off, and no further. 0: a window stays as it is set.
+DEFAULT_MOST_CTX = 131_072
+MOST_CTX_ENV = "HUNTERAI_OLLAMA_MAX_CTX"
 CHARS_PER_TOKEN = 3.0       # counted on the careful side, as context.py does: what is sent has to fit
 IMAGE_CHARS = 6_000         # what one image is counted as
 TOO_LARGE = ("The request does not fit the context window of the local model {model}: about {need:,} tokens for a "
@@ -70,6 +75,13 @@ def usable_num_ctx(written) -> int | None:
 def default_num_ctx() -> int:
     """The window of a call to a local model when the chat sets none: the owner's, else HunterAI's."""
     return usable_num_ctx(config.env(NUM_CTX_ENV)) or DEFAULT_NUM_CTX
+
+
+def largest_num_ctx() -> int:
+    """How large the window of a local model may get by itself: the owner's size, else HunterAI's. 0 when the owner
+    switched growing off."""
+    written = (config.env(MOST_CTX_ENV) or "").strip()
+    return 0 if written == "0" else usable_num_ctx(written) or DEFAULT_MOST_CTX
 
 
 def host() -> str:
@@ -149,6 +161,7 @@ class OllamaProvider:
         self._thinking: dict[str, list | None] = {}     # model -> `thinking.values`, None when Ollama reports none
         self._limit: dict[str, int | None] = {}         # model -> the most tokens it takes, None when its file does not say
         self._cost: dict[str, int | None] = {}          # model -> bytes of memory for one token of window
+        self._refused: dict[str, int] = {}              # model -> the smallest window it did not answer with
 
     def configured(self) -> bool:
         return True
@@ -197,6 +210,25 @@ class OllamaProvider:
             await self.supports_images(model)       # one /api/show answers this too
         limit = self._limit.get(model)
         return min(wanted, limit) if limit else wanted
+
+    async def larger_windows(self, model: str, options: Options) -> list[int]:
+        """The windows a call to this model can be given in place of the one it gets, smallest first: that one
+        doubled, and doubled again, up to the largest a window may grow to by itself and never past what the model
+        takes. Empty when there is none: growing is switched off, the window is that large already, or the model
+        did not answer with the next size (too_large)."""
+        now = await self.window_for(model, options)
+        most = min(largest_num_ctx(), self._limit.get(model) or MAX_NUM_CTX)
+        out, size = [], now * 2
+        while size < most:
+            out.append(size)
+            size *= 2
+        refused = self._refused.get(model)
+        return [n for n in (out + [most] if most > now else []) if not refused or n < refused]
+
+    def too_large(self, model: str, size: int) -> None:
+        """This model did not answer with a window of `size` tokens and does with a smaller one (the machine has not
+        the memory for it): larger_windows() offers nothing that large again, for as long as HunterAI runs."""
+        self._refused[model] = min(size, self._refused.get(model) or size)
 
     def _options(self, model: str) -> tuple[list[str], list[str]]:
         values = self._thinking.get(model)

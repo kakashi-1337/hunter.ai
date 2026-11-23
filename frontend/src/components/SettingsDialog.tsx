@@ -109,7 +109,7 @@ function ProxyRow({ settings, onSaved }: { settings: Settings; onSaved: (s: Sett
 
 /** The context window of local models. Emptied, it goes back to the size HunterAI uses by itself. `save` answers
  * with the size in use after the attempt, so a size the server refused does not stay in the field. */
-function LocalWindow({ value, save }: { value: number; save(size: number | null): Promise<number> }) {
+function LocalWindow({ value, most, save }: { value: number; most: number; save(size: number | null): Promise<number> }) {
   const [text, setText] = useState(String(value))
   const [local, setLocal] = useState<LocalModel | null>(null)
   useEffect(() => {          // what this machine's fallback model says of itself: asked when the dialog opens
@@ -117,7 +117,7 @@ function LocalWindow({ value, save }: { value: number; save(size: number | null)
     api.systemLocal().then((l) => { if (!gone) setLocal(l) }).catch(() => {})
     return () => { gone = true }
   }, [])
-  const { lines, warn } = localWindowHint(local, value)
+  const { lines, warn } = localWindowHint(local, value, most)
   const leave = async () => {
     const typed = text.trim()
     if (typed !== String(value)) setText(String(await save(typed ? Number(typed) : null)))
@@ -126,9 +126,26 @@ function LocalWindow({ value, save }: { value: number; save(size: number | null)
     <label className="field"><span>Context window for local models (tokens)</span>
       <input type="number" min={2048} step={1024} value={text} onChange={(e) => setText(e.target.value)} onBlur={() => void leave()}
         onKeyDown={(e) => e.key === 'Enter' && void leave()} />
-      <span className="hint">What every call to an Ollama model gets, the fallback included. A chat can set its own, and a model never gets more than it takes. A chat that does not fit is shortened for the call to a summary of its early part and its latest messages, and a request that still does not fit is refused with the reason. A larger window keeps more of the chat and needs more memory. Empty: 16,384.</span>
+      <span className="hint">What a call to an Ollama model starts with, the fallback included. A chat can set its own, and a model never gets more than it takes. A chat that needs more room has its window raised by itself, up to the largest below. Past that it is shortened for the call to a summary of its early part and its latest messages, and a request that still does not fit is refused with the reason. A larger window keeps more of the chat and needs more memory. Empty: 16,384.</span>
       {lines.map((line) => <span key={line} className="hint">{line}</span>)}
       {warn && <span className="ask-warning" role="alert">{warn}</span>}
+    </label>
+  )
+}
+
+/** How far the window of a chat on a local model grows by itself. 0: it stays as it is set. Emptied, it goes back
+ * to the size HunterAI uses by itself. `save` answers with the size in use after the attempt. */
+function LargestWindow({ value, save }: { value: number; save(size: number | null): Promise<number> }) {
+  const [text, setText] = useState(String(value))
+  const leave = async () => {
+    const typed = text.trim()
+    if (typed !== String(value)) setText(String(await save(typed ? Number(typed) : null)))
+  }
+  return (
+    <label className="field"><span>Largest context window for local models (tokens)</span>
+      <input type="number" min={0} step={1024} value={text} onChange={(e) => setText(e.target.value)} onBlur={() => void leave()}
+        onKeyDown={(e) => e.key === 'Enter' && void leave()} />
+      <span className="hint">How far the window of a chat grows by itself. When a chat does not fit its window, or an answer fills it, the window is doubled until there is room (an answer that was cut off is written again, once) and stays that size for the chat: "Context window" under Options shows it. The model is loaded again for each size, and a size this machine cannot load is taken back. 0: a window stays as it is set. Empty: 131,072.</span>
     </label>
   )
 }
@@ -284,8 +301,10 @@ export function SettingsDialog({ onClose, onSetup }: { onClose: () => void; onSe
             </select>
             {ollamaModels.length === 0 && <span className="hint">Ollama is not reachable, so the fallback cannot answer right now.</span>}
           </label>
-          <LocalWindow key={settings.local_window} value={settings.local_window}
+          <LocalWindow key={settings.local_window} value={settings.local_window} most={settings.local_window_max ?? 0}
             save={async (size) => { await update({ local_window: size }); return useStore.getState().settings?.local_window ?? settings.local_window }} />
+          <LargestWindow key={`most-${settings.local_window_max}`} value={settings.local_window_max ?? 0}
+            save={async (size) => { await update({ local_window_max: size }); return useStore.getState().settings?.local_window_max ?? settings.local_window_max }} />
           <div className="row"><span className="hint grow">Personas: prompt profiles for kinds of work (web, mobile, reverse engineering, internal, coding, personal).</span>
             <button className="btn" onClick={() => setPersonasOpen(true)}>Manage personas</button></div>
           {personasOpen && <PersonaManager onClose={() => setPersonasOpen(false)} />}

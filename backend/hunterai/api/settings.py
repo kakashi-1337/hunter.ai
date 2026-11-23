@@ -33,6 +33,7 @@ class SettingsIn(BaseModel):
     default_model: str | None = None
     fallback_model: str | None = None
     local_window: StrictInt | None = None   # tokens of context a call to a local model gets; null: HunterAI's own
+    local_window_max: StrictInt | None = None       # the most that window grows to by itself; 0: it stays as it is set
     permissions: dict | None = None
     max_turns: int | None = None
     swarm_width: int | None = None          # subagents of one swarm that work at the same time
@@ -85,6 +86,7 @@ async def _view(conn) -> dict:
         "fallback_model": await settings.get(conn, "fallback_model",
                                              engine.DEFAULT_FALLBACK_MODEL),
         "local_window": ollama.default_num_ctx(),
+        "local_window_max": ollama.largest_num_ctx(),
         "keys": {name: bool(config.env(name)) for name in KEY_NAMES},
         "permissions": await settings.get(conn, "permissions", {}) or {},
         "max_turns": await settings.get(conn, "max_turns", engine.DEFAULT_MAX_TURNS),
@@ -200,6 +202,12 @@ async def put_settings(body: SettingsIn, conn=Depends(get_conn)):
                                      f"{ollama.MIN_NUM_CTX:,} to {ollama.MAX_NUM_CTX:,} tokens")
         envfile.set_var(config.env_file(), ollama.NUM_CTX_ENV, "" if size is None else str(size))
         providers_api.clear_cache()      # the model list names the window of each local model
+    if "local_window_max" in fields:
+        most = fields.pop("local_window_max")
+        if most not in (None, 0) and ollama.usable_num_ctx(most) is None:
+            raise HTTPException(400, "The largest context window for local models must be 0, or "
+                                     f"{ollama.MIN_NUM_CTX:,} to {ollama.MAX_NUM_CTX:,} tokens")
+        envfile.set_var(config.env_file(), ollama.MOST_CTX_ENV, "" if most is None else str(most))
     if fields.get("embed_on_cpu") is not None:
         envfile.set_var(config.env_file(), embed.CPU_ENV, "1" if fields["embed_on_cpu"] else "")
     fields.pop("embed_on_cpu", None)

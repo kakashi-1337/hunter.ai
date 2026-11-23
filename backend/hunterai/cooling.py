@@ -56,16 +56,18 @@ async def loads(provider_name: str, model: str) -> bool:
 
 
 async def wait_to_load(provider_name: str, model: str, wait: float, step: float, margin: float = 0.0,
-                       tell: Callable[[thermal.Part], Awaitable[None]] | None = None) -> thermal.Part | None:
+                       tell: Callable[[thermal.Part], Awaitable[None]] | None = None, *, reload: bool = False
+                       ) -> thermal.Part | None:
     """thermal.wait_cool for a call to a model on this machine: it waits only when the call loads the model. What
-    is in memory is asked once, and only when a part is hot: a cool machine is asked nothing."""
+    is in memory is asked once, and only when a part is hot: a cool machine is asked nothing. `reload`: the call
+    loads the model whatever is in memory (it names another context window than the one the model was loaded with)."""
     asked = False
 
     async def first(part: thermal.Part) -> None:
         nonlocal asked
         if not asked:
             asked = True
-            if not await loads(provider_name, model):
+            if not reload and not await loads(provider_name, model):
                 raise _InMemory
         if tell is not None:
             await tell(part)
@@ -75,18 +77,22 @@ async def wait_to_load(provider_name: str, model: str, wait: float, step: float,
         return None
 
 
-def _stopped(part: thermal.Part, model: str) -> str:
+def _stopped(part: thermal.Part, model: str, reload: bool = False) -> str:
+    why = ("it has to be loaded again for a larger context window" if reload
+           else "it is not in memory as far as can be told")
     return (f"Stopped: the {part.name} is at {part.degrees:.0f} °C and did not cool to {part.limit - thermal.MARGIN:.0f} °C "
             f"within {WAIT / 60:.0f} minutes (its limit is {part.limit:.0f} °C). The local model {model} was not called: "
-            "it is not in memory as far as can be told, and loading a model onto a machine this hot can switch the machine "
+            f"{why}, and loading a model onto a machine this hot can switch the machine "
             f"off. Let it cool and send the message again. {part.setting} sets the limit in °C (off: no limit).")
 
 
-async def before_call(conn, run_id: str, provider_name: str, model: str, parent_step: str | None = None) -> None:
+async def before_call(conn, run_id: str, provider_name: str, model: str, parent_step: str | None = None, *,
+                      reload: bool = False) -> None:
     """Returns when the machine is cool enough for a call to this model, which is at once for a model that runs
     elsewhere, for one that is in memory, and for a machine that is not at a limit. A hot machine that has to load
     the model gets up to WAIT seconds to drop a few degrees under the limit, shown as a "cooling" step of the run;
-    TooHot when it has not by then."""
+    TooHot when it has not by then. `reload`: the call loads the model though it is in memory, for a context window
+    of another size."""
     if not here(provider_name, model):
         return
     step = None
@@ -100,7 +106,7 @@ async def before_call(conn, run_id: str, provider_name: str, model: str, parent_
 
     status, still = "error", None
     try:
-        still = await wait_to_load(provider_name, model, WAIT, STEP, thermal.MARGIN, tell)
+        still = await wait_to_load(provider_name, model, WAIT, STEP, thermal.MARGIN, tell, reload=reload)
         status = "done" if still is None else "error"
     except asyncio.CancelledError:
         status = "cancelled"
@@ -110,4 +116,4 @@ async def before_call(conn, run_id: str, provider_name: str, model: str, parent_
             done = await asyncio.shield(runs.finish_step(conn, step.id, status))
             await asyncio.shield(hub.publish(run_id, {"type": "step_finished", "step": done.model_dump()}))
     if still is not None:
-        raise TooHot(_stopped(still, model))
+        raise TooHot(_stopped(still, model, reload))

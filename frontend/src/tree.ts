@@ -57,6 +57,9 @@ export function applyEvent(
       // The owner's queued message was just handed to the model: show it where it was read.
       if (e.step.kind !== 'user_note' || typeof e.step.detail?.text !== 'string') return { messages, target }
       return { messages: replace(messages, target, (m) => push(m, { type: 'owner_note', text: e.step.detail.text as string })), target }
+    case 'answer_restarted':
+      // The half answer on the page is not the answer: what the run holds now stands in its place.
+      return { messages: replace(messages, target, (m) => ({ ...m, blocks: e.blocks })), target }
     case 'fallback':
       return {
         messages: replace(messages, target, (m) => ({
@@ -135,7 +138,7 @@ export type RenderItem =
   | { kind: 'thinking'; text: string }
   | { kind: 'tool'; card: ToolCard }
   | { kind: 'note'; text: string }
-  | { kind: 'notice'; text: string; level: 'warn' }
+  | { kind: 'notice'; text: string; level: '' | 'warn' }
 
 /** The message's blocks in order, each tool result folded into its call's card. */
 export function renderItems(m: Message): RenderItem[] {
@@ -147,7 +150,8 @@ export function renderItems(m: Message): RenderItem[] {
     else if (b.type === 'thinking') { if (b.text) out.push({ kind: 'thinking', text: b.text }) }
     else if (b.type === 'tool_call') out.push({ kind: 'tool', card: { call: b, result: results.get(b.id) ?? null } })
     else if (b.type === 'owner_note') { if (b.text) out.push({ kind: 'note', text: b.text }) }
-    else if (b.type === 'notice') { if (b.text) out.push({ kind: 'notice', text: b.text, level: 'warn' }) }
+    // A context window that was raised is something to know, not something that went wrong.
+    else if (b.type === 'notice') { if (b.text) out.push({ kind: 'notice', text: b.text, level: b.kind === 'window' ? '' : 'warn' }) }
   }
   return out
 }
@@ -241,6 +245,15 @@ function fitNote(context: unknown): string | null {
   const parts = [cut > 0 ? `${cut} old result${cut === 1 ? '' : 's'} cut down` : '', summarized > 0 ? `${summarized} earlier messages summarized` : ''].filter(Boolean)
   if (parts.length === 0 && c.summary_used) parts.push('the summary of the earlier messages was used')
   return parts.length ? `made to fit its context: ${parts.join(', ')}` : null
+}
+
+/** Why a step changed the context window of a local model, or null for a step that changed none. */
+export function windowStepLine(step: Step): string | null {
+  const w = (step.detail as Record<string, unknown>).window as { why?: string; error?: string } | undefined
+  if (step.kind !== 'context' || !w || typeof w !== 'object') return null
+  if (w.why === 'answer') return 'The answer filled the window it had: it is written again in this one.'
+  if (w.why === 'failed') return `The model did not answer with the larger window${w.error ? ` (${w.error})` : ''}: the one it had is used again.`
+  return 'The chat did not fit the window it had.'
 }
 
 /** One line for a decision step: what the decision model answered. */
@@ -547,8 +560,9 @@ export function machineLine(s: SystemStatus): { text: string; level: '' | 'warn'
 
 /** What the window setting says about the local model in use: what a window costs for it, how much of the window
  * the rules and tools take, how Ollama runs it now; and a warning when the size in the field (`value`) leaves no
- * room for a chat. */
-export function localWindowHint(local: LocalModel | null, value: number): { lines: string[]; warn: string | null } {
+ * room for a chat. `grows`: how far a chat's window grows by itself (0: it stays as it is set). A window that grows
+ * as far as the room takes is no warning: it is one more load of the model at the start of every chat. */
+export function localWindowHint(local: LocalModel | null, value: number, grows = 0): { lines: string[]; warn: string | null } {
   if (!local) return { lines: [], warn: null }
   const most = local.limit ? ` It takes ${whole(local.limit)} tokens at most.` : ''
   const lines = [
@@ -560,8 +574,14 @@ export function localWindowHint(local: LocalModel | null, value: number): { line
   ]
   if (local.loaded) lines.push(`Ollama runs it ${local.loaded.processor}${local.loaded.context ? ` with a window of ${whole(local.loaded.context)}` : ''} now.`)
   const short = 'Too small here: with the rules and tools, less than 8,192 tokens are left for the chat'
+  const fits = !local.limit || local.limit >= local.enough          // the model takes a window that is large enough
+  if (value < local.enough && fits && grows >= local.enough) {
+    lines.push('With the rules and tools, less than 8,192 tokens are left for a chat here, so the window of every chat grows by itself '
+      + `at its start: one more load of the model. Set ${whole(local.enough)} or more to spare new chats that.`)
+    return { lines, warn: null }
+  }
   const warn = value >= local.enough ? null
-    : local.limit && local.limit < local.enough ? `${short}, and ${local.model} takes ${whole(local.limit)} at most. Switch off the MCP servers you do not need, or choose a fallback model with a larger window.`
+    : !fits ? `${short}, and ${local.model} takes ${whole(local.limit!)} at most. Switch off the MCP servers you do not need, or choose a fallback model with a larger window.`
       : `${short}. Set ${whole(local.enough)} or more.`
   return { lines, warn }
 }

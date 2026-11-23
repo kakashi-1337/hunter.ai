@@ -282,9 +282,25 @@ def test_an_answer_cut_by_the_window_of_a_local_model_says_so():
     """The window holds the request and the answer together: with a request that nearly fills it, a few words fit."""
     assert problems.cut_off("length", provider="ollama", output_tokens=180, window=16384) == ("cut_off", (
         "The answer was cut off: the context window of the local model (16,384 tokens) was full. It holds the request and the "
-        'answer together. Raise "Context window for local models" in Settings (a larger window needs more memory), or continue '
+        'answer together. Raise "Context window" under Options for this chat (a larger window needs more memory), or continue '
         "in a new chat."))
     assert "the context window of the local model was full" in problems.cut_off("length", provider="ollama")[1]
+
+
+def test_the_word_for_a_full_local_window_names_the_chats_own_window_not_the_one_in_settings():
+    """A chat whose window grew has its own from then on: the size in Settings no longer reaches it."""
+    said = problems.cut_off("length", provider="ollama", output_tokens=180, window=32768)[1]
+    assert '"Context window" under Options' in said and "Settings" not in said
+
+
+def test_an_answer_that_repeats_itself_is_told_from_one_that_needed_more_room():
+    said = problems.cut_off("length", provider="ollama", output_tokens=9000, window=16384, circles=True)
+    assert said == ("cut_off", (
+        "The answer was cut off: the context window of the local model (16,384 tokens) was full. Its end says the same thing "
+        "over and over, so it was not written again in a larger window. Send the message again, or ask in another way."))
+    # Only a local model's window grows: for any other, nothing was held back.
+    assert problems.cut_off("length", provider="openai", output_tokens=9000, circles=True) == \
+        problems.cut_off("length", provider="openai", output_tokens=9000)
 
 
 def test_a_local_answer_cut_at_the_limit_the_chat_sets_is_told_from_a_full_window():
@@ -292,6 +308,26 @@ def test_a_local_answer_cut_at_the_limit_the_chat_sets_is_told_from_a_full_windo
                                                                      window=16384)[1]
     assert "context window of the local model" in problems.cut_off("length", provider="ollama", max_tokens=4096, output_tokens=200,
                                                                     window=16384)[1]
+
+
+def test_a_window_that_was_raised_says_from_what_to_what_why_and_whose_it_is():
+    assert problems.window_grew(16384, 65536) == (
+        "The context window of this chat was raised from 16,384 to 65,536 tokens: the chat did not fit the smaller one. It is "
+        'this chat\'s own now (Context window under Options). A window grows by itself up to "Largest context window for local '
+        'models" in Settings (a larger window needs more memory; 0 there keeps a window as it is set).')
+    again = problems.window_grew(16384, 32768, again=True)
+    assert "the answer filled the smaller one and was written again" in again and "did not fit" not in again
+    lent = problems.window_grew(16384, 65536, kept=False)
+    assert "It holds for this answer: the chat's own model was not the one that answered." in lent and "own now" not in lent
+
+
+def test_a_window_that_could_not_be_raised_says_what_the_model_said_in_a_line():
+    said = problems.window_stayed(16384, 65536, "HTTP 500: llama runner process has terminated:\n  exit status 2\n")
+    assert said == ("The context window of this chat stays at 16,384 tokens: the local model did not answer with one of 65,536 "
+                    "(HTTP 500: llama runner process has terminated: exit status 2). HunterAI does not try that size again for "
+                    "this model until it is started again; what does not fit the window is shortened as before.")
+    long = problems.window_stayed(16384, 65536, "x" * 500)
+    assert "(" + "x" * 200 + "…)" in long and "x" * 201 not in long
 
 
 @pytest.mark.parametrize("reason,provider", [("max_tokens", "anthropic"), ("MAX_TOKENS", "google"), ("length", "openai")])

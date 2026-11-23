@@ -22,6 +22,12 @@ describe('the word under an answer that did not end by itself', () => {
       .toEqual([{ kind: 'text', text: 'The first step is to' }, { kind: 'notice', text: CUT, level: 'warn' }])
   })
 
+  it('is no warning when it says that the context window was raised: nothing went wrong', () => {
+    const grew = 'The context window of this chat was raised from 16,384 to 32,768 tokens: the chat did not fit the smaller one.'
+    expect(renderItems(message([{ type: 'text', text: 'done' }, { type: 'notice', kind: 'window', text: grew }, { type: 'notice', kind: 'cut_off', text: CUT }])))
+      .toEqual([{ kind: 'text', text: 'done' }, { kind: 'notice', text: grew, level: '' }, { kind: 'notice', text: CUT, level: 'warn' }])
+  })
+
   it('is left out when it says nothing', () => {
     expect(renderItems(message([{ type: 'text', text: 'done' }, { type: 'notice', kind: 'cut_off', text: '' }]))).toEqual([{ kind: 'text', text: 'done' }])
   })

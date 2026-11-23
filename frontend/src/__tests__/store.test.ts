@@ -283,6 +283,23 @@ describe('the events of a live run, handed over in batches', () => {
     expect(m.listQueue).toHaveBeenCalledTimes(1)
   })
 
+  it('takes the chat\'s options from the server when the run raised its context window, and leaves the live answer alone', async () => {
+    const onEvents = await live()
+    m.getChat.mockClear()
+    m.getChat.mockImplementation(async (id) => ({ chat: { id, title: `chat ${id}`, options: { context_window: 32768 } } as never, messages: [msg(id)] }))
+    const raised = { type: 'step_finished' as const, step: step('w1', 'context', { status: 'done', ended_at: 't2', name: 'context window 16,384 → 32,768', detail: { window: { from: 16384, to: 32768, why: 'request' } } }) }
+    onEvents([{ type: 'run_started', run_id: 'r1', assistant_message_id: 'a-r1' }, raised, { type: 'text_delta', text: 'ok' }])
+    // Options shows the size the chat has now, and a change to another option does not write the old size back.
+    await vi.waitFor(() => expect((useStore.getState().chat as unknown as { options: object }).options).toEqual({ context_window: 32768 }))
+    expect(m.getChat).toHaveBeenCalledTimes(1)
+    expect(text()).toBe('ok')                               // the answer that is being written stays on the page
+    m.getChat.mockClear()
+    const summary = { type: 'step_finished' as const, step: step('s9', 'context', { status: 'done', ended_at: 't3', name: 'summary of the earlier messages', detail: { characters: 400 } }) }
+    onEvents([summary, { type: 'text_delta', text: ' more' }])
+    expect(m.getChat).not.toHaveBeenCalled()                // a summary is a context step too, and changes nothing of the chat
+    expect(text()).toBe('ok more')
+  })
+
   it('a batch for a chat that is no longer open changes nothing', async () => {
     const onEvents = await live()
     runsByChat['B'] = [run('r2', 'running')]                 // the other chat has a run of its own that is followed

@@ -225,14 +225,20 @@ async def _overhead(env: Env) -> tuple[int, int, str]:
 
 async def _check_window(env: Env) -> list[Result]:
     """The first request of a chat holds HunterAI's rules and every tool definition before a word of the
-    conversation: with many MCP tools that alone can be more than a local window."""
+    conversation: with many MCP tools that alone can be more than a local window. A window that grows by itself
+    as far as that takes is no failure: it is one more load of the model at the start of every chat."""
     if await env.ollama() is None:
         return [Result("local window", "skip", "Ollama does not answer")]
     tokens, window, which = await _overhead(env)
     said = f"a new chat sends about {tokens:,} tokens of rules and tools ({which}); the window for local models is {window:,}"
     if tokens + ROOM <= window:
         return [Result("local window", "ok", said)]
-    enough = -(-(tokens + ROOM) // 4096) * 4096
+    enough, most = -(-(tokens + ROOM) // 4096) * 4096, ollama.largest_num_ctx()
+    if tokens + ROOM <= most:
+        return [Result("local window", "note", f"{said}. A chat's window grows by itself when it needs more room, up to {most:,} "
+                                               'tokens, and the model is loaded again for each size. Raise "Context window for '
+                                               f'local models" in Settings to {enough:,} or more to spare new chats that (a larger '
+                                               "window needs more memory), or switch off the MCP servers you do not need")]
     return [Result("local window", "FAIL", f'{said}. Raise "Context window for local models" in Settings to {enough:,} or more '
                                            "(a larger window needs more memory), or switch off the MCP servers you do not need")]
 

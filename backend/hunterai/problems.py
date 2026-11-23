@@ -126,9 +126,10 @@ def at_limit(reason: str | None) -> bool:
 
 
 def cut_off(reason: str | None, *, provider: str | None, max_tokens: int | None = None, output_tokens: int = 0,
-            window: int | None = None) -> tuple[str, str] | None:
+            window: int | None = None, circles: bool = False) -> tuple[str, str] | None:
     """What to say under an answer that did not end by itself: (kind, text), or None when it did. `max_tokens` is
-    what the chat's options set, `output_tokens` what the call produced, `window` the context window of a local model."""
+    what the chat's options set, `output_tokens` what the call produced, `window` the context window of a local model.
+    `circles`: the window could have been made larger for it, and was not, because the answer repeats itself."""
     why = (reason or "").lower()
     if why in _FILTERED:
         return "filtered", (f"The answer stops here because the content filter of the provider ended it ({reason}). Reword the "
@@ -143,8 +144,12 @@ def cut_off(reason: str | None, *, provider: str | None, max_tokens: int | None 
                            'have the model go on, or raise "Max output tokens" under Options.')
     if provider == LOCAL:           # Ollama writes until the window is full: the request and the answer share it
         size = f" ({window:,} tokens)" if window else ""
+        if circles:
+            return "cut_off", (f"The answer was cut off: the context window of the local model{size} was full. Its end says "
+                               "the same thing over and over, so it was not written again in a larger window. Send the "
+                               "message again, or ask in another way.")
         return "cut_off", (f"The answer was cut off: the context window of the local model{size} was full. It holds the request "
-                           'and the answer together. Raise "Context window for local models" in Settings (a larger window needs '
+                           'and the answer together. Raise "Context window" under Options for this chat (a larger window needs '
                            "more memory), or continue in a new chat.")
     if provider == COLIBRI:         # the request and the answer share the context colibri was started with
         from .providers import colibri
@@ -156,3 +161,26 @@ def cut_off(reason: str | None, *, provider: str | None, max_tokens: int | None 
                            f'"continue" to have the model go on{more}.')
     return "cut_off", ('The answer was cut off at the limit the model has for one answer. Send "continue" to have it go on. If '
                        'the model takes "Max output tokens" under Options, a higher value there gives it more room.')
+
+
+def window_grew(before: int, after: int, *, again: bool = False, kept: bool = True) -> str:
+    """What to say under an answer for which the context window of a local model was made larger by itself, from
+    `before` tokens to `after`. `again`: the answer had filled the window and was written once more. `kept`: the
+    size was written into the chat as its own (not for a model that answered in place of the chat's)."""
+    why = ("the answer filled the smaller one and was written again" if again
+           else "the chat did not fit the smaller one")
+    whose = ("It is this chat's own now (Context window under Options)." if kept
+             else "It holds for this answer: the chat's own model was not the one that answered.")
+    return (f"The context window of this chat was raised from {before:,} to {after:,} tokens: {why}. {whose} "
+            'A window grows by itself up to "Largest context window for local models" in Settings (a larger window '
+            "needs more memory; 0 there keeps a window as it is set).")
+
+
+def window_stayed(now: int, tried: int, said: str) -> str:
+    """What to say under an answer for which the context window of a local model could not be made larger: the model
+    did not answer with one of `tried` tokens (`said`: the words of the call that failed) and does with `now`."""
+    said = " ".join((said or "").split())
+    said = said[:MESSAGE] + ("…" if len(said) > MESSAGE else "")
+    return (f"The context window of this chat stays at {now:,} tokens: the local model did not answer with one of "
+            f"{tried:,} ({said}). HunterAI does not try that size again for this model until it is started again; what "
+            "does not fit the window is shortened as before.")

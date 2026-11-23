@@ -427,10 +427,58 @@ takes (its `context_length`, read from Ollama). The size is always sent, because
 own default follows the machine's memory, from 4,096 tokens to 256,000.
 
 HunterAI's rules and tool definitions alone are 6,000 tokens or more. A chat that does not
-fit beside them is shortened for the call as described above: a summary of its early part,
-and its latest turns as they were said. This is what a local model gets when it answers in
-place of the chat's own model (the fallback) after a long chat with a model whose window is
-far larger.
+fit beside them gets a larger window first (the next part), and only past the largest it is
+shortened for the call as described above: a summary of its early part, and its latest
+turns as they were said. This is what a local model gets when it answers in place of the
+chat's own model (the fallback) after a long chat with a model whose window is far larger.
+
+#### The window grows by itself
+
+You do not have to raise "Context window" under Options yourself when a request is refused
+for its size or an answer stops in the middle, and send the message again. HunterAI does
+it:
+
+- **A chat that does not fit its window** gets the next size that holds it, before anything
+  of it is left out: the window is doubled (16,384, 32,768, 65,536, 131,072) until the
+  request fits with room for the answer. This is checked before every model call of a run,
+  so a run whose tool results pile up gets more room as it goes.
+- **An answer that filled its window** (Ollama writes until the window is full and then
+  stops in the middle of a sentence) is taken off the page and written again in the next
+  size, once per model call. Not an answer that was cut at "Max output tokens" (a larger
+  window gives that one no more room), not a turn that called a tool (the tool is run, and
+  the next call gets its room), and not an answer whose end says the same thing over and
+  over: a model that goes round in a circle fills any window, and the notice under it says
+  that this is why it was left.
+
+The size is written into the chat as its own ("Context window" under Options shows it), so
+the next message starts with it. A notice under the answer says from what to what the
+window was raised and why, and the trajectory has a step for it. When the local model
+answers in place of the chat's own model, the size holds for that answer only.
+
+How far a window grows is "Largest context window for local models" in Settings: 131,072
+tokens unless you set another size (written to `.env` as `HUNTERAI_OLLAMA_MAX_CTX`), never
+more than the model takes, and `0` keeps every window as it is set. A window you set
+larger than that by hand stays as you set it. Past the largest, a chat is shortened as
+before.
+
+What it costs, and what is done about it:
+
+- Ollama loads the model again for a window of another size. That is seconds to a minute,
+  and it is a load on a machine that has just been answering: a hot machine is given the
+  time to cool first that any load gets (the section after this one), and a run stops with
+  the reason when it does not cool.
+- A larger window needs more memory. When the model does not answer with the larger window
+  (Ollama says it has not the memory, or its program ends), the size is taken back: the
+  call is made with the window it had, the chat's own window is as it was, an answer that
+  had been cut off is put back, and the notice says what the model said. That size is not
+  tried again for that model until HunterAI is started again. When the call with the
+  smaller window fails as well, the size was not the reason (Ollama is not running) and
+  nothing is given up.
+- An answer that is written again costs the time of the first one. That is why it is done
+  once per call and not for as long as it takes.
+
+A colibri server has the context it was started with: nothing grows there. Subagents get
+the chat's window as it is when they start.
 
 A larger window keeps more of the chat and costs memory, and how much depends on the model.
 The field in Settings says it for the fallback model of your machine: what each 8,192
@@ -1690,6 +1738,7 @@ shows a key again.
 | `OPENAI_API_KEY`, `XAI_API_KEY`, `GEMINI_API_KEY` | OpenAI, xAI, Google |
 | `OLLAMA_HOST` | Ollama address (default `http://127.0.0.1:11434`) |
 | `HUNTERAI_OLLAMA_NUM_CTX` | Context window of local models in tokens (default 16384; Settings writes it) |
+| `HUNTERAI_OLLAMA_MAX_CTX` | How far that window grows by itself when a chat needs more room (default 131072; `0`: it stays as it is set; Settings writes it) |
 | `HUNTERAI_COLIBRI_URL` | Address of your colibri server (Settings writes it); empty: colibri is not used |
 | `COLIBRI_API_KEY` | Its key, only when colibri was started with one |
 | `HUNTERAI_PORT` | Port (default 8790) |

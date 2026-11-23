@@ -285,6 +285,9 @@ async def test_the_diagnostics_name_the_models_in_use_and_the_window_of_local_on
     await client.put("/api/settings", json={"local_window": 32768})
     got = await text(client)
     assert "Default model: " in got and "Fallback model: " in got and "Context window for local models: 32768" in got
+    assert "Largest context window for local models: 131072" in got
+    await client.put("/api/settings", json={"local_window_max": 0})
+    assert "Largest context window for local models: 0 (a window stays as it is set)" in await text(client)
 
 
 async def test_the_diagnostics_list_the_mcp_servers_and_count_the_tools(client, monkeypatch):

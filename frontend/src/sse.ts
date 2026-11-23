@@ -1,7 +1,7 @@
 import type { RunEvent } from './types'
 
 const KNOWN = new Set(['run_started', 'step_started', 'step_finished', 'text_delta', 'thinking_delta', 'fallback', 'run_finished',
-  'tool_call', 'tool_started', 'tool_finished', 'permission_request', 'permission_resolved'])
+  'tool_call', 'tool_started', 'tool_finished', 'permission_request', 'permission_resolved', 'answer_restarted'])
 
 /** Parse one SSE data payload. Anything that is not a known run event becomes null. */
 export function parseEvent(data: string): RunEvent | null {
