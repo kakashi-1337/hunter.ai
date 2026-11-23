@@ -1,0 +1,187 @@
+"""The results of the bench are kept in two tables of their own: one row per bench, one per run of a case."""
+import json
+
+import pytest
+
+from hunterai import db
+from hunterai.bench import cases
+from hunterai.bench.score import Call, Transcript
+from hunterai.repo import bench
+from hunterai.repo.bench import CallBrief, ModelRef
+
+QWEN, MIMO = ModelRef(provider="ollama", model="qwen:9b"), ModelRef(provider="ollama", model="mimo:9b")
+
+
+def a_set(n: int = 2) -> cases.CaseSet:
+    text = "".join(f'[[case]]\nid = "c{i}"\ngroup = "{"honesty" if i % 2 else "scope"}"\nprompt = "question {i}"\n'
+                   f'[case.expect]\nanswer_any = ["x"]\n' for i in range(n))
+    return cases.parse('name = "My tests"\n' + text, "own:mine")
+
+
+def ran(*calls: Call, answer: str = "No record.", turns: int = 2) -> Transcript:
+    return Transcript(calls=list(calls), answer=answer, turns=turns, finished=True, input_tokens=120, output_tokens=30)
+
+
+async def test_a_bench_is_stored_with_its_models_and_cases(conn):
+    made = await bench.create(conn, a_set(), [QWEN, MIMO], 3)
+    assert (made.set_id, made.set_name, made.repeats, made.status, made.note, made.tools_offered) == \
+        ("own:mine", "My tests", 3, "running", "", 0)
+    assert made.models == [QWEN, MIMO] and made.ended_at is None and made.created_at
+    assert [(c.id, c.group, c.prompt) for c in made.cases] == [("c0", "scope", "question 0"), ("c1", "honesty", "question 1")]
+    assert await bench.get(conn, made.id) == made
+    assert await bench.get(conn, "nothing") is None
+
+
+async def test_the_cases_of_a_bench_are_the_briefs_of_the_set(conn):
+    long = cases.parse('[[case]]\nid = "one"\ngroup = "honesty"\nprompt = "' + "p" * 600 + '"\n[case.expect]\nanswer_any = ["x"]\n', "own:long")
+    made = await bench.create(conn, long, [QWEN], 1)
+    assert made.cases == cases.briefs(long) and made.cases[0].prompt == "p" * 500 + "…"
+
+
+async def test_a_result_is_stored_with_what_the_run_left_behind(conn):
+    made = await bench.create(conn, a_set(), [QWEN], 1)
+    t = ran(Call("cve", {"action": "lookup", "ids": ["CVE-2026-109618"]}), Call("nmap", {"host": "x"}, problem='Unknown tool "nmap".'))
+    got = await bench.add_result(conn, made.id, QWEN, "c0", 1, "fail", ["the answer has none of: 'x'"], t, 4321)
+    assert (got.run_id, got.provider, got.model, got.case_id, got.repeat, got.status) == (made.id, "ollama", "qwen:9b", "c0", 1, "fail")
+    assert got.reasons == ["the answer has none of: 'x'"] and got.answer == "No record."
+    assert (got.turns, got.input_tokens, got.output_tokens, got.duration_ms, got.calls_made) == (2, 120, 30, 4321, 2)
+    assert got.calls == [CallBrief(name="cve", arguments='{"action": "lookup", "ids": ["CVE-2026-109618"]}'),
+                         CallBrief(name="nmap", arguments='{"host": "x"}', problem='Unknown tool "nmap".')]
+    assert await bench.results(conn, made.id) == [got] and got.created_at
+
+
+async def test_a_result_without_a_run_behind_it_is_empty(conn):
+    """The rest of a model that was given up is stored without a transcript."""
+    made = await bench.create(conn, a_set(), [QWEN], 1)
+    got = await bench.add_result(conn, made.id, QWEN, "c1", 1, "skipped", ["skipped: the model failed three times in a row"])
+    assert (got.status, got.calls, got.answer, got.turns, got.input_tokens, got.output_tokens, got.duration_ms, got.calls_made) == \
+        ("skipped", [], "", 0, 0, 0, 0, 0)
+
+
+async def test_results_come_back_in_the_order_they_were_added(conn):
+    made = await bench.create(conn, a_set(), [QWEN, MIMO], 2)
+    order = [(m, c, r) for m in (QWEN, MIMO) for c in ("c1", "c0") for r in (1, 2)]
+    for m, c, r in order:
+        await bench.add_result(conn, made.id, m, c, r, "pass", [], ran(), 10)
+    got = await bench.results(conn, made.id)
+    assert [(ModelRef(provider=g.provider, model=g.model), g.case_id, g.repeat) for g in got] == order
+    assert len({g.id for g in got}) == 8
+    other = await bench.create(conn, a_set(), [QWEN], 1)
+    assert await bench.results(conn, other.id) == []
+
+
+async def test_an_answer_longer_than_8000_characters_is_cut(conn):
+    made = await bench.create(conn, a_set(), [QWEN], 1)
+    long = await bench.add_result(conn, made.id, QWEN, "c0", 1, "pass", [], ran(answer="a" * 8001), 1)
+    assert long.answer == "a" * 8000 + "…"
+    whole = await bench.add_result(conn, made.id, QWEN, "c0", 2, "pass", [], ran(answer="a" * 8000), 1)
+    assert whole.answer == "a" * 8000
+
+
+async def test_arguments_are_kept_as_the_start_of_their_json(conn):
+    made = await bench.create(conn, a_set(), [QWEN], 1)
+    filler = "x" * (500 - len('{"command": ""}'))
+    t = ran(Call("execute", {"command": filler}), Call("execute", {"command": filler + "y"}), Call("web_search", {"query": "münchen"}))
+    exact, cut, umlaut = (await bench.add_result(conn, made.id, QWEN, "c0", 1, "pass", [], t, 1)).calls
+    assert exact.arguments == json.dumps({"command": filler}) and len(exact.arguments) == 500
+    assert cut.arguments == json.dumps({"command": filler + "y"})[:500] + "…"
+    assert umlaut.arguments == '{"query": "münchen"}'
+
+
+async def test_what_a_refused_call_was_told_is_kept_as_its_start(conn):
+    made = await bench.create(conn, a_set(), [QWEN], 1)
+    t = ran(Call("nmap", {}, problem="U" * 301), Call("nmap", {}, problem="U" * 300))
+    long, exact = (await bench.add_result(conn, made.id, QWEN, "c0", 1, "pass", [], t, 1)).calls
+    assert (long.problem, exact.problem) == ("U" * 300 + "…", "U" * 300)
+
+
+async def test_no_more_than_50_calls_are_kept_and_their_number_is(conn):
+    made = await bench.create(conn, a_set(), [QWEN], 1)
+    t = ran(*[Call("web_search", {"query": str(n)}) for n in range(51)])
+    got = await bench.add_result(conn, made.id, QWEN, "c0", 1, "pass", [], t, 1)
+    assert [c.arguments for c in got.calls] == [json.dumps({"query": str(n)}) for n in range(50)] and got.calls_made == 51
+    fifty = await bench.add_result(conn, made.id, QWEN, "c0", 2, "pass", [], ran(*[Call("x", {})] * 50), 1)
+    assert (len(fifty.calls), fifty.calls_made) == (50, 50)
+
+
+async def test_no_more_than_40_reasons_are_kept_and_the_rest_is_counted(conn):
+    made = await bench.create(conn, a_set(), [QWEN], 1)
+    many = await bench.add_result(conn, made.id, QWEN, "c0", 1, "fail", [f"line {n}" for n in range(43)], ran(), 1)
+    assert many.reasons == [f"line {n}" for n in range(40)] + ["and 3 more lines"]
+    one_more = await bench.add_result(conn, made.id, QWEN, "c0", 2, "fail", [f"line {n}" for n in range(41)], ran(), 1)
+    assert one_more.reasons[-1] == "and 1 more line"
+    forty = await bench.add_result(conn, made.id, QWEN, "c0", 3, "fail", [f"line {n}" for n in range(40)], ran(), 1)
+    assert forty.reasons == [f"line {n}" for n in range(40)]
+
+
+async def test_the_number_of_offered_tools_is_noted(conn):
+    made, other = await bench.create(conn, a_set(), [QWEN], 1), await bench.create(conn, a_set(), [QWEN], 1)
+    await bench.note_tools(conn, made.id, 37)
+    assert (await bench.get(conn, made.id)).tools_offered == 37 and (await bench.get(conn, other.id)).tools_offered == 0
+
+
+async def test_finish_sets_the_state_the_note_and_the_end(conn):
+    made = await bench.create(conn, a_set(), [QWEN], 1)
+    done = await bench.finish(conn, made.id, "stopped", "The graphics card is at 88 °C.")
+    assert (done.status, done.note) == ("stopped", "The graphics card is at 88 °C.") and done.ended_at >= made.created_at
+    assert await bench.get(conn, made.id) == done
+    plain = await bench.finish(conn, (await bench.create(conn, a_set(), [QWEN], 1)).id, "done")
+    assert (plain.status, plain.note) == ("done", "") and plain.ended_at
+
+
+async def test_the_newest_bench_is_listed_first(conn):
+    first = await bench.create(conn, a_set(), [QWEN], 1)
+    second = await bench.create(conn, a_set(), [MIMO], 2)
+    third = await bench.create(conn, a_set(), [QWEN, MIMO], 3)
+    assert [b.id for b in await bench.list(conn)] == [third.id, second.id, first.id]
+    assert (await bench.list(conn))[0] == third
+
+
+async def test_benches_made_in_the_same_instant_are_listed_newest_first(conn, monkeypatch):
+    monkeypatch.setattr(bench, "now", lambda: "2026-11-23T10:00:00+00:00")
+    made = [await bench.create(conn, a_set(), [QWEN], 1) for _ in range(3)]
+    assert [b.id for b in await bench.list(conn)] == [b.id for b in reversed(made)]
+
+
+async def test_deleting_a_bench_takes_its_results_with_it(conn):
+    gone, stays = await bench.create(conn, a_set(), [QWEN], 1), await bench.create(conn, a_set(), [QWEN], 1)
+    for made in (gone, stays):
+        await bench.add_result(conn, made.id, QWEN, "c0", 1, "pass", [], ran(), 1)
+    assert await bench.delete(conn, gone.id) is True
+    assert await bench.get(conn, gone.id) is None and await bench.results(conn, gone.id) == []
+    assert (await (await conn.execute("select count(*) from bench_results")).fetchone())[0] == 1
+    assert len(await bench.results(conn, stays.id)) == 1
+    assert await bench.delete(conn, gone.id) is False and await bench.delete(conn, "nothing") is False
+
+
+async def test_a_bench_left_running_is_marked_interrupted(conn):
+    left = await bench.create(conn, a_set(), [QWEN], 1)
+    also = await bench.create(conn, a_set(), [QWEN], 1)
+    done = await bench.finish(conn, (await bench.create(conn, a_set(), [QWEN], 1)).id, "done")
+    assert await bench.interrupt_running(conn) == 2
+    for made in (left, also):
+        now = await bench.get(conn, made.id)
+        assert (now.status, now.note) == ("interrupted", "HunterAI stopped while this bench was running.") and now.ended_at
+    assert await bench.get(conn, done.id) == done
+    assert await bench.interrupt_running(conn) == 0
+
+
+async def test_a_database_from_before_gets_the_tables(conn):
+    made = await bench.create(conn, a_set(), [QWEN], 1)
+    await conn.executescript("drop table bench_results; drop table bench_runs;")
+    with pytest.raises(Exception, match="no such table"):
+        await bench.get(conn, made.id)
+    await db.migrate(conn)
+    assert await bench.list(conn) == []
+    again = await bench.create(conn, a_set(), [QWEN], 1)
+    await bench.add_result(conn, again.id, QWEN, "c0", 1, "pass", [], ran(), 1)
+    await db.migrate(conn)          # and what is there stays
+    assert len(await bench.results(conn, again.id)) == 1
+
+
+async def test_the_states_a_bench_and_a_result_can_have(conn):
+    made = await bench.create(conn, a_set(), [QWEN], 1)
+    for status in ("done", "cancelled", "interrupted", "stopped", "running"):
+        assert (await bench.finish(conn, made.id, status)).status == status
+    for status in ("pass", "fail", "error", "skipped"):
+        assert (await bench.add_result(conn, made.id, QWEN, "c0", 1, status, [], ran(), 1)).status == status

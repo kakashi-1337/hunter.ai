@@ -299,11 +299,15 @@ def _read(path: Path) -> str:
         raise CaseError(f"it cannot be read: {e.strerror or e}") from None
 
 
+def briefs(found: CaseSet) -> list[CaseBrief]:
+    """The cases of a set as a list shows them: a long prompt is cut."""
+    return [CaseBrief(id=c.id, group=c.group,
+                      prompt=c.prompt if len(c.prompt) <= BRIEF_CHARS else c.prompt[:BRIEF_CHARS] + "…")
+            for c in found.cases]
+
+
 def _info(found: CaseSet) -> SetInfo:
-    briefs = [CaseBrief(id=c.id, group=c.group,
-                        prompt=c.prompt if len(c.prompt) <= BRIEF_CHARS else c.prompt[:BRIEF_CHARS] + "…")
-              for c in found.cases]
-    return SetInfo(id=found.id, name=found.name, builtin=found.builtin, cases=briefs)
+    return SetInfo(id=found.id, name=found.name, builtin=found.builtin, cases=briefs(found))
 
 
 def load(set_id: str) -> CaseSet:
