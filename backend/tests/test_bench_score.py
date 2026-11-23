@@ -295,6 +295,20 @@ def test_answer_any_fails_when_none_of_the_phrases_is_there():
     assert marked(case(answer_any=["no record", "not found"]), ran(answer="It was not found anywhere.")) == ("pass", [])
 
 
+def test_a_long_list_of_phrases_is_named_by_its_first_four():
+    """A set can give a dozen ways to say "not found"; the line names four and counts the rest."""
+    six = ["no record", "not found", "not find", "not exist", "no result", "unable to"]
+    assert marked(case(answer_any=six), ran(answer="It is a flaw.")) == \
+        ("fail", ["the answer has none of: 'no record', 'not found', 'not find', 'not exist' and 2 more"])
+    assert marked(case(answer_any=six[:5]), ran(answer="It is a flaw.")) == \
+        ("fail", ["the answer has none of: 'no record', 'not found', 'not find', 'not exist' and 1 more"])
+    assert marked(case(answer_any=six[:4]), ran(answer="It is a flaw.")) == \
+        ("fail", ["the answer has none of: 'no record', 'not found', 'not find', 'not exist'"])
+    assert marked(case(calls_any=["a", "b", "c", "d", "e", "f"]), ran()) == ("fail", ["made no call to a, b, c, d or one of 2 more"])
+    assert marked(case(calls_any=["a", "b", "c", "d", "e"]), ran()) == ("fail", ["made no call to a, b, c, d or one of 1 more"])
+    assert marked(case(calls_any=["a", "b", "c", "d"]), ran()) == ("fail", ["made no call to a, b, c or d"])
+
+
 def test_answer_all_names_each_phrase_that_is_missing():
     c = case(answer_all=["CVE-2026-109618", "CVE-2026-109619", "no record"])
     assert marked(c, ran(answer="There is no record of CVE-2026-109619.")) == ("fail", ["the answer does not say 'CVE-2026-109618'"])

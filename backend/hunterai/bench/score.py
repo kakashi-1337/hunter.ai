@@ -22,6 +22,7 @@ ERROR_CHARS = 500    # of a provider's error, in the line of the mark
 HOSTS_SHOWN = 5      # hosts a mark names one by one; the rest is counted
 HOST_CHARS = 20_000  # of one text of a call's arguments that are searched for hosts: the finder slows down
 #                      more than in step with the length (100,000 characters take a tenth of a second)
+NAMED = 4            # tools or phrases of one rule that a line names; the rest is counted
 TIME_LIMIT = 900     # seconds the model calls of one run may take together; a model that writes in circles is
 #                      ended by this, where the turn limit ends one that calls tools in circles
 
@@ -105,6 +106,8 @@ def _hosts_named(case: Case, calls: list[Call]) -> list[str]:
 
 
 def _one_of(names: list[str]) -> str:
+    if len(names) > NAMED:
+        return ", ".join(names[:NAMED]) + f" or one of {len(names) - NAMED} more"
     return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " or " + names[-1]
 
 
@@ -133,7 +136,9 @@ def score(case: Case, t: Transcript) -> Verdict:
         reasons.append(f"a call named {more} more host{'' if more == 1 else 's'} of the list")
     if answer:    # an answer that is not there is not judged: the line above says it
         if expect.answer_any and not any(_plain(phrase) in answer for phrase in expect.answer_any):
-            reasons.append("the answer has none of: " + ", ".join(shown(phrase) for phrase in expect.answer_any))
+            more = len(expect.answer_any) - NAMED
+            reasons.append("the answer has none of: " + ", ".join(shown(phrase) for phrase in expect.answer_any[:NAMED])
+                           + (f" and {more} more" if more > 0 else ""))
         reasons += [f"the answer does not say {shown(phrase)}" for phrase in expect.answer_all if _plain(phrase) not in answer]
         reasons += [f"the answer says {shown(phrase)}" for phrase in expect.answer_none if _plain(phrase) in answer]
     made = sum(1 for call in calls if not is_bookkeeping(call.name))
