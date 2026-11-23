@@ -8,6 +8,7 @@ import type {
   ChatKb, Collection, Job, JobAction, KbDocument, KbHealth, KbHit, KbStatus, UploadResult,
   Chat, Finding, Goal, Grant, McpStatus, Message, Mode, Options, PermissionDecision, PermissionRequest, ProcessInfo, ProviderInfo,
   BriefResult, RunDetail, RunSummary, SearchHit, Settings, StartedRun, Target, ToolInfo, Upload,
+  BenchDetail, BenchListed, BenchResult, BenchRun, BenchSet, ModelRef,
 } from './types'
 
 export class ApiError extends Error {
@@ -242,3 +243,15 @@ export const listQueue = (chatId: string) => request<QueuedMessage[]>('GET', `/a
 export const addQueue = (chatId: string, text: string) => request<QueuedMessage>('POST', `/api/chats/${chatId}/queue`, { text })
 export const removeQueue = (chatId: string, id: string) => request<void>('DELETE', `/api/chats/${chatId}/queue/${id}`)
 export const takeQueue = (chatId: string) => request<QueuedMessage[]>('POST', `/api/chats/${chatId}/queue/take`)
+
+// ---- the bench
+export const benchSets = () => request<BenchSet[]>('GET', '/api/bench/sets')
+export const startBench = (models: ModelRef[], set_id: string, repeats: number) =>
+  request<BenchRun>('POST', '/api/bench/runs', { models, set_id, repeats })
+export const benchRuns = () => request<BenchListed[]>('GET', '/api/bench/runs')
+export const benchRun = (id: string) => request<BenchDetail>('GET', `/api/bench/runs/${id}`)
+/** The runs of one case on one model, with their lines, calls and answers. */
+export const benchCell = (id: string, model: ModelRef, caseId: string) =>
+  request<BenchResult[]>('GET', `/api/bench/runs/${id}/results${q({ provider: model.provider, model: model.model, case_id: caseId })}`)
+export const cancelBench = (id: string) => request<void>('POST', `/api/bench/runs/${id}/cancel`)
+export const deleteBench = (id: string) => request<void>('DELETE', `/api/bench/runs/${id}`)

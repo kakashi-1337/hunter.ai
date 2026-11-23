@@ -4,6 +4,7 @@ import { useStore } from '../store'
 import type { Chat, Target } from '../types'
 import { Modal } from './Modal'
 import { ActivityPanel } from './ActivityPanel'
+import { BenchPanel } from './BenchPanel'
 import { CaidoPanel } from './CaidoPanel'
 import { FindingsPanel } from './FindingsPanel'
 import { confirmBox } from '../dialog'
@@ -87,7 +88,7 @@ function ChatRow({ chat }: { chat: Chat }) {
 }
 
 export function Sidebar({ onSettings, onSetup }: { onSettings: () => void; onSetup?: () => void }) {
-  const [panel, setPanel] = useState<'findings' | 'caido' | 'activity' | null>(null)
+  const [panel, setPanel] = useState<'findings' | 'caido' | 'bench' | 'activity' | null>(null)
   const { targets, chats, searchResults } = useStore()
   const newChat = useStore((s) => s.newChat)
   const view = useStore((s) => s.view)
@@ -163,6 +164,7 @@ export function Sidebar({ onSettings, onSetup }: { onSettings: () => void; onSet
         <div className="side-buttons">
           <button className="btn" title="Every finding of every target" onClick={() => setPanel('findings')}>Findings</button>
           <button className="btn" title="What Caido recorded of the agent's requests" onClick={() => setPanel('caido')}>Caido</button>
+          <button className="btn" title="Tests for models: the same cases, scripted tools, a table per model" onClick={() => setPanel('bench')}>Bench</button>
           <button className="btn" title="Calls, tokens and failures, counted on this machine" onClick={() => setPanel('activity')}>Activity</button>
           <button className="btn" title="Knowledge base (Ctrl+Shift+K)" onClick={() => setView(view === 'knowledge' ? 'chat' : 'knowledge')}>Knowledge</button>
           <button className="btn" onClick={onSettings}>Settings</button>
@@ -170,6 +172,7 @@ export function Sidebar({ onSettings, onSetup }: { onSettings: () => void; onSet
       </div>
       {panel === 'findings' && <FindingsPanel onClose={() => setPanel(null)} />}
       {panel === 'caido' && <CaidoPanel onClose={() => setPanel(null)} />}
+      {panel === 'bench' && <BenchPanel onClose={() => setPanel(null)} />}
       {panel === 'activity' && <ActivityPanel onClose={() => setPanel(null)} />}
       {editing && <TargetDialog target={editing} onClose={() => setEditing(null)} />}
       {starting && <NewChatDialog onClose={() => setStarting(false)} />}
