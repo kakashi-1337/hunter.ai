@@ -36,13 +36,12 @@ from . import cooling, db, hub, permissions, problems
 from .decision import engine as de
 from .modes import build_system
 from .providers import registry
-from .providers.base import (Options, ProviderError, Stop, TextDelta, ThinkingDelta, ThinkingSeal,
-                             ToolCall, ToolSpec, Usage, WireMessage, safe_call_id)
+from .providers.base import Options, ProviderError, Reply, ToolCall, ToolSpec, WireMessage, collect
 from .repo import chats, goals, runs, settings, targets
 from .tools import registry as tool_registry
 from .tools import loopguard, runner
 from .tools.base import Prepared, Tool, ToolContext, ToolError, ToolResult
-from .types import Block, BlockList, TextBlock, ThinkingBlock, ToolCallBlock, ToolResultBlock
+from .types import Block, BlockList, TextBlock, ToolResultBlock
 
 SUBAGENT_MAX_TURNS = 12
 MAX_SUBAGENTS_PER_RUN = 8
@@ -116,39 +115,14 @@ async def _model_call(conn, run_id: str, parent_step: str, provider_name: str, m
         raise ProviderError("unavailable", str(e), complete=True) from None
     step = await runs.add_step(conn, run_id, "model_call", f"{provider_name}/{model}", {}, parent_step)
     await hub.publish(run_id, {"type": "step_started", "step": step.model_dump()})
-    usage, status, detail, calls = Usage(0, 0), "error", {}, []
+    reply, status, detail = Reply(), "error", {}    # the reply is filled as the call comes: its tokens count when it fails, too
     try:
         provider = registry.get(provider_name)
         stream = provider.stream(model, system, wire, options, tools=specs) \
             if getattr(provider, "supports_tools", False) else provider.stream(model, system, wire, options)
-        async for ev in stream:
-            last = blocks[-1] if blocks else None
-            if isinstance(ev, TextDelta):
-                if last is not None and last.type == "text":
-                    last.text += ev.text
-                else:
-                    blocks.append(TextBlock(text=ev.text))
-            elif isinstance(ev, ThinkingDelta):
-                if last is not None and last.type == "thinking" and last.opaque is None:
-                    last.text += ev.text
-                else:
-                    blocks.append(ThinkingBlock(text=ev.text))
-            elif isinstance(ev, ThinkingSeal):
-                if last is not None and last.type == "thinking" and last.opaque is None:
-                    last.opaque = ev.opaque
-                else:
-                    blocks.append(ThinkingBlock(text="", opaque=ev.opaque))
-            elif isinstance(ev, ToolCall):
-                tc = dataclasses.replace(ev, id=safe_call_id(ev.id, taken))
-                taken.add(tc.id)
-                calls.append(tc)
-                blocks.append(ToolCallBlock(id=tc.id, name=tc.name, arguments=tc.arguments, opaque=tc.opaque))
-            elif isinstance(ev, Usage):
-                usage = ev
-            elif isinstance(ev, Stop):
-                detail = {"stop_reason": ev.reason}
+        await collect(stream, blocks, taken, reply)
         status = "done"
-        return calls
+        return reply.calls
     except ProviderError as e:
         detail = {"error": e.message, "kind": e.kind}
         raise
@@ -159,8 +133,10 @@ async def _model_call(conn, run_id: str, parent_step: str, provider_name: str, m
         detail = {"error": f"unknown provider {provider_name}"}
         raise ProviderError("bad_request", f"Unknown provider: {provider_name}") from None
     finally:
-        done = await asyncio.shield(runs.finish_step(conn, step.id, status, usage.input_tokens,
-                                                     usage.output_tokens, detail))
+        if not detail and reply.stop is not None:
+            detail = {"stop_reason": reply.stop}
+        done = await asyncio.shield(runs.finish_step(conn, step.id, status, reply.usage.input_tokens,
+                                                     reply.usage.output_tokens, detail))
         await asyncio.shield(hub.publish(run_id, {"type": "step_finished", "step": done.model_dump()}))
 
 
