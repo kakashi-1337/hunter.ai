@@ -105,7 +105,7 @@ class SetInfo(_Model):
     problem: str | None = None    # why the file cannot be used; `cases` is empty then
 
 
-def _shown(value: Any) -> str:
+def shown(value: Any) -> str:
     """A value of the file as a reason repeats it: quoted, and cut when it is long."""
     if isinstance(value, str):
         return repr(value if len(value) <= SHOWN_CHARS else value[:SHOWN_CHARS] + "…")
@@ -116,7 +116,7 @@ def _shown(value: Any) -> str:
 def _only(table: dict, known: tuple[str, ...], where: str, inside: str = "") -> None:
     for key in table:
         if key not in known:
-            raise CaseError(f"{where}: unknown key {_shown(key)}{inside}")
+            raise CaseError(f"{where}: unknown key {shown(key)}{inside}")
 
 
 def _texts(table: dict, key: str, where: str) -> list[str]:
@@ -203,7 +203,7 @@ def _case(raw: Any, number: int, seen: set[str]) -> Case:
     if not isinstance(ident, str):
         raise CaseError(f"{where}: id has to be text")
     if not _ID.fullmatch(ident):
-        raise CaseError(f"{where}: the id {_shown(ident)} has to be lowercase letters, digits and dashes "
+        raise CaseError(f"{where}: the id {shown(ident)} has to be lowercase letters, digits and dashes "
                         "(at most 64 characters)")
     where = f"case '{ident}'"
     if ident in seen:
@@ -214,7 +214,7 @@ def _case(raw: Any, number: int, seen: set[str]) -> Case:
         raise CaseError(f"{where}: it has no group")
     group = raw["group"]
     if not isinstance(group, str) or group not in GROUPS:
-        raise CaseError(f"{where}: the group {_shown(group)} is not one of {', '.join(GROUPS)}")
+        raise CaseError(f"{where}: the group {shown(group)} is not one of {', '.join(GROUPS)}")
     prompt = raw.get("prompt")
     if prompt is not None and not isinstance(prompt, str):
         raise CaseError(f"{where}: prompt has to be text")
@@ -224,7 +224,7 @@ def _case(raw: Any, number: int, seen: set[str]) -> Case:
         raise CaseError(f"{where}: the prompt has {len(prompt)} characters, more than {MAX_TEXT}")
     mode = raw.get("mode", "pentesting")
     if not isinstance(mode, str) or mode not in MODES:
-        raise CaseError(f"{where}: the mode {_shown(mode)} is not one of {', '.join(MODES)}")
+        raise CaseError(f"{where}: the mode {shown(mode)} is not one of {', '.join(MODES)}")
     max_turns = _whole(raw.get("max_turns", MAX_TURNS), "max_turns", where)
     if not 1 <= max_turns <= MAX_TURNS_CAP:
         raise CaseError(f"{where}: max_turns is 1 to {MAX_TURNS_CAP}, not {max_turns}")
@@ -247,7 +247,7 @@ def parse(text: str, set_id: str, builtin: bool = False) -> CaseSet:
         raise CaseError("not a TOML file: it is nested too deeply") from None
     for key in data:
         if key not in ("name", "case"):
-            raise CaseError(f"unknown key {_shown(key)} in the set")
+            raise CaseError(f"unknown key {shown(key)} in the set")
     name = data.get("name", set_id.removeprefix(OWN))
     if not isinstance(name, str) or not name.strip():
         raise CaseError("the name of the set has to be text")
