@@ -302,9 +302,11 @@ def _shown_in(note: dict, chat: Chat) -> bool:
     return note["kind"] == "preference" or not chat.target_id
 
 
-async def recall(conn, run_id: str, chat: Chat, system: str, wire: list, query: str | None = None) -> tuple[str, list]:
+async def recall(conn, run_id: str, chat: Chat, system: str, wire: list, query: str | None = None, *,
+                 vectors: search.QueryVectors | None = None) -> tuple[str, list]:
     """Put notes that match the user's message into the outgoing request: the rule in the system
-    prompt, the notes themselves in the user turn as delimited, untrusted text. Never fails a run."""
+    prompt, the notes themselves in the user turn as delimited, untrusted text. Never fails a run.
+    `vectors`: what the run embedded so far (the lookup in the chat's collections is made with the same words)."""
     import dataclasses
     import secrets as _secrets
 
@@ -322,7 +324,8 @@ async def recall(conn, run_id: str, chat: Chat, system: str, wire: list, query: 
     status, detail = "error", {"query": query[:200]}
     try:
         try:
-            hits = await search.search(conn, [col.id], query, RECALL_LIMIT * 3, lock_timeout=RECALL_LOCK_TIMEOUT)
+            hits = await search.search(conn, [col.id], query, RECALL_LIMIT * 3, lock_timeout=RECALL_LOCK_TIMEOUT,
+                                       vectors=vectors)
         except asyncio.CancelledError:
             status = "cancelled"
             raise

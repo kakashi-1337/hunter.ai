@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useStore } from '../store'
-import { checkStepLine, decisionSummary, formatDuration, stepSummary, visible, windowStepLine } from '../tree'
+import { checkStepLine, decisionSummary, formatDuration, retrievalLine, stepSummary, visible, windowStepLine } from '../tree'
 import type { Step } from '../types'
 
 const ms = (a: string, b: string | null, now: number) => Math.max(0, (b ? Date.parse(b) : now) - Date.parse(a))
@@ -45,7 +45,7 @@ function StepRow({ step, now }: { step: Step; now: number }) {
       {step.kind === 'retrieval' && (
         <div className="meta">
           <span className="mono">{visible(String(d.query ?? ''))}</span><br />
-          {d.error ? <span className="warn-line">{visible(String(d.error))}</span> : <>{String(step.detail.used ?? 0)} of {String(step.detail.hits ?? 0)} {step.name === 'memory' ? 'notes' : 'chunks'} used</>}
+          {d.error ? <span className="warn-line">{visible(String(d.error))}</span> : <>{visible(retrievalLine(step.name, step.detail))}</>}
           {Array.isArray(step.detail.collections) && <> · {(step.detail.collections as string[]).join(', ')}</>}
         </div>
       )}

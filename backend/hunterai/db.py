@@ -19,7 +19,9 @@ COLUMNS = [("chats", "workdir", "text"),
            ("findings", "triage_json", "text not null default '{}'"),
            ("chats", "persona_id", "text"),
            ("findings", "notified_at", "text"),
-           ("goals", "done_items_json", "text not null default '[]'")]
+           ("goals", "done_items_json", "text not null default '[]'"),
+           ("chat_kb", "emptied", "integer not null default 0"),
+           ("chat_kb", "retrieve_chosen", "integer not null default 0")]
 
 
 def new_id() -> str:

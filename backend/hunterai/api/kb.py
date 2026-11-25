@@ -582,7 +582,7 @@ class NewChatsIn(BaseModel):
 
 @router.get("/new-chats")
 async def get_new_chats(conn=Depends(get_conn)):
-    """The collections every new chat starts with (see api/chats.py). A chat that exists is not touched by them."""
+    """The collections every chat reads that nobody chose collections for (repo/kb.py): new chats, and the ones that exist."""
     return {"collection_ids": await kb.new_chat_collections(conn)}
 
 

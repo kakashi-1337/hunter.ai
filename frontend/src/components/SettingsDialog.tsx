@@ -366,6 +366,12 @@ export function SettingsDialog({ onClose, onSetup }: { onClose: () => void; onSe
           <h3 className="section">Proxy</h3>
           <ProxyRow settings={settings} onSaved={(s) => { setSettings(s); useStore.setState({ settings: s }) }} />
           <h3 className="section">Knowledge base</h3>
+          <label className="check"><input type="checkbox" checked={settings.kb_lookup ?? true} onChange={(e) => update({ kb_lookup: e.target.checked })} />
+            <span>Search a chat's collections before every answer. The best passages go to the model with the message, as reference it must cite and never obey; the agent can still search again by itself. A chat switches this off or on for itself with "Always retrieve" above its message box, and that choice stays. Each search is one request to the embedding model and adds up to 6,000 characters to the message. Which collections a chat reads is set with "+ Knowledge" there: tick "every chat" beside a collection, and every chat that has none of its own reads it.</span>
+          </label>
+          <label className="check"><input type="checkbox" checked={settings.web_lookup ?? false} onChange={(e) => update({ web_lookup: e.target.checked })} />
+            <span>Ask the web before every answer. HunterAI makes one search with words taken from your message and gives the model the first results, so that it sees whether there is something newer than what it knows or than your knowledge base says; it opens a page before it relies on one. The words go to your own SearXNG and from there to public search engines. Web addresses, host names, IP addresses, mail addresses and anything shaped like a key, a token, a hash or a password are left out of them, and the search that was made is shown under the answer. Off: the model searches only when it decides to, with the web_search tool. Never done in a chat where web_search is denied.</span>
+          </label>
           <label className="check"><input type="checkbox" checked={settings.kb_redact} onChange={(e) => update({ kb_redact: e.target.checked })} />
             <span>Mask strings shaped like keys, tokens, and passwords before a document is indexed. Retrieved passages are sent to the model provider; turn this off only for material where the secrets are what you are looking for. It applies to documents ingested from now on.</span>
           </label>

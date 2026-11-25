@@ -6,6 +6,7 @@ export type Block =
   | { type: 'tool_call'; id: string; name: string; arguments: Record<string, unknown> }
   | { type: 'tool_result'; tool_call_id: string; content: string; is_error: boolean }
   | SourcesBlock
+  | WebSourcesBlock
   | AnswerCheckBlock
   | { type: 'owner_note'; text: string }
   /** Something about the answer the owner has to know and its text does not show: it was cut off at a limit, or the
@@ -264,6 +265,10 @@ export interface Settings {
   kb_redact: boolean
   /** Build output, bundles, source maps and lock files are left out of a collection when a folder is indexed. */
   kb_skip_generated: boolean
+  /** A chat's collections are searched before every answer, unless the chat switched that off for itself. */
+  kb_lookup?: boolean
+  /** The web is asked before every answer, with words of the message. Off until the owner switches it on. */
+  web_lookup?: boolean
   vision_model: string | null
   browser_via_caido: boolean
   answer_check: boolean
@@ -396,6 +401,10 @@ export interface Source {
   where?: string
 }
 
+/** One result of the web search HunterAI made before an answer. */
+export interface WebSource { n: number; title: string; url: string; snippet: string; engine: string }
+/** What that search gave the answer, with the words that were searched for. Never sent back to a model. */
+export interface WebSourcesBlock { type: 'web_sources'; query: string; items: WebSource[]; results: number; error: string | null }
 /** `keywords_only`: why the vector half of the search did not answer, when the keyword index answered alone. */
 export interface SourcesBlock { type: 'sources'; query: string; items: Source[]; hits: number; error: string | null; keywords_only?: string | null }
 export interface CheckedClaim { claim: string; verdict: 'unsupported' | 'contradicted'; evidence: string }
@@ -475,7 +484,9 @@ export interface KbHit {
   where?: string
 }
 
-export interface ChatKb { chat_id: string; collection_ids: string[]; always_retrieve: boolean }
+/** `collection_ids` and `always_retrieve` are what is in effect. `follows`: nobody chose collections for this chat, so
+ * it reads the ones named for every chat. */
+export interface ChatKb { chat_id: string; collection_ids: string[]; always_retrieve: boolean; follows?: boolean }
 export interface KbHealth { worker_alive: boolean; vector_backend: string }
 export interface UploadResult { accepted: number; rejected: { path: string; reason: string }[]; files: number; bytes: number }
 

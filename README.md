@@ -213,22 +213,36 @@ when the collection is created.
   (`docker stop hunterai-qdrant`). `HUNTERAI_VECTOR=memory` keeps vectors in the app
   database instead (exact search, fine for small collections, no container);
   `HUNTERAI_QDRANT_URL` points at another Qdrant.
-- **In a chat.** "+ Knowledge" above the message box attaches collections to the chat. With
-  "Always retrieve" on, every message first searches them (vector and keyword results
-  fused), and the best passages that fit the context go to the model between
-  `<<<KB_REFERENCE ... untrusted>>>` lines with the rule that they are data, not
-  instructions. The answer cites them as [n], and "Sources" under it shows each passage.
-  Without the switch, the agent can still look things up itself with the `kb_search` tool,
-  and its instructions tell it to do so before it answers from memory a question you may
-  have notes on, and to search again with other words when the first passages do not answer.
-- **In every new chat.** A chat reads only the collections attached to it, and a new chat
-  has none. The agent is then not offered `kb_search` at all: the tool could only answer
-  "No knowledge collection is attached to this chat", and a model that was told to check
-  its knowledge called it, failed, and called it again. Instead, a line above the message
-  box says that this chat reads no collection and how to attach one. Tick "every new chat"
-  beside a collection in the same "+ Knowledge" list, and each chat you start from then on
-  has that collection attached, next to those of its persona. Chats that exist keep what they have:
-  attach it to them by hand. Detaching it in one chat changes that chat only.
+- **In a chat.** "+ Knowledge" above the message box says which collections the chat reads.
+  Every message first searches them (vector and keyword results fused), and the best
+  passages that fit the context go to the model between `<<<KB_REFERENCE ... untrusted>>>`
+  lines with the rule that they are data, not instructions. The answer cites them as [n],
+  and "Sources" under it shows each passage. That lookup is on from the start, for every
+  chat that reads a collection. "Always retrieve" above the message box switches it off or
+  on for one chat, and that choice stays; Settings, "Knowledge base", has the switch for
+  every chat that did not choose. With or without it, the agent can look things up itself
+  with the `kb_search` tool: its instructions tell it to do so before it answers from memory
+  a question you may have notes on, and to search again with other words when the first
+  passages do not answer. A model that got the passages of the lookup is told that this
+  search was made already, so that it does not make it once more.
+- **In every chat.** Tick "every chat" beside a collection in the same "+ Knowledge" list,
+  and every chat reads it that has no collections of its own: the ones you start from then
+  on, and the ones that exist. A chat has collections of its own once you attach or detach
+  one there (the box in front of the name, or the ✕ on a collection), or when its persona
+  brought some; from then on it keeps exactly those, whatever is ticked for every chat, and
+  a chat you emptied stays empty. Until then its collections are shown with "every chat"
+  beside the name. (Before, the tick reached new chats only, and a chat that existed "kept
+  what it had", which was nothing: on the install this was written for, 48 of 49 chats read
+  no collection, and every search of the agent was answered "No knowledge collection is
+  attached to this chat".) A chat that reads none is not offered `kb_search` at all: the
+  tool could only fail there. A line above the message box says so, and how to attach one.
+- **What a lookup costs.** One request to the embedding model for each message, and up to
+  6,000 characters more in the request. The recall of notes from memory is made with the
+  same words and uses the same answer of the embedding model, so a chat with both asks it
+  once and not twice; when it could not be asked, it is not waited for a second time in
+  the same run. On a machine whose graphics card the chat model fills, keep the embedding
+  model on the processor (Settings, "Knowledge base"): the card then stays with the chat
+  model.
 - **When half of the search cannot be asked.** The vector half needs the embedding model
   and the vector store; the keyword half needs neither. While an ingest job holds the
   embedder for longer than a search waits, when Ollama does not answer, or when the Qdrant
@@ -1608,6 +1622,44 @@ settings in `~/.hunterai/searxng/settings.yml`. It is left running when HunterAI
 another address than `127.0.0.1:8888`, or none) or that was made from another version of
 the image is made again: it holds nothing, its settings are in that folder. One that does
 not stay up says why, with its last lines. `scripts/check-tools.sh` lists what the tools need.
+
+**Before every answer.** Settings, "Knowledge base", has the switch "Ask the web before
+every answer". It is off until you switch it on. With it, HunterAI makes one search for
+each message you send, before the model is called, and gives the model the first five
+results that fit (a title, an address and an excerpt of 300 characters each) between
+`<<<WEB_RESULTS ... untrusted>>>` lines, with the rule that they are data and not
+instructions, that an excerpt is not the page, and that it opens a page with `web_fetch`
+before it relies on one. This is the second of two lookups; the knowledge base is the first
+(see [Knowledge base](#knowledge-base)). A model knows the world as it was when it was
+trained, and your notes as they were when you wrote them: the results are there so that it
+sees whether something newer exists. "Web results" under the answer lists them with the
+words that were searched for, and the trajectory has the step.
+
+- **What is searched for.** Words of your message, read from its first 600 characters
+  outside of fenced code: at most twelve, without the small words of English and Tagalog
+  that carry no question. A message with fewer than two such words ("ok", "ituloy mo") is
+  not searched for.
+- **What never goes out.** The words go to your own SearXNG and from there to public
+  search engines, so what names your target or a person is left out of them: web
+  addresses, host names (also those of labs and private networks: `.internal`, `.lan`,
+  `.htb`), IP addresses, mail addresses, paths of files on your machine (their folders
+  are named after your targets as often as not) and long numbers such as a telephone
+  number. So is anything shaped like a secret: a key
+  HunterAI keeps for you whatever its shape, a token, a hash, a long string of letters and
+  digits, and a password where the message says that it is one (`password=...`, a database
+  address with a login). Names of programs that look like host names stay (`next.js`,
+  `socket.io`, `setup.py`), and so do version numbers.
+- **Where it is not done.** In a chat in which `web_search` is denied, by the chat's own
+  permissions or by the defaults: what you denied the model is not done in your name
+  either.
+- **What it costs.** The time of one search, 8 seconds at most; a search that fails or
+  does not answer in that time is given up for that message, said under the answer, and
+  not tried again for a minute. Up to 2,400 characters more in the request, and less in a
+  small local window.
+
+The search is as good as the words it is made with, and those are picked without a model:
+a message that points at something said earlier ("and the second one?") is searched for by
+its own words alone. The model can still search by itself with `web_search`.
 
 ### Variables
 
