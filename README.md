@@ -1585,6 +1585,27 @@ in every request. The setup check lists what the folders hold.
 To see what these programs send to a target, switch Caido's recording on: the model is
 then told how to send each of them through Caido (see [Caido](#caido)).
 
+### Your own font
+
+The interface is set in the fonts of your system. To set it in OCR-A, put the font file at
+`frontend/public/fonts/OCRAStd.woff2` and start HunterAI again:
+
+```bash
+mkdir -p frontend/public/fonts
+cp /path/to/OCRAStd.woff2 frontend/public/fonts/
+scripts/start.sh
+```
+
+`scripts/start.sh` builds the interface on every start, and the build looks for that file.
+With it, the text of the interface is OCR-A, one pixel smaller than before because the font
+is a third wider; code, commands and tool output keep their monospace font. Without it,
+nothing changes and the page asks for no font file. Take the file away and start again to
+have the system fonts back.
+
+The font is yours and not HunterAI's to hand out: git ignores `frontend/public/fonts/`, so
+a font you have a licence for is never committed. Reload a page that was open while you
+started again.
+
 ### Web search
 
 `scripts/start.sh` starts the container `hunterai-searxng` on `127.0.0.1:8888` with its
