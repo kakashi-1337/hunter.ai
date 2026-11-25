@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { alreadyIngested, duplicateJobs, jobEmpty, jobRemovable, formatBytes, formatEta, formatRate, jobActions, jobProgress, jobSource, jobsKey, relPath, sourceLabel, uploadBatches } from '../kb'
+import { alreadyIngested, duplicateJobs, jobEmpty, jobRemovable, formatBytes, formatEta, formatRate, jobActions, jobProgress, jobSource, jobsKey, noKnowledgeLine, relPath, sourceLabel, uploadBatches } from '../kb'
 import type { Job } from '../types'
 
 const job = (p: Partial<Job>): Job => ({
@@ -71,5 +71,21 @@ describe('knowledge helpers', () => {
     expect(jobSource(job({ payload: { source: { kind: 'git', url: 'https://github.com/o/r.git' } } }))).toBe('Repository https://github.com/o/r.git')
     expect(jobSource(job({ payload: { source: { kind: 'web', url: 'https://acme.test/' } } }))).toBe('Website https://acme.test/')
     expect(sourceLabel('upload:notes/a.md', 3, 9)).toBe('upload:notes/a.md : lines 3–9')
+  })
+})
+
+describe('a chat that reads no collection', () => {
+  it('says so above the message box when there are collections it could read', () => {
+    // The agent is not offered kb_search in such a chat: without this line nothing would tell the owner why it does not search.
+    const line = noKnowledgeLine(0, 2)
+    expect(line).toContain('reads no collection')
+    expect(line).toContain('cannot search your knowledge base')
+    expect(line).toContain('+ Knowledge')
+    expect(line).toContain('every new chat')
+  })
+  it('says nothing when the chat reads one, or when there is none to read yet', () => {
+    expect(noKnowledgeLine(1, 2)).toBeNull()
+    expect(noKnowledgeLine(3, 3)).toBeNull()
+    expect(noKnowledgeLine(0, 0)).toBeNull()
   })
 })

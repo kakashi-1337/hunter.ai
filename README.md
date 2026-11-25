@@ -224,9 +224,10 @@ when the collection is created.
 - **In every new chat.** A chat reads only the collections attached to it, and a new chat
   has none. The agent is then not offered `kb_search` at all: the tool could only answer
   "No knowledge collection is attached to this chat", and a model that was told to check
-  its knowledge called it, failed, and called it again. Tick "every new chat" beside a
-  collection in the same "+ Knowledge" list, and each chat you start from then on has that
-  collection attached, next to those of its persona. Chats that exist keep what they have:
+  its knowledge called it, failed, and called it again. Instead, a line above the message
+  box says that this chat reads no collection and how to attach one. Tick "every new chat"
+  beside a collection in the same "+ Knowledge" list, and each chat you start from then on
+  has that collection attached, next to those of its persona. Chats that exist keep what they have:
   attach it to them by hand. Detaching it in one chat changes that chat only.
 - **When half of the search cannot be asked.** The vector half needs the embedding model
   and the vector store; the keyword half needs neither. While an ingest job holds the

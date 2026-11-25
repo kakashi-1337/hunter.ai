@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import * as api from '../api'
+import { noKnowledgeLine } from '../kb'
 import { useStore } from '../store'
 import type { ChatKb, Collection } from '../types'
 
@@ -78,7 +79,9 @@ export function ChatKbBar() {
           onChange={(e) => save({ always_retrieve: e.target.checked })} />
         <span>Always retrieve</span>
       </label>
-      {kb.collection_ids.length === 0 && <span className="hint">Attach a collection first</span>}
+      {kb.collection_ids.length === 0 && (noKnowledgeLine(0, collections.length)
+        ? <span className="warn-line" role="status">{noKnowledgeLine(0, collections.length)}</span>
+        : <span className="hint">Attach a collection first</span>)}
     </div>
   )
 }
