@@ -2,7 +2,10 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { applyOwnFont } from './font'
 import './theme.css'
+
+applyOwnFont(document)
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

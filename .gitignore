@@ -15,3 +15,7 @@ MCP/
 
 # The owner's own programs for the shell tool (see "Your tool folder" in the README): never part of the repository.
 /bin/
+
+# The owner's own interface font (see "Your own font" in the README): a font is licensed to the person who has it,
+# never part of the repository.
+/frontend/public/fonts/
