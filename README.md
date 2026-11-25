@@ -218,13 +218,27 @@ when the collection is created.
   fused), and the best passages that fit the context go to the model between
   `<<<KB_REFERENCE ... untrusted>>>` lines with the rule that they are data, not
   instructions. The answer cites them as [n], and "Sources" under it shows each passage.
-  Without the switch, the agent can still look things up itself with the `kb_search` tool.
+  Without the switch, the agent can still look things up itself with the `kb_search` tool,
+  and its instructions tell it to do so before it answers from memory a question you may
+  have notes on, and to search again with other words when the first passages do not answer.
 - **In every new chat.** A chat reads only the collections attached to it, and a new chat
-  has none: the agent's `kb_search` then answers "No knowledge collection is attached to
-  this chat", whatever it searches for. Tick "every new chat" beside a collection in the
-  same "+ Knowledge" list, and each chat you start from then on has that collection
-  attached, next to those of its persona. Chats that exist keep what they have: attach it
-  to them by hand. Detaching it in one chat changes that chat only.
+  has none. The agent is then not offered `kb_search` at all: the tool could only answer
+  "No knowledge collection is attached to this chat", and a model that was told to check
+  its knowledge called it, failed, and called it again. Tick "every new chat" beside a
+  collection in the same "+ Knowledge" list, and each chat you start from then on has that
+  collection attached, next to those of its persona. Chats that exist keep what they have:
+  attach it to them by hand. Detaching it in one chat changes that chat only.
+- **When half of the search cannot be asked.** The vector half needs the embedding model
+  and the vector store; the keyword half needs neither. While an ingest job holds the
+  embedder for longer than a search waits, when Ollama does not answer, or when the Qdrant
+  container is not running (it does not come back by itself after the machine went off:
+  `scripts/start.sh` or `scripts/qdrant.sh` starts it), the keyword index and the exact
+  spellings answer alone, in a chat's own retrieval and in `kb_search`. The tool result
+  then starts with a note that says so and why, and "Sources" under an answer says "keyword
+  index only" with the reason. Before, such a search was given up as a whole ("knowledge
+  search is unavailable: ..."). The search box of the Knowledge page and
+  `scripts/rag-test.sh` still report the failure: there, a silent half would be a wrong
+  measurement.
 - **Looking inside.** Click a document in the list to read its chunks, correct one (it is
   embedded again), delete one, or remove the document from the index. "+ Note" adds text
   by hand. "Re-embed" embeds the whole collection again with another embedder, as a job;
