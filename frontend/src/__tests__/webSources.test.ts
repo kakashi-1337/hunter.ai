@@ -29,6 +29,12 @@ describe('the line of a lookup step in the trajectory', () => {
     expect(retrievalLine('web_search', { used: 0, results: 0 })).toBe('0 of 0 results used')
     expect(retrievalLine('kb_search', {})).toBe('0 of 0 chunks used')
   })
+  it('names the skills a request named, and how they were told apart', () => {
+    const shown = [{ name: 'web-pentest', score: 0.61 }, { name: 'debug', score: 0.48 }]
+    expect(retrievalLine('skills', { shown, of: 143, by: 'meaning' })).toBe('2 of 143 skills named, by meaning: web-pentest, debug')
+    expect(retrievalLine('skills', { shown, of: 143, by: 'words' })).toBe('2 of 143 skills named, by the words they share with the message: web-pentest, debug')
+    expect(retrievalLine('skills', {})).toBe('0 of 0 skills named, by the words they share with the message')
+  })
   it('says when only the keyword index answered a knowledge search', () => {
     expect(retrievalLine('kb_search', { used: 1, hits: 1, keywords_only: 'embedder busy' })).toBe('1 of 1 chunks used · keyword index only (embedder busy)')
   })

@@ -369,6 +369,27 @@ A skill reaches the model in two ways:
 - The model loads it with the `skill` tool when the task fits the description. The
   system prompt lists the skills that are on and marked "the model may load it".
 
+**With many skills, a request names the eight that fit the message.** Up to eight skills
+are all listed, as before. With more, every one of them would stand in every request with
+its name and description: that costs room in each call, and a small local model picks from
+a short list what it does not find in a long one. So the list is the eight whose
+descriptions fit your message best, and it says "the 8 of N". The trajectory has a step
+("skills") that names them, with their scores and how they were told apart:
+
+- **by meaning**, when it costs nothing. The lookup in the chat's collections and the
+  recall of notes have embedded your message already, and the worker embeds each skill's
+  name and description once, and again when you change one (with the embedding model the
+  memory uses, so one request serves both). A message in Tagalog then finds a description
+  in English. Naming skills never makes an embedding request of its own while a run waits.
+- **by the words the two share**, otherwise: in a chat without a collection and without
+  notes, while descriptions are still to be embedded, or when the embedding model could
+  not be asked. The two ways are never mixed in one list.
+
+A skill that is not listed for a message can still be started with its slash command, and
+the `skill` tool still loads it by name. What is not done yet: loading a skill's whole
+text without the model asking for it. How good a fit has to be for that is a number that
+has to come from real messages, and the step records the scores it needs.
+
 **Settings → Manage skills** (or `/skills`) lists them, with a switch for each and a
 second one for whether the model may load it by itself. **Add a skill** takes the
 address of a GitHub or GitLab repository or of one skill's folder in it, an absolute

@@ -13,12 +13,12 @@ import sys
 from collections.abc import Callable
 from datetime import datetime, timezone
 
-from . import config, db, memory
+from . import config, db, memory, skillmatch
 from .kb import pipeline, sources
 from .repo import jobs, settings
 
 HANDLERS: dict[str, Callable] = {"ingest": pipeline.run_job, "reembed": pipeline.run_reembed,
-                                 "memory": memory.run_job}
+                                 "memory": memory.run_job, skillmatch.KIND: skillmatch.run_job}
 POLL_SECONDS = 1.0
 HEARTBEAT_SECONDS = 2.0
 ALIVE_SECONDS = 10.0
