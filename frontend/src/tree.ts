@@ -396,13 +396,21 @@ export function citedNumbers(text: string): Set<number> {
   return out
 }
 
+/** That the keyword index answered a search alone, and why the other half did not; null when both answered. */
+export function keywordsOnlyNote(b: SourcesBlock): string | null {
+  return b.keywords_only
+    ? `Only the keyword index answered this search: the search by meaning could not be asked (${b.keywords_only}).`
+    : null
+}
+
 /** Why an answer has no sources to show, or null when it has some. */
 export function sourcesNote(b: SourcesBlock): string | null {
   if (b.error) return `Knowledge search failed: ${b.error}`
   if (b.items.length) return null
-  return b.hits > 0
+  const half = keywordsOnlyNote(b)
+  return (b.hits > 0
     ? `Knowledge search found ${b.hits} chunks, but none fit this chat's context budget.`
-    : 'Knowledge search found nothing for this message.'
+    : 'Knowledge search found nothing for this message.') + (half ? ` ${half}` : '')
 }
 
 /** Numbers the answer cites that no source carries: the model made those citations up. */

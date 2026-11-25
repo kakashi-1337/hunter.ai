@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   withAuto, applyEvent, branchLabel, callDurations, canApprove, cardStatus, formatDuration, messageText, pendingAsks, pruneOptions, renderItems,
-  appendTail, commandLine, parseArgs, windowStepLine, scanSummary, scanToolLine, citedNumbers, unknownCitations, decisionSummary, sourcesNote, sourcesOf, triageFacts, gateLine, parseLines, runningCalls, siblingPosition, stepSummary, stepsFromEvents, toolCards, visible, type ToolCard,
+  appendTail, commandLine, parseArgs, windowStepLine, scanSummary, scanToolLine, citedNumbers, unknownCitations, decisionSummary, keywordsOnlyNote, sourcesNote, sourcesOf, triageFacts, gateLine, parseLines, runningCalls, siblingPosition, stepSummary, stepsFromEvents, toolCards, visible, type ToolCard,
 } from '../tree'
 import type { Message, PermissionRequest, RunEvent, Step } from '../types'
 
@@ -298,6 +298,15 @@ describe('knowledge sources', () => {
     expect(sourcesNote(b({}))).toBe('Knowledge search found nothing for this message.')
     expect(sourcesNote(b({ hits: 1, items: [{ n: 1 }] }))).toBeNull()
     expect(unknownCitations('yes [1], also [7] and [3, 9]', b({ items: [{ n: 1 }, { n: 3 }] }) as never)).toEqual([7, 9])
+  })
+  it('says when only the keyword index answered, and why, also when it found nothing', () => {
+    const b = (p: object) => ({ type: 'sources' as const, query: 'q', items: [], hits: 0, error: null, ...p })
+    const why = 'Only the keyword index answered this search: the search by meaning could not be asked (embedder busy).'
+    expect(keywordsOnlyNote(b({ keywords_only: 'embedder busy', hits: 1, items: [{ n: 1 }] }) as never)).toBe(why)
+    expect(keywordsOnlyNote(b({ keywords_only: null }))).toBeNull()
+    expect(keywordsOnlyNote(b({}))).toBeNull()                       // an answer from before the field existed
+    expect(sourcesNote(b({ keywords_only: 'embedder busy' }))).toBe(`Knowledge search found nothing for this message. ${why}`)
+    expect(sourcesNote(b({ keywords_only: 'embedder busy', hits: 1, items: [{ n: 1 }] }) as never)).toBeNull()
   })
 })
 

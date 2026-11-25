@@ -1,6 +1,8 @@
 """Per-message retrieval for a chat with "always retrieve" on: the best chunks go into the
 outgoing request as numbered, clearly delimited, untrusted reference, and the answer keeps
-a record of them. Retrieval never fails a run."""
+a record of them. Retrieval never fails a run, and when the vector half of the search cannot
+be asked (an ingest job holds the embedder, Ollama or the vector store does not answer) the
+keyword index answers alone, which the record says."""
 from __future__ import annotations
 
 import asyncio
@@ -95,8 +97,8 @@ async def augment(conn, run_id: str, chat: Chat, system: str,
     status, detail = "error", {"query": query[:200], "collections": names}
     try:
         try:
-            hits = await search.search(conn, attached.collection_ids, query, RETRIEVE_LIMIT,
-                                       lock_timeout=LOCK_TIMEOUT)
+            hits, keywords_only = await search.or_keywords(conn, attached.collection_ids, query, RETRIEVE_LIMIT,
+                                                           lock_timeout=LOCK_TIMEOUT)
             hits = await layout.annotate(conn, hits)
         except asyncio.CancelledError:
             status = "cancelled"
@@ -110,7 +112,9 @@ async def augment(conn, run_id: str, chat: Chat, system: str,
         sources = pick(hits, budget)
         status = "done"
         detail.update(hits=len(hits), used=len(sources), budget_chars=budget)
-        block = SourcesBlock(query=query, items=sources, hits=len(hits))
+        if keywords_only:
+            detail["keywords_only"] = keywords_only[:300]
+        block = SourcesBlock(query=query, items=sources, hits=len(hits), keywords_only=keywords_only and keywords_only[:300])
         if not sources:
             return system, wire, block
         nonce = secrets.token_hex(4)

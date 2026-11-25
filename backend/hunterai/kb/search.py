@@ -22,7 +22,10 @@ few words with the question, and a message has room for three passages or so. Wh
 it was added, on the kept test of a collection of 606,939 passages (45 questions written from its passages, the
 search repeated from its two lists on): the right passage stood first for 18 of them instead of 15, and was in
 the message for 29 instead of 26. A smaller k (5 or 2), or the better of a passage's two places, brought 16 and 28;
-the two firsts put behind the fused first, 15 and 29."""
+the two firsts put behind the fused first, 15 and 29.
+
+The keyword half needs neither the embedding model nor the vector store, so it can answer when the other half cannot
+be asked: `or_keywords` is the search for a reader that is better off with half an answer than with none."""
 from __future__ import annotations
 
 import re
@@ -31,7 +34,8 @@ from itertools import zip_longest
 from ..repo import kb
 from ..types import Hit
 from . import embed
-from .vectors import VectorStore, get_store
+from .embed import EmbedError
+from .vectors import VectorError, VectorStore, get_store
 
 RRF_K = 60
 CANDIDATES = 40
@@ -125,32 +129,34 @@ def to_match_any(q: str) -> str:
 
 
 async def search(conn, collection_ids: list[str], query: str, limit: int = 8, *,
-                 store: VectorStore | None = None, lock_timeout: float | None = 30) -> list[Hit]:
+                 store: VectorStore | None = None, lock_timeout: float | None = 30, dense: bool = True) -> list[Hit]:
+    """`dense` False: the keyword half and the exact spellings alone. Nothing is embedded and no vector store is asked."""
     query = (query or "").strip()
     cols = [c for c in [await kb.get_collection(conn, i) for i in dict.fromkeys(collection_ids)] if c]
     if not query or not cols:
         return []
-    store = store or get_store()
-    vectors: dict[str, list[float]] = {}
-    for spec in dict.fromkeys(c.embedder for c in cols):
-        vectors[spec] = (await embed.get(spec, lock_timeout).embed([query]))[0]
-    dense: dict[str, int] = {}
+    by_vector: dict[str, int] = {}
     nearness: dict[str, float] = {}
-    for c in cols:
-        for rank, (chunk_id, near) in enumerate(await store.search(kb.vector_name(c.id), vectors[c.embedder], CANDIDATES), 1):
-            if chunk_id not in dense:
-                dense[chunk_id], nearness[chunk_id] = rank, near
+    if dense:
+        store = store or get_store()
+        vectors: dict[str, list[float]] = {}
+        for spec in dict.fromkeys(c.embedder for c in cols):
+            vectors[spec] = (await embed.get(spec, lock_timeout).embed([query]))[0]
+        for c in cols:
+            for rank, (chunk_id, near) in enumerate(await store.search(kb.vector_name(c.id), vectors[c.embedder], CANDIDATES), 1):
+                if chunk_id not in by_vector:
+                    by_vector[chunk_id], nearness[chunk_id] = rank, near
     match = to_match_any(query)
     keyword = {cid: rank for rank, cid in enumerate(
         await kb.keyword_ids(conn, [c.id for c in cols], match, CANDIDATES) if match else [], 1)}
-    fused = {cid: (1 / (RRF_K + dense[cid]) if cid in dense else 0) + (1 / (RRF_K + keyword[cid]) if cid in keyword else 0)
-             for cid in {*dense, *keyword}}
+    fused = {cid: (1 / (RRF_K + by_vector[cid]) if cid in by_vector else 0) + (1 / (RRF_K + keyword[cid]) if cid in keyword else 0)
+             for cid in {*by_vector, *keyword}}
     spelled = put_first(await exact(conn, [c.id for c in cols], query), fused)
     found = await kb.chunks_by_id(conn, list({*fused, *spelled}))
-    leads = leading(dense, nearness, keyword, found, spelled)
+    leads = leading(by_vector, nearness, keyword, found, spelled)
     scored = []
     for cid in {*fused, *spelled}:
-        d, k = dense.get(cid), keyword.get(cid)
+        d, k = by_vector.get(cid), keyword.get(cid)
         score = fused.get(cid, 0) + (EXACT_SCORE if cid in spelled else leads[cid][1] if cid in leads else 0)
         scored.append((-score, d if d is not None else 10**9, cid, d, k))
     scored.sort()
@@ -167,3 +173,19 @@ async def search(conn, collection_ids: list[str], query: str, limit: int = 8, *,
         if len(hits) >= limit:
             break
     return hits
+
+
+async def or_keywords(conn, collection_ids: list[str], query: str, limit: int = 8, *,
+                      lock_timeout: float | None = 30) -> tuple[list[Hit], str | None]:
+    """The search, for a reader that is better off with half an answer than with none: a model in the middle of
+    a run, a message that is about to go out. When the vector half cannot be asked (the embedder is busy with a job
+    or does not answer, the vector store is down or does not know the collection), the keyword half answers alone.
+    Returns the hits, and why the vector half did not answer when it did not. A failure of anything else is raised
+    as it is: only the vector half has a stand-in."""
+    try:
+        return await search(conn, collection_ids, query, limit, lock_timeout=lock_timeout), None
+    except EmbedError as e:
+        why = e.message
+    except VectorError as e:
+        why = str(e)
+    return await search(conn, collection_ids, query, limit, dense=False), why

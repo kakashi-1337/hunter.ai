@@ -5,6 +5,14 @@ export const BATCH_FILES = 50
 export const BATCH_BYTES = 64 * 1024 * 1024
 export const MAX_FILE_BYTES = 50 * 1024 * 1024   // mirror of the backend cap
 
+/** What the bar above the message box says of a chat that reads no collection although there are some: the agent
+ * is not offered kb_search there, and nothing else would tell the owner why it does not search. Null otherwise. */
+export function noKnowledgeLine(attached: number, collections: number): string | null {
+  if (attached > 0 || collections === 0) return null
+  return 'This chat reads no collection, so the agent cannot search your knowledge base here. Attach one with '
+    + '+ Knowledge; tick "every new chat" beside it to have it in each chat you start.'
+}
+
 /** The path a file keeps inside the collection: its folder-relative path when it has one. */
 export function relPath(f: { name: string; webkitRelativePath?: string }): string {
   return f.webkitRelativePath || f.name

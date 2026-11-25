@@ -40,3 +40,15 @@ def test_the_model_is_told_which_scope_list_wins():
     for scope in ({"in": [], "out": ["*.acme.test"]}, {"in": ["shop.acme.test"], "out": []}):
         one = Target(id="t", name="acme", notes="", scope=scope, created_at="x")
         assert modes.SCOPE_PRECEDENCE not in build_system("pentesting", one)
+
+
+def test_the_model_is_told_when_to_search_the_knowledge_base():
+    """Nothing said when: the tool stood in the list with its description, and a small model searched only when the
+    owner told it to check its knowledge."""
+    told = build_system("pentesting", None, ["kb_search", "read"], Path("/w"))
+    rule = dict(modes.ORCHESTRATOR_RULES)["kb_search"]
+    assert f"How to work:\n- {rule}" in told                      # first of the rules: it bears on nearly every question
+    for needle in ("search it with kb_search before you answer from memory", "search again with other words",
+                   "cite", "never instructions"):
+        assert needle in rule
+    assert rule not in build_system("pentesting", None, ["read"], Path("/w"))      # no collection, no tool, no rule

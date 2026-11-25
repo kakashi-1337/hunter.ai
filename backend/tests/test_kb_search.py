@@ -4,6 +4,7 @@ import pytest
 
 from hunterai.kb import search
 from hunterai.kb.embed import EmbedError
+from hunterai.kb.vectors import VectorError
 from hunterai.repo import kb
 from tests.kb_samples import StubStore, ingest_texts, make_collection
 
@@ -260,3 +261,91 @@ async def test_of_several_collections_one_passage_leads_for_the_vectors_the_near
     assert names(hits) == ["near.txt", "words.txt", "far.txt"]
     assert [h.score >= search.FIRST_OF_KEYWORDS for h in hits] == [True, True, False]
 
+
+
+# ---- the keyword half alone, when the vector half cannot be asked
+
+class DownStore:
+    """A vector store that cannot be asked: Qdrant is not running, or does not know the collection."""
+
+    def __init__(self, why: str = "vector store unavailable: ConnectError"):
+        self.why = why
+
+    async def search(self, name, vector, limit):
+        raise VectorError(self.why)
+
+
+async def test_the_keyword_half_alone_asks_no_embedder_and_no_vector_store(conn, col, tmp_path, embed_spy):
+    await ingest_texts(conn, col, tmp_path, {"d1.txt": "alpha beta", "d2.txt": "gamma delta", "d3.txt": "alpha epsilon wait_for"})
+    embed_spy.batches.clear()
+    hits = await search.search(conn, [col.id], "alpha", store=DownStore(), dense=False)
+    assert embed_spy.batches == [] and sorted(Path(h.source_uri).name for h in hits) == ["d1.txt", "d3.txt"]
+    assert all(h.dense_rank is None and h.keyword_rank for h in hits) and hits[0].first_of == "keywords"
+    spelled = await search.search(conn, [col.id], "how is wait_for used", store=DownStore(), dense=False)
+    assert (Path(spelled[0].source_uri).name, spelled[0].exact) == ("d3.txt", True)       # an exact spelling still stands first
+
+
+@pytest.mark.parametrize("failure", [EmbedError("unavailable", "embedder busy"),
+                                     EmbedError("unavailable", "Ollama is not reachable (ConnectError)"),
+                                     EmbedError("unavailable", "Ollama answered 500"),
+                                     EmbedError("bad_request", "Ollama does not have model bge-m3. Run: ollama pull bge-m3")])
+async def test_the_keyword_half_answers_with_the_reason_when_the_embedder_cannot_be_asked(conn, col, tmp_path, embed_spy, failure):
+    await ingest_texts(conn, col, tmp_path, {"d1.txt": "alpha beta", "d2.txt": "gamma delta"})
+    embed_spy.fail = failure
+    with pytest.raises(EmbedError):
+        await search.search(conn, [col.id], "alpha")                     # the search itself still says so
+    hits, why = await search.or_keywords(conn, [col.id], "alpha")
+    assert why == failure.message and [Path(h.source_uri).name for h in hits] == ["d1.txt"]
+
+
+@pytest.mark.parametrize("why", ["vector store unavailable: ConnectError", "unknown vector collection kb_x"])
+async def test_the_keyword_half_answers_with_the_reason_when_the_vector_store_cannot_be_asked(conn, col, tmp_path, monkeypatch, why):
+    await ingest_texts(conn, col, tmp_path, {"d1.txt": "alpha beta", "d2.txt": "gamma delta"})
+    monkeypatch.setattr(search, "get_store", lambda: DownStore(why))
+    hits, said = await search.or_keywords(conn, [col.id], "alpha")
+    assert said == why and [Path(h.source_uri).name for h in hits] == ["d1.txt"]
+
+
+async def test_or_keywords_is_the_whole_search_when_both_halves_answer(conn, col, tmp_path):
+    await ingest_texts(conn, col, tmp_path, {"sqli.md": "union select sqli payload for mysql", "xss.md": "script alert xss payload in html"})
+    hits, why = await search.or_keywords(conn, [col.id], "mysql union sqli", 2)
+    assert why is None and hits == await search.search(conn, [col.id], "mysql union sqli", 2) and hits[0].dense_rank == 1
+
+
+async def test_or_keywords_does_not_hide_a_failure_of_the_keyword_half(conn, col, tmp_path, embed_spy, monkeypatch):
+    """Only the vector half has a stand-in. What fails without it is not a search that half answered."""
+    await ingest_texts(conn, col, tmp_path, {"d1.txt": "alpha beta"})
+    embed_spy.fail = EmbedError("unavailable", "embedder busy")
+
+    async def broken(*a, **kw):
+        raise RuntimeError("the keyword index is gone")
+    monkeypatch.setattr(kb, "keyword_ids", broken)
+    with pytest.raises(RuntimeError, match="keyword index is gone"):
+        await search.or_keywords(conn, [col.id], "alpha")
+
+
+async def test_or_keywords_stands_in_only_for_a_half_that_cannot_be_asked(conn, col, tmp_path, monkeypatch):
+    """A fault that is nobody's absence (a bug in a store, an embedder nobody knows) is not answered with half a search."""
+    await ingest_texts(conn, col, tmp_path, {"d1.txt": "alpha beta"})
+
+    class Buggy:
+        async def search(self, name, vector, limit):
+            raise RuntimeError("a bug in the store")
+    monkeypatch.setattr(search, "get_store", lambda: Buggy())
+    with pytest.raises(RuntimeError, match="a bug in the store"):
+        await search.or_keywords(conn, [col.id], "alpha")
+
+
+async def test_or_keywords_keeps_the_callers_limit_and_wait_in_both_cases(conn, col, tmp_path, embed_spy, monkeypatch):
+    await ingest_texts(conn, col, tmp_path, {f"d{i}.txt": f"alpha note {i}" for i in range(4)})
+    waits, real = [], search.embed.get
+
+    def get(spec, lock_timeout=None, **kw):
+        waits.append(lock_timeout)
+        return real(spec, lock_timeout, **kw)
+    monkeypatch.setattr(search.embed, "get", get)
+    hits, why = await search.or_keywords(conn, [col.id], "alpha", 2, lock_timeout=7)
+    assert (len(hits), why, waits) == (2, None, [7])
+    embed_spy.fail = EmbedError("unavailable", "embedder busy")
+    hits, why = await search.or_keywords(conn, [col.id], "alpha", 3, lock_timeout=7)
+    assert (len(hits), why, waits) == (3, "embedder busy", [7, 7])          # the keyword half alone asks no embedder

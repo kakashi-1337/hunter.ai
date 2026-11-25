@@ -84,6 +84,7 @@ class SourcesBlock(BaseModel):
     items: list[Source] = []
     hits: int = 0                # what the search returned; `items` are the ones that fit
     error: str | None = None
+    keywords_only: str | None = None     # why the vector half did not answer, when the keyword index answered alone
 
 
 class AnswerCheckBlock(BaseModel):

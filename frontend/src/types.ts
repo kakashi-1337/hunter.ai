@@ -396,7 +396,8 @@ export interface Source {
   where?: string
 }
 
-export interface SourcesBlock { type: 'sources'; query: string; items: Source[]; hits: number; error: string | null }
+/** `keywords_only`: why the vector half of the search did not answer, when the keyword index answered alone. */
+export interface SourcesBlock { type: 'sources'; query: string; items: Source[]; hits: number; error: string | null; keywords_only?: string | null }
 export interface CheckedClaim { claim: string; verdict: 'unsupported' | 'contradicted'; evidence: string }
 /** What the decision model found when it held the final answer against the run's tool results. */
 export interface AnswerCheckBlock { type: 'answer_check'; claims: CheckedClaim[]; checked: number; supported: number; model: string }
