@@ -63,6 +63,13 @@ class Ran:
     seconds: float = 0.0        # the model calls took together: how fast the model is. The wait for a hot machine is not in it
 
 
+# Tools that read the owner's own material. A chat nobody chose knowledge collections for reads the ones he named for
+# every chat: it is offered kb_search, and its system prompt tells the model to search there before it answers from
+# memory. A bench reads no collection and has no answer for that search, and a model that did as it was told would
+# be marked down for the call by every rule that counts calls. So the tool is not offered, and nothing is said of it.
+OWNERS_OWN = frozenset({"kb_search"})
+
+
 async def request_for(conn, provider_name: str, model: str, case: Case) -> Request:
     """What a new chat of the case's mode on this model sends with its first message."""
     chat = Chat(id="bench", target_id=None, title="", mode=case.mode, provider=provider_name, model=model, options={},
@@ -74,7 +81,8 @@ async def request_for(conn, provider_name: str, model: str, case: Case) -> Reque
     specs: list[ToolSpec] = []
     later = []                  # tools the model reaches through mcp_find and mcp_call, not in its list
     if getattr(registry.get(provider_name), "supports_tools", False):
-        shown, later = await runner.for_model(conn, await runner.offered_tools(conn, chat))
+        offered = [t for t in await runner.offered_tools(conn, chat) if t.name not in OWNERS_OWN]
+        shown, later = await runner.for_model(conn, offered)
         specs = [ToolSpec(t.name, t.description, t.parameters) for t in shown]
     if not specs:
         return Request(build_system(case.mode, target), [], [])

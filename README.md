@@ -309,7 +309,9 @@ Put a model and its fine-tuned version into one bench to see what the training c
 - **A model sees what it sees in a chat**: the system prompt and the tool list of a new
   chat of that mode on that model, your MCP tools included. What a bench leaves out is
   what belongs to one chat or to you: a persona, a goal record, notes from Memory, the
-  knowledge base, skills.
+  knowledge base, skills. That holds for the collections ticked for every chat too:
+  `kb_search` is not offered in a bench, and nothing is looked up before an answer, in
+  the knowledge base or on the web.
 - **No tool is run.** Every call a model makes is answered from the script of its test, so
   a test is the same for every model, and nothing touches a target, your files, or the
   network. A call a chat would refuse before it ran (a tool that is not offered, arguments

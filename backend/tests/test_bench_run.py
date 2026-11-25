@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from hunterai import config, cooling, memory, skills, thermal, upstream
+from hunterai import config, cooling, memory, skills, thermal, upstream, weblookup
 from hunterai.bench import run, score
 from hunterai.bench.cases import Case, CaseTarget, Expect, Scripted
 from hunterai.bench.score import Call
@@ -19,7 +19,7 @@ from hunterai.providers.base import (
     Usage,
     parse_arguments,
 )
-from hunterai.repo import chats, goals, messages, personas, queue, runs, settings
+from hunterai.repo import chats, goals, kb, messages, personas, queue, runs, settings
 from hunterai.tools import native, on_demand, runner
 from hunterai.tools import registry as tools
 from hunterai.types import TextBlock
@@ -419,6 +419,7 @@ async def test_memory_knowledge_skills_goal_persona_and_queue_stay_out_of_the_re
         raise AssertionError("a bench request asked for something a bench leaves out")
     monkeypatch.setattr(memory, "recall", never)
     monkeypatch.setattr(retrieve, "augment", never)
+    monkeypatch.setattr(weblookup, "augment", never)        # the web search a chat can make before an answer
     monkeypatch.setattr(skills, "system_block", never)
     monkeypatch.setattr(goals, "get", never)
     monkeypatch.setattr(personas, "get", never)
@@ -428,6 +429,32 @@ async def test_memory_knowledge_skills_goal_persona_and_queue_stay_out_of_the_re
     model = use(LOOKUP, says("No record."))
     assert (await go(conn)).transcript.finished
     assert "OWNER_MESSAGE" not in model.seen[0]["system"] and "Goal record" not in model.seen[0]["system"]
+
+
+async def test_the_knowledge_named_for_every_chat_is_not_offered_in_a_bench(conn):
+    """A chat nobody chose collections for reads the ones the owner named for every chat: it is offered kb_search and
+    told to search there before it answers from memory. A bench is the same test on every install and reads no
+    collection, so no model is sent to a tool the bench has no answer for."""
+    notes = await kb.create_collection(conn, "notes", "fake", 8)
+    await kb.set_new_chat_collections(conn, [notes.id])
+    chat = await chats.create(conn, None, "pentesting", "scripted", "m", {})
+    assert "kb_search" in [t.name for t in await runner.offered_tools(conn, chat)]      # what a chat is offered now
+    model = use(says("ok"))
+    ran = await go(conn)
+    names = [spec.name for spec in model.seen[0]["tools"]]
+    assert "kb_search" not in names and "kb_search" not in model.seen[0]["system"]
+    assert "knowledge base" not in model.seen[0]["system"]
+    assert ran.tools_offered == len(names) > 20 and "Tools available now: " + ", ".join(names) + "." in model.seen[0]["system"]
+
+
+async def test_a_model_that_searches_the_knowledge_in_a_bench_is_told_as_in_a_chat_without_one(conn):
+    notes = await kb.create_collection(conn, "notes", "fake", 8)
+    await kb.set_new_chat_collections(conn, [notes.id])
+    model = use(calls("kb_search", query="CVE-2026-109618"), says("No record."))
+    ran = await go(conn, case(max_calls=0))
+    assert read(model, 1)[0][0].startswith('Unknown tool "kb_search". Available tools: ') and read(model, 1)[0][1]
+    assert ran.transcript.calls[0].problem.startswith('Unknown tool "kb_search".')
+    assert score.score(case(max_calls=0), ran.transcript).status == "pass"       # a call that did not run is no call
 
 
 async def test_a_model_without_tools_is_called_without_them(conn):
