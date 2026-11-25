@@ -306,6 +306,7 @@ class ChatKb(BaseModel):
     chat_id: str
     collection_ids: list[str] = []
     always_retrieve: bool = False
+    follows: bool = False        # nobody chose collections for this chat: these are the ones named for every chat
 
 
 class Hit(BaseModel):

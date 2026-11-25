@@ -12,6 +12,7 @@ from ..kb import embed
 from ..tools import on_demand
 from ..providers import colibri, ollama, registry
 from . import providers as providers_api
+from ..repo import kb as kb_repo
 from ..repo import settings
 from ..tools import runner
 from .deps import default_provider_model, get_conn
@@ -46,6 +47,7 @@ class SettingsIn(BaseModel):
     notify_min_severity: Literal["info", "low", "medium", "high", "critical"] | None = None
     kb_redact: bool | None = None
     kb_skip_generated: bool | None = None   # leave build output, bundles, source maps and lock files out of a collection
+    kb_lookup: bool | None = None           # search a chat's collections before every answer, unless the chat chose otherwise
     vision_model: str | None = None         # "" or null: the first local model that reads images
     browser_via_caido: bool | None = None   # the browser tools' traffic goes through Caido and is recorded there
     upstream_proxy: str | None = None       # the owner's own HTTP proxy for the agent's web traffic; "" for none
@@ -105,6 +107,7 @@ async def _view(conn) -> dict:
         "decision_engine": bool(await settings.get(conn, "decision_engine", runner.ENGINE_DEFAULT)),
         "kb_redact": bool(await settings.get(conn, "kb_redact", True)),
         "kb_skip_generated": bool(await settings.get(conn, "kb_skip_generated", True)),
+        "kb_lookup": bool(await settings.get(conn, kb_repo.LOOKUP, kb_repo.LOOKUP_DEFAULT)),
         "vision_model": await settings.get(conn, "vision_model") or None,
         "browser_via_caido": await caido.recording(conn),      # what is in effect: on by default where nothing stands against it
         "caido_available": caido.available(),
@@ -240,6 +243,9 @@ async def put_settings(body: SettingsIn, conn=Depends(get_conn)):
     if fields.get("kb_skip_generated") is not None:
         await settings.put(conn, "kb_skip_generated", bool(fields["kb_skip_generated"]))
     fields.pop("kb_skip_generated", None)
+    if fields.get("kb_lookup") is not None:
+        await settings.put(conn, kb_repo.LOOKUP, bool(fields["kb_lookup"]))
+    fields.pop("kb_lookup", None)
     if fields.get("decision_engine") is not None:
         await settings.put(conn, "decision_engine", bool(fields["decision_engine"]))
     fields.pop("decision_engine", None)

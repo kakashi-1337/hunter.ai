@@ -255,3 +255,30 @@ describe('leaving out what nobody wrote when a folder is indexed', () => {
     for (const said of ['.next', 'minified', 'source maps', 'lock files', 'skipped', 'scripts/kb-clean.sh']) expect(text).toContain(said)
   })
 })
+
+describe("searching a chat's collections before every answer", () => {
+  const label = () => [...host.querySelectorAll('label.check')].find((l) => /^Search a chat's collections before every answer/.test(l.textContent ?? ''))
+  const box = () => label()?.querySelector<HTMLInputElement>('input')
+
+  it('is a switch that is on at the start, also for a server from before it knew of it, and is saved when it is turned off', async () => {
+    await open()
+    expect(box()!.checked).toBe(true)           // SETTINGS above has no kb_lookup: that is such a server
+    await act(async () => { box()!.click() })
+    expect(put).toHaveBeenLastCalledWith({ kb_lookup: false })
+  })
+
+  it('shows what the server says, and is saved when it is turned on', async () => {
+    useStore.setState({ settings: { ...SETTINGS, kb_lookup: false } })
+    vi.spyOn(api, 'getSettings').mockResolvedValue({ ...SETTINGS, kb_lookup: false })
+    await open()
+    expect(box()!.checked).toBe(false)
+    await act(async () => { box()!.click() })
+    expect(put).toHaveBeenLastCalledWith({ kb_lookup: true })
+  })
+
+  it('says where a chat decides for itself, what a search costs, and how a chat gets its collections', async () => {
+    await open()
+    const text = label()!.textContent ?? ''
+    for (const said of ['"Always retrieve"', 'one request to the embedding model', '6,000 characters', '"+ Knowledge"', '"every chat"']) expect(text).toContain(said)
+  })
+})

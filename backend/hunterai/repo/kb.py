@@ -287,36 +287,66 @@ async def chunks_by_id(conn, ids: list[str]) -> dict[str, tuple[Chunk, Document]
 
 # ---- which collections a chat reads
 
-async def get_chat_kb(conn, chat_id: str) -> ChatKb:
-    r = await (await conn.execute("select always_retrieve from chat_kb where chat_id=?", (chat_id,))).fetchone()
+async def own_collections(conn, chat_id: str) -> builtins.list[str] | None:
+    """The collections somebody chose for this chat (the owner, or its persona), by name; [] when the owner took
+    them all off; None when nobody chose. A chat nobody chose for reads the ones named for every chat."""
     rows = await (await conn.execute(
         "select l.collection_id from chat_kb_collections l join kb_collections c on c.id = l.collection_id "
         "where l.chat_id=? order by c.name collate nocase", (chat_id,))).fetchall()
-    return ChatKb(chat_id=chat_id, collection_ids=[x["collection_id"] for x in rows],
-                  always_retrieve=bool(r["always_retrieve"]) if r else False)
+    if rows:
+        return [x["collection_id"] for x in rows]
+    r = await (await conn.execute("select emptied from chat_kb where chat_id=?", (chat_id,))).fetchone()
+    return [] if r and r["emptied"] else None
+
+
+async def get_chat_kb(conn, chat_id: str) -> ChatKb:
+    """What a chat reads: its own collections, or the ones the owner named for every chat when nobody chose any for
+    it. A chat that exists follows those as well as a new one: counted on the owner's own install, 48 of 49 chats
+    read no collection because the ones that existed "kept what they had", which was nothing. `always_retrieve` is
+    what is in effect (`looks_up`)."""
+    own = await own_collections(conn, chat_id)
+    return ChatKb(chat_id=chat_id, collection_ids=own if own is not None else await new_chat_collections(conn),
+                  always_retrieve=await looks_up(conn, chat_id), follows=own is None)
+
+
+LOOKUP = "kb_lookup"            # the setting: every chat looks its knowledge up before an answer, unless it chose
+LOOKUP_DEFAULT = True
+
+
+async def looks_up(conn, chat_id: str) -> bool:
+    """Whether this chat's collections are searched before every answer. The owner's choice for the chat when he made
+    one (the switch above the message box); else what holds for every chat (Settings), which is yes unless he said
+    no. A switch that was on before there was such a default is a choice too: it was off until somebody set it."""
+    r = await (await conn.execute("select always_retrieve, retrieve_chosen from chat_kb where chat_id=?", (chat_id,))).fetchone()
+    if r and (r["retrieve_chosen"] or r["always_retrieve"]):
+        return bool(r["always_retrieve"])
+    return bool(await settings.get(conn, LOOKUP, LOOKUP_DEFAULT))
 
 
 async def set_chat_kb(conn, chat_id: str, *, collection_ids: builtins.list[str] | None = None,
                       always_retrieve: bool | None = None) -> ChatKb:
+    """`collection_ids` is a choice for this chat from now on, the empty list included: the chat then reads none.
+    The switch alone is no such choice."""
     await conn.execute("insert or ignore into chat_kb(chat_id) values(?)", (chat_id,))
     if always_retrieve is not None:
-        await conn.execute("update chat_kb set always_retrieve=? where chat_id=?", (int(always_retrieve), chat_id))
+        await conn.execute("update chat_kb set always_retrieve=?, retrieve_chosen=1 where chat_id=?", (int(always_retrieve), chat_id))
     if collection_ids is not None:
         await conn.execute("delete from chat_kb_collections where chat_id=?", (chat_id,))
         await conn.executemany("insert or ignore into chat_kb_collections(chat_id,collection_id) values(?,?)",
                                [(chat_id, c) for c in dict.fromkeys(collection_ids)])
+        await conn.execute("update chat_kb set emptied=? where chat_id=?", (int(not collection_ids), chat_id))
     await conn.commit()
     return await get_chat_kb(conn, chat_id)
 
 
-# ---- which collections every new chat starts with
+# ---- which collections every chat reads that has none of its own
 
-NEW_CHATS = "kb_new_chats"      # the setting: the ids the owner named
+NEW_CHATS = "kb_new_chats"      # the setting: the ids the owner named (its name is from when only new chats got them)
 
 
 async def new_chat_collections(conn) -> builtins.list[str]:
-    """The collections every new chat starts with: those the owner named that still exist, by name as a chat
-    lists its own. None unless he named some: a chat without a collection is the usual one."""
+    """The collections every chat reads that nobody chose collections for: those the owner named that still exist,
+    by name as a chat lists its own. None unless he named some."""
     named = await settings.get(conn, NEW_CHATS, [])
     if not isinstance(named, builtins.list) or not named:
         return []

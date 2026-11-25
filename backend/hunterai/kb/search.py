@@ -128,9 +128,33 @@ def to_match_any(q: str) -> str:
     return " OR ".join(terms[:MAX_TERMS])
 
 
+class QueryVectors:
+    """The vectors of the queries of one run. Two searches for the same words then embed them once: the lookup in a
+    chat's collections and the recall of notes from memory are both made with the user's message, one after the
+    other, and each request to the embedder loads the model and unloads it again behind its answer."""
+
+    def __init__(self):
+        self._known: dict[tuple[str, str], list[float] | EmbedError] = {}
+
+    async def of(self, spec: str, query: str, lock_timeout: float | None) -> list[float]:
+        """What the embedder said for these words holds for the run, a refusal included: the search that comes
+        next does not wait once more for an embedder that was busy a moment ago."""
+        if (spec, query) not in self._known:
+            try:
+                self._known[spec, query] = (await embed.get(spec, lock_timeout).embed([query]))[0]
+            except EmbedError as e:
+                self._known[spec, query] = e
+        said = self._known[spec, query]
+        if isinstance(said, EmbedError):
+            raise said
+        return said
+
+
 async def search(conn, collection_ids: list[str], query: str, limit: int = 8, *,
-                 store: VectorStore | None = None, lock_timeout: float | None = 30, dense: bool = True) -> list[Hit]:
-    """`dense` False: the keyword half and the exact spellings alone. Nothing is embedded and no vector store is asked."""
+                 store: VectorStore | None = None, lock_timeout: float | None = 30, dense: bool = True,
+                 vectors: QueryVectors | None = None) -> list[Hit]:
+    """`dense` False: the keyword half and the exact spellings alone. Nothing is embedded and no vector store is asked.
+    `vectors`: what the run already embedded; a query that is among it is not embedded again."""
     query = (query or "").strip()
     cols = [c for c in [await kb.get_collection(conn, i) for i in dict.fromkeys(collection_ids)] if c]
     if not query or not cols:
@@ -139,11 +163,10 @@ async def search(conn, collection_ids: list[str], query: str, limit: int = 8, *,
     nearness: dict[str, float] = {}
     if dense:
         store = store or get_store()
-        vectors: dict[str, list[float]] = {}
-        for spec in dict.fromkeys(c.embedder for c in cols):
-            vectors[spec] = (await embed.get(spec, lock_timeout).embed([query]))[0]
+        known = vectors or QueryVectors()
+        by_spec = {spec: await known.of(spec, query, lock_timeout) for spec in dict.fromkeys(c.embedder for c in cols)}
         for c in cols:
-            for rank, (chunk_id, near) in enumerate(await store.search(kb.vector_name(c.id), vectors[c.embedder], CANDIDATES), 1):
+            for rank, (chunk_id, near) in enumerate(await store.search(kb.vector_name(c.id), by_spec[c.embedder], CANDIDATES), 1):
                 if chunk_id not in by_vector:
                     by_vector[chunk_id], nearness[chunk_id] = rank, near
     match = to_match_any(query)
@@ -176,14 +199,14 @@ async def search(conn, collection_ids: list[str], query: str, limit: int = 8, *,
 
 
 async def or_keywords(conn, collection_ids: list[str], query: str, limit: int = 8, *,
-                      lock_timeout: float | None = 30) -> tuple[list[Hit], str | None]:
+                      lock_timeout: float | None = 30, vectors: QueryVectors | None = None) -> tuple[list[Hit], str | None]:
     """The search, for a reader that is better off with half an answer than with none: a model in the middle of
     a run, a message that is about to go out. When the vector half cannot be asked (the embedder is busy with a job
     or does not answer, the vector store is down or does not know the collection), the keyword half answers alone.
     Returns the hits, and why the vector half did not answer when it did not. A failure of anything else is raised
     as it is: only the vector half has a stand-in."""
     try:
-        return await search(conn, collection_ids, query, limit, lock_timeout=lock_timeout), None
+        return await search(conn, collection_ids, query, limit, lock_timeout=lock_timeout, vectors=vectors), None
     except EmbedError as e:
         why = e.message
     except VectorError as e:

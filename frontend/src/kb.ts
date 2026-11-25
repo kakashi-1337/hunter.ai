@@ -10,8 +10,13 @@ export const MAX_FILE_BYTES = 50 * 1024 * 1024   // mirror of the backend cap
 export function noKnowledgeLine(attached: number, collections: number): string | null {
   if (attached > 0 || collections === 0) return null
   return 'This chat reads no collection, so the agent cannot search your knowledge base here. Attach one with '
-    + '+ Knowledge; tick "every new chat" beside it to have it in each chat you start.'
+    + '+ Knowledge; tick "every chat" beside it to have it in every chat that has no collections of its own.'
 }
+
+export const EVERY_CHAT_TITLE = 'Every chat reads this collection unless you chose its collections yourself: the chats you '
+  + 'start from now on, and the ones that exist and have none of their own.'
+export const FOLLOWS_TITLE = 'Nobody chose collections for this chat: it reads the ones ticked "every chat". Take one '
+  + 'off here, and what is left is this chat\'s own choice.'
 
 /** The path a file keeps inside the collection: its folder-relative path when it has one. */
 export function relPath(f: { name: string; webkitRelativePath?: string }): string {

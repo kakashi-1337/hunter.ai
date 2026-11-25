@@ -213,22 +213,36 @@ when the collection is created.
   (`docker stop hunterai-qdrant`). `HUNTERAI_VECTOR=memory` keeps vectors in the app
   database instead (exact search, fine for small collections, no container);
   `HUNTERAI_QDRANT_URL` points at another Qdrant.
-- **In a chat.** "+ Knowledge" above the message box attaches collections to the chat. With
-  "Always retrieve" on, every message first searches them (vector and keyword results
-  fused), and the best passages that fit the context go to the model between
-  `<<<KB_REFERENCE ... untrusted>>>` lines with the rule that they are data, not
-  instructions. The answer cites them as [n], and "Sources" under it shows each passage.
-  Without the switch, the agent can still look things up itself with the `kb_search` tool,
-  and its instructions tell it to do so before it answers from memory a question you may
-  have notes on, and to search again with other words when the first passages do not answer.
-- **In every new chat.** A chat reads only the collections attached to it, and a new chat
-  has none. The agent is then not offered `kb_search` at all: the tool could only answer
-  "No knowledge collection is attached to this chat", and a model that was told to check
-  its knowledge called it, failed, and called it again. Instead, a line above the message
-  box says that this chat reads no collection and how to attach one. Tick "every new chat"
-  beside a collection in the same "+ Knowledge" list, and each chat you start from then on
-  has that collection attached, next to those of its persona. Chats that exist keep what they have:
-  attach it to them by hand. Detaching it in one chat changes that chat only.
+- **In a chat.** "+ Knowledge" above the message box says which collections the chat reads.
+  Every message first searches them (vector and keyword results fused), and the best
+  passages that fit the context go to the model between `<<<KB_REFERENCE ... untrusted>>>`
+  lines with the rule that they are data, not instructions. The answer cites them as [n],
+  and "Sources" under it shows each passage. That lookup is on from the start, for every
+  chat that reads a collection. "Always retrieve" above the message box switches it off or
+  on for one chat, and that choice stays; Settings, "Knowledge base", has the switch for
+  every chat that did not choose. With or without it, the agent can look things up itself
+  with the `kb_search` tool: its instructions tell it to do so before it answers from memory
+  a question you may have notes on, and to search again with other words when the first
+  passages do not answer. A model that got the passages of the lookup is told that this
+  search was made already, so that it does not make it once more.
+- **In every chat.** Tick "every chat" beside a collection in the same "+ Knowledge" list,
+  and every chat reads it that has no collections of its own: the ones you start from then
+  on, and the ones that exist. A chat has collections of its own once you attach or detach
+  one there (the box in front of the name, or the ✕ on a collection), or when its persona
+  brought some; from then on it keeps exactly those, whatever is ticked for every chat, and
+  a chat you emptied stays empty. Until then its collections are shown with "every chat"
+  beside the name. (Before, the tick reached new chats only, and a chat that existed "kept
+  what it had", which was nothing: on the install this was written for, 48 of 49 chats read
+  no collection, and every search of the agent was answered "No knowledge collection is
+  attached to this chat".) A chat that reads none is not offered `kb_search` at all: the
+  tool could only fail there. A line above the message box says so, and how to attach one.
+- **What a lookup costs.** One request to the embedding model for each message, and up to
+  6,000 characters more in the request. The recall of notes from memory is made with the
+  same words and uses the same answer of the embedding model, so a chat with both asks it
+  once and not twice; when it could not be asked, it is not waited for a second time in
+  the same run. On a machine whose graphics card the chat model fills, keep the embedding
+  model on the processor (Settings, "Knowledge base"): the card then stays with the chat
+  model.
 - **When half of the search cannot be asked.** The vector half needs the embedding model
   and the vector store; the keyword half needs neither. While an ingest job holds the
   embedder for longer than a search waits, when Ollama does not answer, or when the Qdrant

@@ -145,21 +145,22 @@ async def create_chat(body: ChatIn, conn=Depends(get_conn)):
 
 
 async def _collections_of_every_chat(conn, chat_id: str) -> None:
-    """The collections the owner named for every new chat (the Knowledge control above the message box), beside
-    those of the persona. Without them a new chat has none, and the model's kb_search finds nothing to search."""
+    """The collections the owner named for every chat (the Knowledge control above the message box), beside those a
+    persona gave a new chat. A chat without collections of its own needs nothing written: it reads the named ones
+    for as long as nobody chooses for it (repo/kb.py)."""
     from ..repo import kb
+    own = await kb.own_collections(conn, chat_id)
     named = await kb.new_chat_collections(conn)
-    if named:
-        have = (await kb.get_chat_kb(conn, chat_id)).collection_ids
-        await kb.set_chat_kb(conn, chat_id, collection_ids=[*have, *named])
+    if own and named:
+        await kb.set_chat_kb(conn, chat_id, collection_ids=[*own, *named])
 
 
 async def _persona_collections(conn, chat_id: str, persona) -> None:
-    """A persona's default knowledge collections, for a chat that has none attached yet."""
+    """A persona's default knowledge collections, for a chat that has none of its own yet."""
     if persona is None or not persona.collections:
         return
     from ..repo import kb
-    if (await kb.get_chat_kb(conn, chat_id)).collection_ids:
+    if await kb.own_collections(conn, chat_id):
         return
     known = [c for c in persona.collections if await kb.get_collection(conn, c)]
     if known:

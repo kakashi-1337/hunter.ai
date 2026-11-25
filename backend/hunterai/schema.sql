@@ -246,7 +246,9 @@ create table if not exists kb_job_items (
 
 create table if not exists chat_kb (
   chat_id text primary key references chats(id) on delete cascade,
-  always_retrieve integer not null default 0
+  always_retrieve integer not null default 0,
+  emptied integer not null default 0,         -- the owner took every collection off this chat: it reads none
+  retrieve_chosen integer not null default 0  -- always_retrieve is the owner's choice for this chat, not the default
 );
 create table if not exists chat_kb_collections (
   chat_id text not null references chats(id) on delete cascade,

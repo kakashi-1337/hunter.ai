@@ -81,7 +81,7 @@ describe('a chat that reads no collection', () => {
     expect(line).toContain('reads no collection')
     expect(line).toContain('cannot search your knowledge base')
     expect(line).toContain('+ Knowledge')
-    expect(line).toContain('every new chat')
+    expect(line).toContain('"every chat"')
   })
   it('says nothing when the chat reads one, or when there is none to read yet', () => {
     expect(noKnowledgeLine(1, 2)).toBeNull()

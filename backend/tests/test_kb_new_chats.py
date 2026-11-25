@@ -1,4 +1,5 @@
-"""The collections every new chat starts with, so that kb_search works in a chat nobody attached one to."""
+"""The collections every chat reads unless the owner chose its collections himself, so that the agent can search
+the knowledge base in a chat nobody attached one to: the new ones, and the ones that exist."""
 from hunterai import memory
 from hunterai.repo import kb, settings
 from tests.kb_samples import make_collection
@@ -23,7 +24,7 @@ async def test_every_new_chat_starts_with_the_collections_the_owner_named(client
     assert (await client.put(URL, json={"collection_ids": [rag.id]})).json() == {"collection_ids": [rag.id]}
     assert (await client.get(URL)).json() == {"collection_ids": [rag.id]}
     assert await attached(conn, await new_chat(client)) == [rag.id]
-    assert await attached(conn, before) == []                                   # a chat that exists keeps what it has
+    assert await attached(conn, before) == [rag.id]                             # a chat that exists reads them too
     said = (await client.put(URL, json={"collection_ids": [rag.id, notes.id, rag.id]})).json()
     assert said == {"collection_ids": [notes.id, rag.id]}                       # each once, by name as a chat lists them
     assert await attached(conn, await new_chat(client)) == [notes.id, rag.id]
@@ -67,3 +68,72 @@ async def test_the_memory_collection_is_not_one_for_every_chat(client, conn):
     await memory.add(conn, "acme rotates keys weekly.")
     hidden = await memory.collection(conn)
     assert (await client.put(URL, json={"collection_ids": [hidden.id]})).status_code == 404
+
+
+async def test_a_chat_nobody_chose_collections_for_reads_what_the_owner_names_whenever_he_names_it(client, conn):
+    """What this is for was counted on the owner's own install: 48 of his 49 chats read no collection, none was
+    ticked "every new chat", and every search of the agent was answered "No knowledge collection is attached"."""
+    rag, notes = await make_collection(conn, "RAG"), await make_collection(conn, "Notes")
+    old = await new_chat(client)
+    said = (await client.get(f"/api/kb/chats/{old['id']}")).json()
+    assert (said["collection_ids"], said["follows"]) == ([], True)
+    await client.put(URL, json={"collection_ids": [rag.id]})
+    assert await attached(conn, old) == [rag.id] and (await kb.get_chat_kb(conn, old["id"])).follows
+    await client.put(URL, json={"collection_ids": [rag.id, notes.id]})
+    assert await attached(conn, old) == [notes.id, rag.id]                      # by name, as a chat lists its own
+    await client.put(URL, json={"collection_ids": []})
+    assert await attached(conn, old) == [] and await attached(conn, await new_chat(client)) == []
+
+
+async def test_a_chat_with_collections_of_its_own_keeps_them_whatever_is_named(client, conn):
+    rag, notes = await make_collection(conn, "RAG"), await make_collection(conn, "Notes")
+    chat = await new_chat(client)
+    said = (await client.put(f"/api/kb/chats/{chat['id']}", json={"collection_ids": [notes.id]})).json()
+    assert (said["collection_ids"], said["follows"]) == ([notes.id], False)
+    await client.put(URL, json={"collection_ids": [rag.id]})
+    assert await attached(conn, chat) == [notes.id]
+
+
+async def test_detaching_one_in_a_chat_that_follows_makes_the_rest_its_own(client, conn):
+    rag, notes, late = await make_collection(conn, "RAG"), await make_collection(conn, "Notes"), await make_collection(conn, "Late")
+    await client.put(URL, json={"collection_ids": [rag.id, notes.id]})
+    chat = await new_chat(client)
+    assert await attached(conn, chat) == [notes.id, rag.id]
+    said = (await client.put(f"/api/kb/chats/{chat['id']}", json={"collection_ids": [rag.id]})).json()
+    assert (said["collection_ids"], said["follows"]) == ([rag.id], False)
+    await client.put(URL, json={"collection_ids": [rag.id, notes.id, late.id]})
+    assert await attached(conn, chat) == [rag.id]                               # his choice for this chat stands
+
+
+async def test_the_retrieve_switch_of_a_chat_that_follows_leaves_it_following(client, conn):
+    """The switch and the collections are kept in the same place: setting one must not read as a choice of the other."""
+    rag = await make_collection(conn, "RAG")
+    chat = await new_chat(client)
+    said = (await client.put(f"/api/kb/chats/{chat['id']}", json={"always_retrieve": False})).json()
+    assert (said["collection_ids"], said["follows"], said["always_retrieve"]) == ([], True, False)
+    await client.put(URL, json={"collection_ids": [rag.id]})
+    said = (await client.get(f"/api/kb/chats/{chat['id']}")).json()
+    assert (said["collection_ids"], said["follows"], said["always_retrieve"]) == ([rag.id], True, False)
+
+
+async def test_an_emptied_chat_that_gets_a_collection_again_is_no_longer_marked_emptied(client, conn):
+    rag, notes = await make_collection(conn, "RAG"), await make_collection(conn, "Notes")
+    await client.put(URL, json={"collection_ids": [rag.id]})
+    chat = await new_chat(client)
+    await client.put(f"/api/kb/chats/{chat['id']}", json={"collection_ids": []})
+    assert await attached(conn, chat) == [] and not (await kb.get_chat_kb(conn, chat["id"])).follows
+    await client.put(f"/api/kb/chats/{chat['id']}", json={"collection_ids": [notes.id]})
+    assert await attached(conn, chat) == [notes.id]
+    await client.delete(f"/api/kb/collections/{notes.id}")                      # its only one is deleted, not detached:
+    assert await attached(conn, chat) == [rag.id]                               # nobody emptied it, so it follows again
+
+
+async def test_a_chat_started_while_a_collection_is_named_follows_what_is_named_later(client, conn):
+    """Nothing is copied into a new chat: a copy would be a choice nobody made, and would keep the chat from following."""
+    rag, notes = await make_collection(conn, "RAG"), await make_collection(conn, "Notes")
+    await client.put(URL, json={"collection_ids": [rag.id]})
+    chat = await new_chat(client)
+    said = (await client.get(f"/api/kb/chats/{chat['id']}")).json()
+    assert (said["collection_ids"], said["follows"]) == ([rag.id], True)
+    await client.put(URL, json={"collection_ids": [notes.id]})
+    assert await attached(conn, chat) == [notes.id]

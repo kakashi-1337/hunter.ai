@@ -264,6 +264,8 @@ export interface Settings {
   kb_redact: boolean
   /** Build output, bundles, source maps and lock files are left out of a collection when a folder is indexed. */
   kb_skip_generated: boolean
+  /** A chat's collections are searched before every answer, unless the chat switched that off for itself. */
+  kb_lookup?: boolean
   vision_model: string | null
   browser_via_caido: boolean
   answer_check: boolean
@@ -475,7 +477,9 @@ export interface KbHit {
   where?: string
 }
 
-export interface ChatKb { chat_id: string; collection_ids: string[]; always_retrieve: boolean }
+/** `collection_ids` and `always_retrieve` are what is in effect. `follows`: nobody chose collections for this chat, so
+ * it reads the ones named for every chat. */
+export interface ChatKb { chat_id: string; collection_ids: string[]; always_retrieve: boolean; follows?: boolean }
 export interface KbHealth { worker_alive: boolean; vector_backend: string }
 export interface UploadResult { accepted: number; rejected: { path: string; reason: string }[]; files: number; bytes: number }
 

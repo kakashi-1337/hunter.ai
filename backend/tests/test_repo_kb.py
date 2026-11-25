@@ -121,8 +121,10 @@ async def test_counts_shape(conn):
 async def test_chat_kb_defaults_set_and_cascade(conn):
     c = await coll(conn); chat = await chats.create(conn, None, "pentesting", "mock", "m", {})
     got = await kb.get_chat_kb(conn, chat.id)
-    assert (got.collection_ids, got.always_retrieve) == ([], False)
+    assert (got.collection_ids, got.always_retrieve, got.follows) == ([], True, True)      # what holds for every chat
     await kb.set_chat_kb(conn, chat.id, collection_ids=[c.id])
+    got = await kb.set_chat_kb(conn, chat.id, always_retrieve=False)
+    assert (got.collection_ids, got.always_retrieve, got.follows) == ([c.id], False, False)
     got = await kb.set_chat_kb(conn, chat.id, always_retrieve=True)
     assert (got.collection_ids, got.always_retrieve) == ([c.id], True)
     await chats.delete(conn, chat.id)

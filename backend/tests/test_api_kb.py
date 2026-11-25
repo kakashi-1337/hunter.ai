@@ -144,7 +144,8 @@ async def test_search_endpoint(client, conn, tmp_path):
 async def test_chat_attach_and_toggle(client):
     cid = (await new_col(client))["id"]; chat = await new_chat(client)
     url = f"/api/kb/chats/{chat['id']}"
-    assert (await client.get(url)).json() == {"chat_id": chat["id"], "collection_ids": [], "always_retrieve": False}
+    # Nobody chose anything for it yet: it follows what holds for every chat, which is to look its knowledge up.
+    assert (await client.get(url)).json() == {"chat_id": chat["id"], "collection_ids": [], "always_retrieve": True, "follows": True}
     assert (await client.put(url, json={"collection_ids": [cid], "always_retrieve": True})).json()["collection_ids"] == [cid]
     got = (await client.put(url, json={"always_retrieve": False})).json()
     assert (got["collection_ids"], got["always_retrieve"]) == ([cid], False)
