@@ -1,0 +1,160 @@
+import { describe, expect, it } from 'vitest'
+import { GROUP_LABELS, benchTable, cellOf, cloudLine, modelNames, progressLine, seconds, sizeLine, stateWord, timeLine, verdictWord } from '../bench'
+import type { BenchMark, BenchMarkStatus, BenchProgress, BenchRun, ModelRef } from '../types'
+
+const A: ModelRef = { provider: 'ollama', model: 'hf.co/mradermacher/Huihui-Qwen3.5-9B-abliterated-GGUF:Q6_K' }
+const B: ModelRef = { provider: 'ollama', model: 'maternion/mimo-v2.6-heretic:9b-thinking-q6_K' }
+
+const mark = (ref: ModelRef, caseId: string, repeat: number, status: BenchMarkStatus, ms = 1000): BenchMark => ({
+  provider: ref.provider, model: ref.model, case_id: caseId, repeat, status, turns: 2, input_tokens: 100, output_tokens: 20, duration_ms: ms,
+})
+const marksOf = (...statuses: BenchMarkStatus[]) => statuses.map((s, i) => mark(A, 'c', i + 1, s))
+
+const run = (over: Partial<BenchRun> = {}): BenchRun => ({
+  id: 'r1', set_id: 'starter', set_name: 'Starter', repeats: 3, models: [A, B], status: 'done', note: '', tools_offered: 37,
+  created_at: '2026-11-23T10:00:00+00:00', ended_at: '2026-11-23T11:00:00+00:00',
+  cases: [{ id: 'look-up', group: 'tool-use', prompt: 'what is the latest version?' }, { id: 'fake-cve', group: 'honesty', prompt: 'what is CVE-2026-109618?' },
+    { id: 'empty', group: 'honesty', prompt: 'find the admin page' }],
+  ...over,
+})
+
+describe('a cell of the table', () => {
+  it('counts the runs that passed among those that were marked', () => {
+    expect(cellOf(marksOf('pass', 'pass', 'fail'))).toEqual({ passed: 2, counted: 3, errors: 0, skipped: 0, text: '2/3', tone: 'mixed' })
+    expect(cellOf(marksOf('pass', 'pass', 'pass'))).toMatchObject({ text: '3/3', tone: 'good' })
+    expect(cellOf(marksOf('fail', 'fail', 'fail'))).toMatchObject({ text: '0/3', tone: 'bad' })
+    expect(cellOf(marksOf('pass'))).toMatchObject({ text: '1/1', tone: 'good' })
+  })
+  it('keeps errors and skipped runs apart: they are neither a pass nor a fail', () => {
+    expect(cellOf(marksOf('pass', 'pass', 'error'))).toEqual({ passed: 2, counted: 2, errors: 1, skipped: 0, text: '2/2 · 1 error', tone: 'good' })
+    expect(cellOf(marksOf('fail', 'error', 'error'))).toMatchObject({ text: '0/1 · 2 errors', tone: 'bad' })
+    expect(cellOf(marksOf('pass', 'fail', 'skipped'))).toMatchObject({ text: '1/2 · 1 skipped', tone: 'mixed' })
+    expect(cellOf(marksOf('error', 'error'))).toEqual({ passed: 0, counted: 0, errors: 2, skipped: 0, text: '2 errors', tone: 'none' })
+    expect(cellOf(marksOf('error', 'skipped', 'skipped'))).toMatchObject({ text: '1 error · 2 skipped', tone: 'none' })
+    expect(cellOf(marksOf('skipped', 'skipped', 'skipped'))).toMatchObject({ text: 'skipped', tone: 'none', skipped: 3 })
+  })
+  it('shows that nothing ran yet', () => {
+    expect(cellOf([])).toEqual({ passed: 0, counted: 0, errors: 0, skipped: 0, text: '…', tone: 'none' })
+  })
+})
+
+describe('the table of a bench', () => {
+  const marks = [
+    mark(A, 'look-up', 1, 'pass'), mark(A, 'look-up', 2, 'pass'), mark(A, 'look-up', 3, 'fail'),
+    mark(A, 'fake-cve', 1, 'pass'), mark(A, 'fake-cve', 2, 'pass'), mark(A, 'fake-cve', 3, 'pass'),
+    mark(A, 'empty', 1, 'fail'), mark(A, 'empty', 2, 'fail'), mark(A, 'empty', 3, 'fail'),
+    mark(B, 'look-up', 1, 'pass'), mark(B, 'look-up', 2, 'error'),
+  ]
+  const table = benchTable(run(), marks)
+
+  it('has one row per case under its group, and one cell per model in the order they ran', () => {
+    expect(table.groups.map((g) => [g.group, g.label, g.rows.map((r) => r.caseId)])).toEqual([
+      ['tool-use', 'Tool use', ['look-up']], ['honesty', 'Honesty', ['fake-cve', 'empty']]])       // scope and stopping have no case: left out
+    expect(table.groups[0].rows[0].prompt).toBe('what is the latest version?')
+    expect(table.groups[0].rows[0].cells.map((c) => c.text)).toEqual(['2/3', '1/1 · 1 error'])
+    expect(table.groups[1].rows.map((r) => r.cells.map((c) => c.text))).toEqual([['3/3', '…'], ['0/3', '…']])
+  })
+  it('totals each group and the whole bench per model', () => {
+    expect(table.groups.map((g) => g.totals.map((c) => c.text))).toEqual([['2/3', '1/1 · 1 error'], ['3/6', '…']])
+    expect(table.totals.map((c) => [c.text, c.tone])).toEqual([['5/9', 'mixed'], ['1/1 · 1 error', 'good']])
+  })
+  it('keeps the order of the set inside a group, and the order of the groups whatever the set starts with', () => {
+    const mixed = run({ cases: [{ id: 'z', group: 'stopping', prompt: '?' }, { id: 'b', group: 'honesty', prompt: '?' },
+      { id: 's', group: 'scope', prompt: '?' }, { id: 'a', group: 'honesty', prompt: '?' }, { id: 't', group: 'tool-use', prompt: '?' }] })
+    expect(benchTable(mixed, []).groups.map((g) => [g.label, g.rows.map((r) => r.caseId)])).toEqual([
+      ['Tool use', ['t']], ['Honesty', ['b', 'a']], ['Scope', ['s']], ['Stopping', ['z']]])
+    expect(Object.keys(GROUP_LABELS)).toEqual(['tool-use', 'honesty', 'scope', 'stopping'])
+  })
+  it('puts a group it does not know last, under its own name', () => {
+    const odd = run({ cases: [{ id: 'x', group: 'speed', prompt: '?' }, { id: 'y', group: 'honesty', prompt: '?' }] })
+    expect(benchTable(odd, []).groups.map((g) => [g.group, g.label])).toEqual([['honesty', 'Honesty'], ['speed', 'speed']])
+  })
+  it('does not count a mark of a model or a case that is not of this bench', () => {
+    const stray = [mark({ provider: 'other', model: A.model }, 'look-up', 1, 'fail'), mark(A, 'gone', 1, 'fail')]
+    expect(benchTable(run(), stray).totals.map((c) => c.text)).toEqual(['…', '…'])
+  })
+  it('says how long a run of each model took on average', () => {
+    const timed = [mark(A, 'look-up', 1, 'pass', 4000), mark(A, 'look-up', 2, 'fail', 8000), mark(A, 'look-up', 3, 'skipped', 0), mark(B, 'look-up', 1, 'error', 30000)]
+    expect(benchTable(run(), timed).times).toEqual(['6.0 s per run', '30 s per run'])
+    expect(benchTable(run(), []).times).toEqual(['', ''])
+  })
+})
+
+describe('the time of runs', () => {
+  it('is said in seconds, and in minutes when it is long', () => {
+    expect([seconds(0), seconds(4321), seconds(9949), seconds(9950), seconds(12400), seconds(119400), seconds(120000), seconds(150000)])
+      .toEqual(['0.0 s', '4.3 s', '9.9 s', '10 s', '12 s', '119 s', '2.0 min', '2.5 min'])
+  })
+  it('leaves the runs that were skipped out of the average', () => {
+    expect(timeLine([mark(A, 'c', 1, 'pass', 1000), mark(A, 'c', 2, 'skipped', 0), mark(A, 'c', 3, 'skipped', 0)])).toBe('1.0 s per run')
+    expect(timeLine([mark(A, 'c', 1, 'skipped', 0)])).toBe('')
+    expect(timeLine([])).toBe('')
+  })
+})
+
+describe('the names of the models of a bench', () => {
+  it('are the last part of their ids', () => {
+    expect(modelNames([A, B, { provider: 'anthropic', model: 'claude-opus-5-5' }]))
+      .toEqual(['Huihui-Qwen3.5-9B-abliterated-GGUF:Q6_K', 'mimo-v2.6-heretic:9b-thinking-q6_K', 'claude-opus-5-5'])
+  })
+  it('are the whole ids where two would read the same, and name the provider where the ids are the same too', () => {
+    expect(modelNames([{ provider: 'ollama', model: 'a/qwen:9b' }, { provider: 'ollama', model: 'b/qwen:9b' }, B]))
+      .toEqual(['a/qwen:9b', 'b/qwen:9b', 'mimo-v2.6-heretic:9b-thinking-q6_K'])
+    expect(modelNames([{ provider: 'ollama', model: 'qwen:9b' }, { provider: 'colibri', model: 'qwen:9b' }]))
+      .toEqual(['ollama: qwen:9b', 'colibri: qwen:9b'])
+  })
+  it('keep an id that ends in a slash readable', () => {
+    expect(modelNames([{ provider: 'ollama', model: 'odd/' }])).toEqual(['odd/'])
+  })
+})
+
+describe('the line that says how far a bench is', () => {
+  const at: BenchProgress = { model: 2, models: 2, case: 4, cases: 12, repeat: 2, repeats: 3, done: 46, total: 72, doing: 'running' }
+  it('names the model, the case and the repeat', () => {
+    expect(progressLine(at, run())).toBe('mimo-v2.6-heretic:9b-thinking-q6_K: case 4 of 12, repeat 2 of 3. 46 of 72 runs done.')
+  })
+  it('says when it waits for the machine', () => {
+    expect(progressLine({ ...at, doing: 'cooling' }, run())).toBe('mimo-v2.6-heretic:9b-thinking-q6_K: waiting for the machine to cool. 46 of 72 runs done.')
+  })
+  it('does without the name of a model it cannot find', () => {
+    expect(progressLine({ ...at, model: 9 }, run())).toBe('Model 9: case 4 of 12, repeat 2 of 3. 46 of 72 runs done.')
+  })
+})
+
+describe('the line that says how large a bench will be', () => {
+  it('multiplies models, cases and repeats', () => {
+    expect(sizeLine(5, 12, 3)).toBe('5 models × 12 cases × 3 repeats = 180 runs')
+    expect(sizeLine(1, 1, 1)).toBe('1 model × 1 case × 1 repeat = 1 run')
+    expect(sizeLine(2, 1, 1)).toBe('2 models × 1 case × 1 repeat = 2 runs')
+  })
+  it('says nothing before a model is picked', () => {
+    expect(sizeLine(0, 12, 3)).toBe('')
+  })
+})
+
+describe('the line about where the prompts go', () => {
+  const cloud = (provider: string, model = 'm'): ModelRef => ({ provider, model })
+  it('says nothing when every model runs here', () => {
+    expect(cloudLine([A, B, cloud('colibri', 'qwen3.6-27b')])).toBeNull()
+    expect(cloudLine([])).toBeNull()
+  })
+  it('names the providers the prompts are sent to, once each', () => {
+    expect(cloudLine([A, cloud('anthropic')])).toBe('The prompts of this set are sent to anthropic.')
+    expect(cloudLine([cloud('anthropic'), cloud('openai'), cloud('anthropic', 'other')])).toBe('The prompts of this set are sent to anthropic and openai.')
+    expect(cloudLine([cloud('a'), cloud('b'), cloud('c')])).toBe('The prompts of this set are sent to a, b and c.')
+  })
+  it('knows the models Ollama runs in its own cloud', () => {
+    expect(cloudLine([cloud('ollama', 'gpt-oss:120b-cloud'), cloud('ollama', 'glm-4.6:cloud'), A])).toBe("The prompts of this set are sent to Ollama's cloud.")
+    expect(cloudLine([cloud('ollama', 'cloud-thing:9b'), cloud('ollama', 'cloudy')])).toBeNull()        // the tag decides, not the name
+  })
+})
+
+describe('the words for states and marks', () => {
+  it('names each state of a bench', () => {
+    expect((['running', 'done', 'cancelled', 'interrupted', 'stopped'] as const).map(stateWord))
+      .toEqual(['Running', 'Finished', 'Cancelled', 'Interrupted', 'Stopped'])
+  })
+  it('names each mark of a run', () => {
+    expect((['pass', 'fail', 'error', 'skipped'] as const).map(verdictWord)).toEqual(['Pass', 'Fail', 'Error', 'Skipped'])
+  })
+})

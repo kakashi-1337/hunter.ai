@@ -341,3 +341,38 @@ create table if not exists chat_summaries (
   created_at text not null,
   primary key (chat_id, upto_message_id)
 );
+
+-- The bench: the same scripted tests for every model (hunterai/bench/). A row of bench_runs is one start of it,
+-- a row of bench_results one run of one case on one model.
+create table if not exists bench_runs (
+  id text primary key,
+  set_id text not null,
+  set_name text not null,
+  repeats integer not null,
+  models_json text not null,           -- [{"provider", "model"}], in the order they run
+  cases_json text not null,            -- [{"id", "group", "prompt"}]: the set as it was read at the start
+  status text not null,                -- running | done | cancelled | interrupted | stopped
+  note text not null default '',       -- why it ended early, in words for the owner
+  tools_offered integer not null default 0,
+  created_at text not null,
+  ended_at text
+);
+create table if not exists bench_results (
+  id text primary key,
+  run_id text not null references bench_runs(id) on delete cascade,
+  provider text not null,
+  model text not null,
+  case_id text not null,
+  repeat integer not null,             -- from 1
+  status text not null,                -- pass | fail | error | skipped
+  reasons_json text not null,          -- one line per rule that did not hold
+  calls_json text not null,            -- [{"name", "arguments", "problem"}]: the first calls, their arguments cut
+  calls_made integer not null default 0,
+  answer text not null,
+  turns integer not null,
+  input_tokens integer not null,
+  output_tokens integer not null,
+  duration_ms integer not null,
+  created_at text not null
+);
+create index if not exists bench_results_run on bench_results(run_id);

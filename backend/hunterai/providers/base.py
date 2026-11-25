@@ -1,6 +1,7 @@
 """The contract every model provider implements, plus the pieces they share."""
 from __future__ import annotations
 
+import dataclasses
 import json
 import re
 from collections.abc import Collection
@@ -10,7 +11,14 @@ from typing import AsyncIterator, Literal, Protocol, Union
 from pydantic import BaseModel, ConfigDict
 
 from ..db import new_id
-from ..types import Block, FileBlock, ToolResultBlock
+from ..types import (
+    Block,
+    FileBlock,
+    TextBlock,
+    ThinkingBlock,
+    ToolCallBlock,
+    ToolResultBlock,
+)
 
 
 @dataclass(frozen=True)
@@ -199,6 +207,49 @@ def safe_call_id(raw: str | None, taken: Collection[str] = ()) -> str:
     if isinstance(raw, str) and re.fullmatch(ID_RE, raw) and raw not in taken:
         return raw
     return call_id()
+
+
+@dataclass
+class Reply:
+    """What one model call sent besides its blocks. `collect` fills it as the stream goes, so what came
+    before a failure is still in it."""
+    calls: list[ToolCall] = field(default_factory=list)
+    usage: Usage = Usage(0, 0)
+    stop: str | None = None
+
+
+async def collect(stream: AsyncIterator[Event], blocks: list[Block], taken: set[str], reply: Reply | None = None) -> Reply:
+    """Reads one model call into `blocks`: text and thinking in pieces become one block each, a seal closes the
+    thinking before it, and every tool call gets an id that is not in `taken` (and is added to it). For a loop
+    that does not show a call while it comes: the subagent's, and the bench's."""
+    reply = Reply() if reply is None else reply
+    async for ev in stream:
+        last = blocks[-1] if blocks else None
+        if isinstance(ev, TextDelta):
+            if last is not None and last.type == "text":
+                last.text += ev.text
+            else:
+                blocks.append(TextBlock(text=ev.text))
+        elif isinstance(ev, ThinkingDelta):
+            if last is not None and last.type == "thinking" and last.opaque is None:
+                last.text += ev.text
+            else:
+                blocks.append(ThinkingBlock(text=ev.text))
+        elif isinstance(ev, ThinkingSeal):
+            if last is not None and last.type == "thinking" and last.opaque is None:
+                last.opaque = ev.opaque
+            else:
+                blocks.append(ThinkingBlock(text="", opaque=ev.opaque))
+        elif isinstance(ev, ToolCall):
+            tc = dataclasses.replace(ev, id=safe_call_id(ev.id, taken))
+            taken.add(tc.id)
+            reply.calls.append(tc)
+            blocks.append(ToolCallBlock(id=tc.id, name=tc.name, arguments=tc.arguments, opaque=tc.opaque))
+        elif isinstance(ev, Usage):
+            reply.usage = ev
+        elif isinstance(ev, Stop):
+            reply.stop = ev.reason
+    return reply
 
 
 NO_RESULT = "[no result: the run stopped before this tool finished]"

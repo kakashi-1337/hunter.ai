@@ -711,3 +711,102 @@ export interface ActivitySummary {
 
 /** A message the owner sent while a run was in progress: it waits for the agent's next step. */
 export interface QueuedMessage { id: string; chat_id: string; text: string; created_at: string }
+
+// ---- the bench: the same scripted tests for every model
+
+export interface ModelRef {
+  provider: string
+  model: string
+}
+
+export interface BenchCaseBrief {
+  id: string
+  group: string
+  /** The start of the prompt: a long one is cut. */
+  prompt: string
+}
+
+export interface BenchSet {
+  id: string
+  name: string
+  builtin: boolean
+  cases: BenchCaseBrief[]
+  /** Why the file cannot be used; it has no cases then. */
+  problem: string | null
+}
+
+export type BenchStatus = 'running' | 'done' | 'cancelled' | 'interrupted' | 'stopped'
+
+export interface BenchRun {
+  id: string
+  set_id: string
+  set_name: string
+  repeats: number
+  models: ModelRef[]
+  /** The cases of the set as they were read when the bench started. */
+  cases: BenchCaseBrief[]
+  status: BenchStatus
+  /** What the bench has to say: tools its set names that are not there, and why it ended early. */
+  note: string
+  tools_offered: number
+  created_at: string
+  ended_at: string | null
+}
+
+export type BenchMarkStatus = 'pass' | 'fail' | 'error' | 'skipped'
+
+/** One run of a case on a model, as the table needs it. */
+export interface BenchMark {
+  provider: string
+  model: string
+  case_id: string
+  repeat: number
+  status: BenchMarkStatus
+  turns: number
+  input_tokens: number
+  output_tokens: number
+  duration_ms: number
+}
+
+export interface BenchCall {
+  name: string
+  /** The start of the arguments, as JSON text. */
+  arguments: string
+  /** What the model was told when a chat would not have run the call. */
+  problem: string | null
+}
+
+/** One run with what it left behind. */
+export interface BenchResult extends BenchMark {
+  id: string
+  run_id: string
+  /** One line per rule that did not hold. */
+  reasons: string[]
+  calls: BenchCall[]
+  /** How many calls the model made; `calls` holds the first of them. */
+  calls_made: number
+  answer: string
+  created_at: string
+}
+
+/** Where a running bench is. Positions count from 1. */
+export interface BenchProgress {
+  model: number
+  models: number
+  case: number
+  cases: number
+  repeat: number
+  repeats: number
+  done: number
+  total: number
+  doing: 'running' | 'cooling'
+}
+
+export interface BenchListed {
+  run: BenchRun
+  progress: BenchProgress | null
+}
+
+export interface BenchDetail extends BenchListed {
+  marks: BenchMark[]
+}

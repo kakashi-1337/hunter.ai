@@ -10,8 +10,10 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 
 from .. import config, db, engine, mcp_manager, problems, procs, stale
+from ..bench import runner as bench_runner
 from ..tools import native
 from . import chats, findings, processes, providers, runs, search, settings, system, targets, tools, uploads
+from . import bench as bench_api
 from . import kb as kb_api
 from . import mcp_admin
 from . import personas as personas_api
@@ -36,6 +38,7 @@ async def lifespan(app: FastAPI):
         from .. import upstream
         await upstream.remember(conn)       # proxy passwords are scrubbed from tool output from the first call on
         await engine.recover(conn)
+        await bench_runner.recover(conn)
         await procs.recover(conn)
     finally:
         await conn.close()
@@ -54,7 +57,10 @@ async def lifespan(app: FastAPI):
         # Each step runs even when the one before it raised or was cancelled, so process
         # groups and MCP children are always ended.
         try:
-            await engine.shutdown()
+            try:
+                await bench_runner.shutdown()   # before the runs of chats: a bench is the longer one
+            finally:
+                await engine.shutdown()
         finally:
             try:
                 await procs.shutdown()
@@ -107,7 +113,7 @@ def create_app() -> FastAPI:
                             status_code=500)
 
     for module in (targets, chats, runs, uploads, search, settings, providers, tools,
-                   processes, findings, kb_api, mcp_admin, personas_api, skills_api, memory_api, system):
+                   processes, findings, kb_api, mcp_admin, personas_api, skills_api, memory_api, bench_api, system):
         app.include_router(module.router)
 
     @app.get("/{path:path}", include_in_schema=False)
