@@ -58,6 +58,7 @@ class _Attempt:
         self.calls: list[ToolCall] = []   # tool calls of the model call in progress
         self.taken: set[str] = set()      # tool-call ids already used in this conversation
         self.sources = None               # what the knowledge base gave this run, if anything
+        self.web = None                   # what a web search before the answer gave it, if one was made
         self.check = None                 # the answer check of this run, once it is made
         self.callable: list[str] = []     # every tool this run may call: the listed ones and the ones loaded on demand
         self.stop: str | None = None      # why the last model call ended, in the provider's word
@@ -77,10 +78,10 @@ class _Attempt:
 
     def blocks(self) -> list[Block]:
         """What is stored: the run's blocks, then the word about how the answer ended and about the open items of
-        the goal record, what the run changed in the work folder, the knowledge-base sources and the answer check,
-        when there are any."""
+        the goal record, what the run changed in the work folder, the knowledge-base sources, the results of the
+        web search and the answer check, when there are any."""
         return [*self.items, *(b for b in (self.grew, self.stuck, self.notice, self.goal, self.changes, self.sources,
-                                           self.check) if b is not None)]
+                                           self.web, self.check) if b is not None)]
 
     def wire_blocks(self) -> list[Block]:
         """What goes back to the model: never a block that is only the owner's to read."""
@@ -689,6 +690,11 @@ async def _execute(conn_factory, run_id: str, chat_id: str, user_message_id: str
         # Notes from memory are searched with the user's own words, not with the reference block.
         system_out, wire_out = await memory.recall(conn, run_id, chat, system_out, wire_out,
                                                    query=flatten_text(wire[-1]) if wire else "", vectors=embedded)
+        # The second lookup, when the owner switched it on: what the web has on the user's own words.
+        from . import weblookup
+        asked = "\n".join(b.text for b in wire[-1].blocks if b.type == "text" and b.text) if wire else ""
+        system_out, wire_out, acc.web = await weblookup.augment(conn, run_id, chat, system_out, wire_out,
+                                                                query_from=asked, can_fetch="web_fetch" in acc.callable)
         provider, model, fallback_from = await _generate(conn, run_id, mid, chat, system_out,
                                                          wire_out, acc, specs)
         await _tool_loop(conn, run_id, mid, chat, provider, model, system_out, wire_out, acc, specs)

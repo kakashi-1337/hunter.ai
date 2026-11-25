@@ -282,3 +282,30 @@ describe("searching a chat's collections before every answer", () => {
     for (const said of ['"Always retrieve"', 'one request to the embedding model', '6,000 characters', '"+ Knowledge"', '"every chat"']) expect(text).toContain(said)
   })
 })
+
+describe('asking the web before every answer', () => {
+  const label = () => [...host.querySelectorAll('label.check')].find((l) => /^Ask the web before every answer/.test(l.textContent ?? ''))
+  const box = () => label()?.querySelector<HTMLInputElement>('input')
+
+  it('is a switch that is off at the start, also for a server from before it knew of it, and is saved when it is turned on', async () => {
+    await open()
+    expect(box()!.checked).toBe(false)
+    await act(async () => { box()!.click() })
+    expect(put).toHaveBeenLastCalledWith({ web_lookup: true })
+  })
+
+  it('shows what the server says, and is saved when it is turned off', async () => {
+    useStore.setState({ settings: { ...SETTINGS, web_lookup: true } })
+    vi.spyOn(api, 'getSettings').mockResolvedValue({ ...SETTINGS, web_lookup: true })
+    await open()
+    expect(box()!.checked).toBe(true)
+    await act(async () => { box()!.click() })
+    expect(put).toHaveBeenLastCalledWith({ web_lookup: false })
+  })
+
+  it('says where the words go, what is left out of them, and where the search is shown', async () => {
+    await open()
+    const text = label()!.textContent ?? ''
+    for (const said of ['your own SearXNG', 'public search engines', 'host names', 'mail addresses', 'a password', 'shown under the answer', 'web_search is denied']) expect(text).toContain(said)
+  })
+})

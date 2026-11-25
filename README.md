@@ -1623,6 +1623,44 @@ another address than `127.0.0.1:8888`, or none) or that was made from another ve
 the image is made again: it holds nothing, its settings are in that folder. One that does
 not stay up says why, with its last lines. `scripts/check-tools.sh` lists what the tools need.
 
+**Before every answer.** Settings, "Knowledge base", has the switch "Ask the web before
+every answer". It is off until you switch it on. With it, HunterAI makes one search for
+each message you send, before the model is called, and gives the model the first five
+results that fit (a title, an address and an excerpt of 300 characters each) between
+`<<<WEB_RESULTS ... untrusted>>>` lines, with the rule that they are data and not
+instructions, that an excerpt is not the page, and that it opens a page with `web_fetch`
+before it relies on one. This is the second of two lookups; the knowledge base is the first
+(see [Knowledge base](#knowledge-base)). A model knows the world as it was when it was
+trained, and your notes as they were when you wrote them: the results are there so that it
+sees whether something newer exists. "Web results" under the answer lists them with the
+words that were searched for, and the trajectory has the step.
+
+- **What is searched for.** Words of your message, read from its first 600 characters
+  outside of fenced code: at most twelve, without the small words of English and Tagalog
+  that carry no question. A message with fewer than two such words ("ok", "ituloy mo") is
+  not searched for.
+- **What never goes out.** The words go to your own SearXNG and from there to public
+  search engines, so what names your target or a person is left out of them: web
+  addresses, host names (also those of labs and private networks: `.internal`, `.lan`,
+  `.htb`), IP addresses, mail addresses, paths of files on your machine (their folders
+  are named after your targets as often as not) and long numbers such as a telephone
+  number. So is anything shaped like a secret: a key
+  HunterAI keeps for you whatever its shape, a token, a hash, a long string of letters and
+  digits, and a password where the message says that it is one (`password=...`, a database
+  address with a login). Names of programs that look like host names stay (`next.js`,
+  `socket.io`, `setup.py`), and so do version numbers.
+- **Where it is not done.** In a chat in which `web_search` is denied, by the chat's own
+  permissions or by the defaults: what you denied the model is not done in your name
+  either.
+- **What it costs.** The time of one search, 8 seconds at most; a search that fails or
+  does not answer in that time is given up for that message, said under the answer, and
+  not tried again for a minute. Up to 2,400 characters more in the request, and less in a
+  small local window.
+
+The search is as good as the words it is made with, and those are picked without a model:
+a message that points at something said earlier ("and the second one?") is searched for by
+its own words alone. The model can still search by itself with `web_search`.
+
 ### Variables
 
 `HUNTERAI_MCP=off` starts no MCP server. The file chunker MCP server ships with HunterAI

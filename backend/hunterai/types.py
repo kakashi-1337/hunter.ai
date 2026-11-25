@@ -87,6 +87,24 @@ class SourcesBlock(BaseModel):
     keywords_only: str | None = None     # why the vector half did not answer, when the keyword index answered alone
 
 
+class WebSource(BaseModel):
+    n: int
+    title: str
+    url: str
+    snippet: str = ""
+    engine: str = ""
+
+
+class WebSourcesBlock(BaseModel):
+    """What a web search made before the answer gave it (weblookup.py), with the words that were searched for.
+    Shown under the answer; never sent back to a model."""
+    type: Literal["web_sources"] = "web_sources"
+    query: str
+    items: list[WebSource] = []
+    results: int = 0             # what the search returned; `items` are the ones that fit
+    error: str | None = None
+
+
 class AnswerCheckBlock(BaseModel):
     """What the decision model found when it held the final answer against the run's tool
     results: the statements that are not backed. Shown under the answer; never sent to a model."""
@@ -128,11 +146,12 @@ class ChangesBlock(BaseModel):
     left: list[str] = []         # after an undo: files the owner changed since the run, left as they are
 
 
-NOT_FOR_MODELS = ("sources", "answer_check", "owner_note", "notice", "changes")     # block types that are the owner's to read only
+# Block types that are the owner's to read only.
+NOT_FOR_MODELS = ("sources", "web_sources", "answer_check", "owner_note", "notice", "changes")
 
 Block = Annotated[
-    Union[TextBlock, ThinkingBlock, ImageBlock, FileBlock, ToolCallBlock, ToolResultBlock, SourcesBlock, AnswerCheckBlock,
-          OwnerNoteBlock, NoticeBlock, ChangesBlock],
+    Union[TextBlock, ThinkingBlock, ImageBlock, FileBlock, ToolCallBlock, ToolResultBlock, SourcesBlock, WebSourcesBlock,
+          AnswerCheckBlock, OwnerNoteBlock, NoticeBlock, ChangesBlock],
     Field(discriminator="type"),
 ]
 BlockList = TypeAdapter(list[Block])

@@ -7,7 +7,7 @@ from typing import Literal
 
 from pydantic import BaseModel, StrictInt, ValidationError
 
-from .. import answer_check, caido, config, engine, envfile, notify, permissions, problems, stale, subagents
+from .. import answer_check, caido, config, engine, envfile, notify, permissions, problems, stale, subagents, weblookup
 from ..kb import embed
 from ..tools import on_demand
 from ..providers import colibri, ollama, registry
@@ -48,6 +48,7 @@ class SettingsIn(BaseModel):
     kb_redact: bool | None = None
     kb_skip_generated: bool | None = None   # leave build output, bundles, source maps and lock files out of a collection
     kb_lookup: bool | None = None           # search a chat's collections before every answer, unless the chat chose otherwise
+    web_lookup: bool | None = None          # ask the web before every answer, with words of the message
     vision_model: str | None = None         # "" or null: the first local model that reads images
     browser_via_caido: bool | None = None   # the browser tools' traffic goes through Caido and is recorded there
     upstream_proxy: str | None = None       # the owner's own HTTP proxy for the agent's web traffic; "" for none
@@ -108,6 +109,7 @@ async def _view(conn) -> dict:
         "kb_redact": bool(await settings.get(conn, "kb_redact", True)),
         "kb_skip_generated": bool(await settings.get(conn, "kb_skip_generated", True)),
         "kb_lookup": bool(await settings.get(conn, kb_repo.LOOKUP, kb_repo.LOOKUP_DEFAULT)),
+        "web_lookup": bool(await settings.get(conn, weblookup.SETTING, weblookup.DEFAULT)),
         "vision_model": await settings.get(conn, "vision_model") or None,
         "browser_via_caido": await caido.recording(conn),      # what is in effect: on by default where nothing stands against it
         "caido_available": caido.available(),
@@ -246,6 +248,9 @@ async def put_settings(body: SettingsIn, conn=Depends(get_conn)):
     if fields.get("kb_lookup") is not None:
         await settings.put(conn, kb_repo.LOOKUP, bool(fields["kb_lookup"]))
     fields.pop("kb_lookup", None)
+    if fields.get("web_lookup") is not None:
+        await settings.put(conn, weblookup.SETTING, bool(fields["web_lookup"]))
+    fields.pop("web_lookup", None)
     if fields.get("decision_engine") is not None:
         await settings.put(conn, "decision_engine", bool(fields["decision_engine"]))
     fields.pop("decision_engine", None)

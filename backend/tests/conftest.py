@@ -125,6 +125,8 @@ async def clean_procs():
     upstream._logins.clear()       # and so does a login it read
     from hunterai.tools import search
     search.set_provider(None)      # a fake provider never leaks into another test
+    from hunterai import weblookup
+    weblookup.reset()              # nor does the pause after a web search that did not answer
 
 
 @pytest_asyncio.fixture(autouse=True)

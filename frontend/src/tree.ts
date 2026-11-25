@@ -1,4 +1,4 @@
-import type { AnswerCheckBlock, Block, ChangesBlock, CheckResult, ColibriServer, FolderCheck, Goal, Helper, FindingRow, LocalModel, Message, Options, PermissionRequest, Policy, ProviderInfo, RunEvent, SourcesBlock, Step, SwarmMember, SystemStatus } from './types'
+import type { AnswerCheckBlock, Block, ChangesBlock, CheckResult, ColibriServer, FolderCheck, Goal, Helper, FindingRow, LocalModel, Message, Options, PermissionRequest, Policy, ProviderInfo, RunEvent, SourcesBlock, Step, SwarmMember, SystemStatus, WebSourcesBlock } from './types'
 
 export function messageText(m: Message): string {
   return m.blocks.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('\n')
@@ -299,6 +299,30 @@ export function triageFacts(triage: Record<string, unknown>): string[] {
 
 export function sourcesOf(m: Message): SourcesBlock | null {
   return (m.blocks.find((b) => b.type === 'sources') as SourcesBlock | undefined) ?? null
+}
+
+/** What the web search before this answer gave it, when one was made. */
+export function webSourcesOf(m: Message): WebSourcesBlock | null {
+  return (m.blocks.find((b) => b.type === 'web_sources') as WebSourcesBlock | undefined) ?? null
+}
+
+/** Why an answer has no web results to show, or null when it has some. */
+export function webSourcesNote(b: WebSourcesBlock): string | null {
+  const asked = `Web search for "${b.query}"`
+  if (b.error) return `${asked} failed: ${b.error}`
+  if (b.items.length) return null
+  return b.results > 0 ? `${asked} found ${b.results} results, but none fit this chat's context window.` : `${asked} found nothing.`
+}
+
+/** The line of a lookup step in the trajectory: how much of what it found was given to the model. */
+export function retrievalLine(name: string, detail: Record<string, unknown>): string {
+  const used = Number(detail.used ?? 0)
+  if (name === 'web_search') {
+    const engines = Array.isArray(detail.engines) ? (detail.engines as string[]).join(', ') : ''
+    return `${used} of ${Number(detail.results ?? 0)} results used${engines ? ` · ${engines}` : ''}`
+  }
+  const half = typeof detail.keywords_only === 'string' && detail.keywords_only ? ` · keyword index only (${detail.keywords_only})` : ''
+  return `${used} of ${Number(detail.hits ?? 0)} ${name === 'memory' ? 'notes' : 'chunks'} used${half}`
 }
 
 /** What the run of this answer changed in its work folder (coding mode), when anything is to be said about it. */

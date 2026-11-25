@@ -5,7 +5,8 @@ import { branchLabel, callDurations, cardStatus, messageText, renderItems, sibli
 import type { AnswerCheckBlock, Block, Message } from '../types'
 import { copyText, Markdown } from './Markdown'
 import { SourcesList } from './SourcesList'
-import { answerCheckLine, answerCheckOf, changesOf, runningCheck, sourcesOf, visible, waitingToCool } from '../tree'
+import { WebSourcesList } from './WebSourcesList'
+import { answerCheckLine, answerCheckOf, changesOf, runningCheck, sourcesOf, visible, waitingToCool, webSourcesOf } from '../tree'
 import { RunChanges } from './RunChanges'
 import { confirmBox } from '../dialog'
 import { ToolCard } from './ToolCard'
@@ -194,6 +195,7 @@ export function MessageItem({ message }: { message: Message }) {
           {cooling && <div className="run-changes warn" role="status">{cooling}</div>}
           {changesOf(message) && <RunChanges block={changesOf(message)!} />}
           {sourcesOf(message) && <SourcesList block={sourcesOf(message)!} answer={text} />}
+          {webSourcesOf(message) && <WebSourcesList block={webSourcesOf(message)!} />}
           {answerCheckOf(message) && <AnswerCheck block={answerCheckOf(message)!} />}
         </>
       )}
