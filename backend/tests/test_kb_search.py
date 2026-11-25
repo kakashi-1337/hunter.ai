@@ -322,3 +322,30 @@ async def test_or_keywords_does_not_hide_a_failure_of_the_keyword_half(conn, col
     monkeypatch.setattr(kb, "keyword_ids", broken)
     with pytest.raises(RuntimeError, match="keyword index is gone"):
         await search.or_keywords(conn, [col.id], "alpha")
+
+
+async def test_or_keywords_stands_in_only_for_a_half_that_cannot_be_asked(conn, col, tmp_path, monkeypatch):
+    """A fault that is nobody's absence (a bug in a store, an embedder nobody knows) is not answered with half a search."""
+    await ingest_texts(conn, col, tmp_path, {"d1.txt": "alpha beta"})
+
+    class Buggy:
+        async def search(self, name, vector, limit):
+            raise RuntimeError("a bug in the store")
+    monkeypatch.setattr(search, "get_store", lambda: Buggy())
+    with pytest.raises(RuntimeError, match="a bug in the store"):
+        await search.or_keywords(conn, [col.id], "alpha")
+
+
+async def test_or_keywords_keeps_the_callers_limit_and_wait_in_both_cases(conn, col, tmp_path, embed_spy, monkeypatch):
+    await ingest_texts(conn, col, tmp_path, {f"d{i}.txt": f"alpha note {i}" for i in range(4)})
+    waits, real = [], search.embed.get
+
+    def get(spec, lock_timeout=None, **kw):
+        waits.append(lock_timeout)
+        return real(spec, lock_timeout, **kw)
+    monkeypatch.setattr(search.embed, "get", get)
+    hits, why = await search.or_keywords(conn, [col.id], "alpha", 2, lock_timeout=7)
+    assert (len(hits), why, waits) == (2, None, [7])
+    embed_spy.fail = EmbedError("unavailable", "embedder busy")
+    hits, why = await search.or_keywords(conn, [col.id], "alpha", 3, lock_timeout=7)
+    assert (len(hits), why, waits) == (3, "embedder busy", [7, 7])          # the keyword half alone asks no embedder
