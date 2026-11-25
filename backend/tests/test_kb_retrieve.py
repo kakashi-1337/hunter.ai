@@ -69,16 +69,41 @@ async def test_zero_hits_injects_nothing_but_is_recorded(conn, kb_chat):
     run, msg = await go(conn, chat, user)
     assert "KB_REFERENCE" not in p.calls[0]["system"] and len(p.calls[0]["messages"][-1].blocks) == 1
     assert (run.steps[0].kind, run.steps[0].status, run.steps[0].detail["hits"], run.steps[0].detail["used"]) == ("retrieval", "done", 0, 0)
-    assert msg.blocks[-1].model_dump() == {"type": "sources", "query": "anything", "items": [], "hits": 0, "error": None}
+    assert msg.blocks[-1].model_dump() == {"type": "sources", "query": "anything", "items": [], "hits": 0, "error": None,
+                                           "keywords_only": None}
 
 
-async def test_search_failure_does_not_fail_the_run(conn, kb_chat, embed_spy):
+async def test_search_failure_does_not_fail_the_run(conn, kb_chat, embed_spy, monkeypatch):
     p = Scripted("abliteration"); use(abliteration=p)
     chat, user, _ = await kb_chat({"notes.md": "waf bypass notes"}, text="waf bypass notes")
     embed_spy.fail = EmbedError("unavailable", "embedder busy")
+
+    async def broken(*a, **kw):
+        raise RuntimeError("the keyword index is gone")
+    monkeypatch.setattr(kb, "keyword_ids", broken)              # neither half answers
     run, msg = await go(conn, chat, user)
-    assert run.status == "done" and (run.steps[0].status, run.steps[0].detail["error"]) == ("error", "embedder busy")
-    assert msg.blocks[-1].error == "embedder busy" and "KB_REFERENCE" not in p.calls[0]["system"]
+    assert run.status == "done" and (run.steps[0].status, run.steps[0].detail["error"]) == ("error", "the keyword index is gone")
+    assert msg.blocks[-1].error == "the keyword index is gone" and "KB_REFERENCE" not in p.calls[0]["system"]
+
+
+async def test_the_keyword_index_gives_the_sources_when_the_embedder_cannot_be_asked(conn, kb_chat, embed_spy):
+    """An ingest job holds the embedder, or Ollama does not answer: the message still goes out with what the words find."""
+    p = Scripted("abliteration"); use(abliteration=p)
+    chat, user, _ = await kb_chat({"notes.md": "waf bypass notes", "heap.md": "kernel heap spray"}, text="waf bypass notes")
+    embed_spy.fail = EmbedError("unavailable", "embedder busy")
+    run, msg = await go(conn, chat, user)
+    step, src = run.steps[0], msg.blocks[-1]
+    assert run.status == "done" and (step.kind, step.status, step.detail["keywords_only"], step.detail["hits"]) == ("retrieval", "done", "embedder busy", 1)
+    assert "error" not in step.detail and (src.error, src.keywords_only) == (None, "embedder busy")
+    assert [s.source_uri.rsplit("/", 1)[-1] for s in src.items] == ["notes.md"] and "KB_REFERENCE" in p.calls[0]["system"]
+    assert "waf bypass notes" in p.calls[0]["messages"][-1].blocks[0].text
+
+
+async def test_a_search_that_both_halves_answered_says_nothing_about_keywords(conn, kb_chat):
+    use(abliteration=Scripted("abliteration"))
+    chat, user, _ = await kb_chat({"notes.md": "waf bypass notes"}, text="waf bypass notes")
+    run, msg = await go(conn, chat, user)
+    assert "keywords_only" not in run.steps[0].detail and msg.blocks[-1].keywords_only is None
 
 
 async def test_budget_takes_whole_chunks_only(conn, kb_chat, monkeypatch):
@@ -201,6 +226,39 @@ async def test_kb_search_tool_reads_only_the_chats_collections(conn, kb_chat):
     from hunterai.tools.base import ToolError
     with pytest.raises(ToolError, match="No knowledge collection"):
         await tool.handler(ctx, {"query": "waf"})
+
+
+def _ctx(chat):
+    from hunterai.tools.base import ToolContext
+    return ToolContext(chat_id=chat.id, run_id="r", step_id="s", call_id="c", mode="pentesting", target=None, workdir=None, cancel=asyncio.Event())
+
+
+async def test_kb_search_answers_from_the_keyword_index_when_the_embedder_cannot_be_asked(conn, kb_chat, embed_spy):
+    """Before, the model got "knowledge search is unavailable: embedder busy" on a red card while a job was ingesting,
+    and the knowledge base was closed to it although half of the search needs no embedder."""
+    chat, _, _ = await kb_chat({"notes.md": "waf bypass notes", "heap.md": "kernel heap spray"}, text="x")
+    tool = kb_tools.tools()[0]
+    whole = (await tool.handler(_ctx(chat), {"query": "waf bypass"})).text
+    assert "keyword index" not in whole                                     # nothing is said when both halves answered
+    embed_spy.fail = EmbedError("unavailable", "embedder busy")
+    out = await tool.handler(_ctx(chat), {"query": "waf bypass"})
+    assert not out.is_error and "[1] " in out.text and "notes.md" in out.text and "heap.md" not in out.text
+    assert kb_tools.KEYWORDS_ONLY.format(why="embedder busy") in out.text and out.text.index("embedder busy") < out.text.index("[1] ")
+    nothing = await tool.handler(_ctx(chat), {"query": "zzzz"})
+    assert not nothing.is_error and nothing.text.startswith("No matching passage") and "embedder busy" in nothing.text
+
+
+async def test_kb_search_answers_from_the_keyword_index_when_the_vector_store_is_down(conn, kb_chat, monkeypatch):
+    from hunterai.kb import search
+    from hunterai.kb.vectors import VectorError
+
+    class Down:
+        async def search(self, name, vector, limit):
+            raise VectorError("vector store unavailable: ConnectError")
+    chat, _, _ = await kb_chat({"notes.md": "waf bypass notes"}, text="x")
+    monkeypatch.setattr(search, "get_store", lambda: Down())
+    out = await kb_tools.tools()[0].handler(_ctx(chat), {"query": "waf bypass"})
+    assert not out.is_error and "notes.md" in out.text and "vector store unavailable: ConnectError" in out.text
 
 
 async def test_a_chat_without_a_collection_is_not_offered_kb_search(conn, kb_chat):
