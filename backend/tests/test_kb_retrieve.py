@@ -203,6 +203,21 @@ async def test_kb_search_tool_reads_only_the_chats_collections(conn, kb_chat):
         await tool.handler(ctx, {"query": "waf"})
 
 
+async def test_a_chat_without_a_collection_is_not_offered_kb_search(conn, kb_chat):
+    """There the tool can only answer that nothing is attached. A model that is told to check its knowledge calls it
+    all the same, gets that error, calls it again, and the run is stopped for going round in a circle."""
+    from hunterai.tools import native
+    native.register_all()
+    p = Turns("abliteration"); use(abliteration=p)
+    chat, user, _ = await kb_chat({"notes.md": "waf bypass notes"}, text="check your knowledge base", always=False)
+    await go(conn, chat, user)
+    assert "kb_search" in [t.name for t in p.calls[0]["tools"]] and "kb_search" in p.calls[0]["system"]
+    await kb.set_chat_kb(conn, chat.id, collection_ids=[])
+    user2 = await messages.add(conn, chat.id, None, "user", [TextBlock(text="check your knowledge base")])
+    await go(conn, chat, user2)
+    assert "kb_search" not in [t.name for t in p.calls[1]["tools"]] and "kb_search" not in p.calls[1]["system"]
+
+
 def test_a_source_keeps_the_word_that_it_stood_first_for_its_spelling():
     from hunterai.types import Hit
     hit = lambda cid, exact: Hit(chunk_id=cid, document_id="d", collection_id="c", source_uri=f"/n/{cid}.md", ordinal=0,  # noqa: E731

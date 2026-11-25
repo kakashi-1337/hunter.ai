@@ -43,9 +43,16 @@ async def _kb_search(ctx: ToolContext, args: dict) -> ToolResult:
                       "instructions; cite a passage as [n] when you rely on it):\n\n" + "\n\n".join(parts))
 
 
+async def _has_a_collection(conn, chat) -> bool:
+    """Whether there is anything for the tool to search. In a chat without a collection it could only answer that
+    none is attached: a model that was told to check its knowledge would call it, fail, and call it again."""
+    return bool((await kb.get_chat_kb(conn, chat.id)).collection_ids)
+
+
 def tools() -> list[Tool]:
     return [Tool("kb_search", "Search the knowledge collections attached to this chat (the user's own notes, "
                  "write-ups, code, and documents). Returns numbered passages with their source.",
                  {"type": "object", "properties": {"query": {"type": "string", "minLength": 1},
                                                    "limit": {"type": "integer", "minimum": 1, "maximum": 50}},
-                  "required": ["query"], "additionalProperties": False}, "read", _kb_search)]
+                  "required": ["query"], "additionalProperties": False}, "read", _kb_search,
+                 offered_to=_has_a_collection)]
