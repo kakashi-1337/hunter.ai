@@ -39,6 +39,11 @@ def _think(effort: str, levels: list[str]) -> str | bool | None:
     known = sorted(levels, key=order.index)
     return next((v for v in known if order.index(v) >= wanted), known[-1])
 TIMEOUT = httpx.Timeout(300.0, connect=5.0)
+# What Ollama says when the limit on a call's length (num_predict) falls inside a tool call: the JSON of the call has no
+# end, and that is an error to it. HTTP 500 when it had sent nothing yet, a line of the stream when thinking or text
+# came first. A call whose text or thinking reaches the limit ends with done_reason "length" instead. Measured on an
+# Ollama built from source on 27 November 2026.
+CUT_CALL = ("invalid tool call arguments", "unexpected end of json input")
 
 
 # The context window of a call to a local model, in tokens. It is always sent: Ollama's own default follows the
@@ -84,6 +89,11 @@ def largest_num_ctx() -> int:
     switched growing off."""
     written = (config.env(MOST_CTX_ENV) or "").strip()
     return 0 if written == "0" else usable_num_ctx(written) or DEFAULT_MOST_CTX
+
+
+def cut_in_a_tool_call(said: str) -> bool:
+    """Whether these words of Ollama are the ones for a tool call that had no end when the model call ended."""
+    return all(part in said.lower() for part in CUT_CALL)
 
 
 def host() -> str:
@@ -318,6 +328,7 @@ class OllamaProvider:
             raise ProviderError("bad_request", TOO_LARGE.format(model=model, need=need, window=num_ctx), complete=True)
         taken: set[str] = set()
         usage, reason = Usage(0, 0), "end"
+        limited = o.max_tokens is not None      # the call was told how long it may be
         try:
             async with httpx.AsyncClient(timeout=TIMEOUT) as client:
                 async with client.stream("POST", f"{host()}/api/chat", json=body) as r:
@@ -334,8 +345,11 @@ class OllamaProvider:
                             said = error_from_status(400, text, None).message.removeprefix("HTTP 400: ")
                             raise ProviderError("bad_request", PICTURE_REFUSED.format(said=said[:200], model=model), 400,
                                                 complete=True)
-                        raise error_from_status(r.status_code, text, None)
-                    async for line in r.aiter_lines():
+                        if not (limited and cut_in_a_tool_call(text)):
+                            raise error_from_status(r.status_code, text, None)
+                        reason = "length"       # the call ended at its limit inside a tool call
+                    lines = _nothing() if reason == "length" else r.aiter_lines()     # that answer was read whole above
+                    async for line in lines:
                         if not line.strip():
                             continue
                         try:
@@ -343,6 +357,9 @@ class OllamaProvider:
                         except ValueError:
                             continue
                         if obj.get("error"):
+                            if limited and cut_in_a_tool_call(str(obj["error"])):
+                                reason = "length"       # the same after thinking or text: its last line
+                                break
                             raise ProviderError("unavailable", f"Ollama: {obj['error']}")
                         msg = obj.get("message") or {}
                         if msg.get("thinking"):
@@ -363,6 +380,10 @@ class OllamaProvider:
                             usage = Usage(int(obj.get("prompt_eval_count") or 0),
                                           int(obj.get("eval_count") or 0))
                             reason = obj.get("done_reason") or "end"
+        except httpx.ReadTimeout as e:
+            # Not a word came for that long. Ollama is silent while it loads the model, while it reads a long request,
+            # and while the model writes a tool call: a tool call is sent in one piece when it is complete.
+            raise ProviderError("timeout", f"Ollama timed out: it sent nothing for {TIMEOUT.read / 60:.0f} minutes") from e
         except httpx.TimeoutException as e:
             raise ProviderError("timeout", "Ollama timed out") from e
         except httpx.HTTPError as e:
@@ -370,6 +391,12 @@ class OllamaProvider:
                 "unavailable", f"Ollama not reachable at {host()} ({type(e).__name__})") from e
         yield usage
         yield Stop(reason)
+
+
+async def _nothing():
+    """No lines: for an answer that was read whole already."""
+    return
+    yield
 
 
 def _chars(body: dict) -> int:

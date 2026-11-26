@@ -172,7 +172,8 @@ async def run_case(conn, provider_name: str, model: str, case: Case, tell: Tell 
     first = [WireMessage("user", [TextBlock(text=case.prompt)])]
     blocks: list[Block] = []
     taken: set[str] = set()
-    t = Transcript(calls=[], answer="", turns=0, finished=False)
+    limit = score.OUTPUT_LIMIT if here else None     # a provider elsewhere has limits of its own
+    t = Transcript(calls=[], answer="", turns=0, finished=False, limit=limit)
     answer_from = 0             # where in `blocks` the answer begins: after the last result of a tool that is no bookkeeping
     spent = 0.0                 # seconds the model calls took; the wait for a hot machine is not the model's time
     quiet = False               # a turn of this run ended with thinking only: the rest of the run is asked with thinking off
@@ -202,7 +203,7 @@ async def run_case(conn, provider_name: str, model: str, case: Case, tell: Tell 
             wire = first + ([WireMessage("assistant", list(blocks))] if blocks else [])
             window = await context.roomier(provider_name, model, request.system, wire, Options(context_window=window or None),
                                            request.specs) or window
-            options = Options(context_window=window or None, thinking=False if quiet else None)
+            options = Options(context_window=window or None, thinking=False if quiet else None, max_tokens=limit)
             began_at = len(blocks)
             reply = await ask(wire, options)
             if reply is not None and not quiet and problems.only_thought(blocks[began_at:], reply.stop):
@@ -221,7 +222,8 @@ async def run_case(conn, provider_name: str, model: str, case: Case, tell: Tell 
             if reply is None:
                 break
             t.turns += 1
-            if not reply.calls:
+            cut = problems.at_limit(reply.stop)     # the call was ended at a limit of length: what it wrote has no end
+            if not reply.calls and not cut:
                 t.finished = True
                 break
             for sent in reply.calls:
@@ -231,6 +233,9 @@ async def run_case(conn, provider_name: str, model: str, case: Case, tell: Tell 
                 blocks.append(ToolResultBlock(tool_call_id=sent.id, content=text, is_error=is_error))
                 if not is_bookkeeping(tc.name):
                     answer_from = len(blocks)
+            if cut:
+                t.cut_off = True
+                break
     except ProviderError as e:
         t.error = e.message
     if t.finished:

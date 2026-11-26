@@ -385,3 +385,25 @@ async def test_effort_is_left_out_when_the_model_cannot_be_asked():
     respx.post(HOST + "/api/show").mock(side_effect=httpx.ConnectError("x"))
     await run(Options(effort="high"), model="m:1")
     assert "think" not in sent(route)
+
+
+# ---- a call Ollama does not answer in time
+
+@respx.mock
+async def test_a_call_ollama_sent_nothing_for_says_how_long_that_was():
+    """Seen in a bench on the owner's laptop on 27 November 2026 as "the model call failed: Ollama timed out", which
+    reads as if the bench had broken. Ollama sends nothing while it loads a model, reads a long request, or while the
+    model writes a tool call; five minutes of that is where this adapter stops waiting."""
+    respx.post(URL).mock(side_effect=httpx.ReadTimeout("no bytes"))
+    with pytest.raises(ProviderError) as e:
+        await run()
+    assert (e.value.kind, e.value.message) == ("timeout", "Ollama timed out: it sent nothing for 5 minutes")
+    assert ollama.TIMEOUT.read == 300
+
+
+@respx.mock
+async def test_a_connection_that_ollama_did_not_take_in_time_says_only_that_it_timed_out():
+    respx.post(URL).mock(side_effect=httpx.ConnectTimeout("no connection"))
+    with pytest.raises(ProviderError) as e:
+        await run()
+    assert (e.value.kind, e.value.message) == ("timeout", "Ollama timed out")

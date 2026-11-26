@@ -408,6 +408,18 @@ Put a model and its fine-tuned version into one bench to see what the training c
   "2/3". A run the provider failed is an error, shown apart: neither a pass nor a fail.
   After three runs of one model in a row that end with an error or at the time limit, the
   rest of that model is skipped.
+- **A model call that does not end is cut off.** A model on this machine may write 4,096
+  tokens in one call of a bench (a call of an ordinary run writes a few hundred, a thinking
+  model about a thousand). A call that reaches the limit is ended, and its run is a fail
+  that says so: "a model call did not end by itself: it was cut off at 4,096 tokens ...".
+  Without the limit one such call wrote 19,007 tokens into a single tool call and its run
+  took ten minutes. A provider elsewhere has limits of its own; a call it cuts off ends the
+  run in the same way. When Ollama cuts a call inside a tool call it hands nothing of the
+  call over, so such a run shows no call and counts no tokens.
+- **"Ollama timed out: it sent nothing for 5 minutes"** is an error of the run, not of the
+  bench. Ollama sends nothing while it loads a model, while it reads a long request, and
+  while the model writes a tool call (a tool call arrives in one piece when it is
+  complete). After five minutes of that HunterAI stops waiting.
 
 The built-in **Starter** set has twelve tests, three in each group. Every host in it ends
 in `.example`, which belongs to nobody.
@@ -470,7 +482,8 @@ a local model is loaded once, and its context window only grows during a bench (
 size is another load). Before every call of a model on this machine the bench looks at
 the temperatures (see "A hot machine"): at a limit it waits, and when the machine has not
 cooled within three minutes the bench stops and says so. The model calls of one run may
-take 15 minutes together; a model that writes in circles is ended by that. The **Time** row
+take 15 minutes together; a model that writes in circles is ended by that, and on this
+machine by the limit of 4,096 tokens a call long before it. The **Time** row
 of the table is what the model calls of a run took on average: a wait for the machine is
 not in it, so a model that ran after a pause does not look slower for it. A chat on a
 local model during a bench makes both slow. For a model that does not run here, the panel

@@ -138,6 +138,71 @@ async def test_thinking_that_was_cut_off_at_a_limit_is_not_asked_again(conn):
     assert (t.answer, t.asked_again, len(model.seen)) == ("", False, 1)
 
 
+# ---- a call that does not end
+
+@pytest.fixture
+def on_this_machine(monkeypatch):
+    """The model of the test counts as one that runs on this machine, and the machine as cool."""
+    async def cool(model, tell):
+        pass
+    monkeypatch.setattr(run, "_cool", cool)
+    monkeypatch.setattr(cooling, "here", lambda provider, model: True)
+
+
+async def test_a_model_on_this_machine_is_given_a_limit_on_the_length_of_every_call(conn, on_this_machine):
+    """Seen on the owner's laptop on 27 November 2026: one call of a bench wrote 19,007 tokens into a single tool call,
+    and the run took ten minutes. Nothing had told the model how long a call may be."""
+    model = use(LOOKUP, thinks(), says("There is no record of it."))
+    t = (await go(conn)).transcript
+    assert [(s["options"].max_tokens, s["options"].thinking) for s in model.seen] == [(4096, None), (4096, None), (4096, False)]
+    assert (t.limit, t.cut_off, t.answer) == (score.OUTPUT_LIMIT, False, "There is no record of it.")
+
+
+async def test_a_model_that_does_not_run_here_is_sent_no_limit_by_the_bench(conn):
+    model = use(LOOKUP, says("There is no record of it."))
+    t = (await go(conn)).transcript
+    assert [s["options"].max_tokens for s in model.seen] == [None, None] and (t.limit, t.cut_off) == (None, False)
+
+
+@pytest.mark.parametrize("stop", ["length", "max_tokens", "MAX_TOKENS"])
+async def test_a_call_that_ends_at_a_limit_of_length_ends_the_run_without_an_answer(conn, stop):
+    model = use([TextDelta("There is no record of it, and 1, 2, 3,"), Usage(10, 4096), Stop(stop)], says("never asked for"))
+    t = (await go(conn)).transcript
+    assert (t.cut_off, t.finished, t.answer, t.turns, t.error, len(model.seen)) == (True, False, "", 1, None, 1)
+    assert (t.input_tokens, t.output_tokens) == (10, 4096)
+
+
+async def test_the_calls_of_a_turn_that_was_cut_off_are_in_the_transcript(conn):
+    model = use([*LOOKUP[:1], Usage(10, 4096), Stop("length")], says("never asked for"))
+    t = (await go(conn)).transcript
+    assert t.calls == [Call("cve", {"action": "lookup", "ids": ["CVE-2026-109618"]})]
+    assert (t.cut_off, t.finished, t.turns, len(model.seen)) == (True, False, 1, 1)
+
+
+async def test_a_call_whose_arguments_the_limit_cut_is_shown_with_what_a_chat_would_say_of_it(conn):
+    """The shape llama-server sends when the limit falls inside a tool call (measured on 27 November 2026): the call,
+    with arguments that are no JSON. Ollama sends nothing of such a call."""
+    half = ToolCall("call_1", "cve", {}, error="arguments are not valid JSON: Unterminated string starting at: line 1")
+    model = use([half, Usage(652, 60), Stop("length")], says("never asked for"))
+    t = (await go(conn)).transcript
+    assert [(c.name, c.arguments, (c.problem or "")[:20]) for c in t.calls] == [("cve", {}, "Invalid call to cve:")]
+    assert (t.cut_off, t.finished, t.output_tokens, len(model.seen)) == (True, False, 60, 1)
+
+
+async def test_a_second_asking_that_is_cut_off_ends_the_run_too(conn):
+    model = use(thinks(), [TextDelta("1, 2, 3,"), Usage(10, 4096), Stop("length")], says("never asked for"))
+    t = (await go(conn)).transcript
+    assert (t.cut_off, t.asked_again, t.finished, t.turns, len(model.seen)) == (True, True, False, 1, 2)
+
+
+async def test_a_run_that_was_cut_off_is_a_fail_though_its_cut_text_holds_the_right_words(conn, on_this_machine):
+    use([TextDelta("There is no record of it, and 1, 2, 3,"), Usage(10, 4096), Stop("length")])
+    c = case()
+    t = (await go(conn, c)).transcript
+    line = "a model call did not end by itself: it was cut off at 4,096 tokens, the most one call may write in a bench on this machine"
+    assert score.score(c, t).model_dump() == {"status": "fail", "reasons": [line]}
+
+
 async def test_an_answer_that_came_is_not_asked_for_again(conn):
     model = use([*thinks()[:1], *says("There is no record of it.")])
     t = (await go(conn)).transcript

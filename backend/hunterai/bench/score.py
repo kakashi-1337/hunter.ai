@@ -25,6 +25,11 @@ HOST_CHARS = 20_000  # of one text of a call's arguments that are searched for h
 NAMED = 4            # tools or phrases of one rule that a line names; the rest is counted
 TIME_LIMIT = 900     # seconds the model calls of one run may take together; a model that writes in circles is
 #                      ended by this, where the turn limit ends one that calls tools in circles
+OUTPUT_LIMIT = 4096  # tokens a model on this machine may write in one call. A call of a bench that reaches it is one
+#                      that does not end: the longest call of the owner's benches wrote about 1,200 tokens, and one
+#                      that was not stopped wrote 19,007. Ollama sends nothing while a model writes a tool call, and it
+#                      is given up on after five minutes of that (providers/ollama.py), so the limit has to end such a
+#                      call before then: 4,096 tokens take 293 seconds at 14 tokens a second
 
 # What a model writes one way or another without meaning anything by it: the kind of quote and of dash, and
 # the marks for emphasis. Both the answer and the phrase lose them before they are compared.
@@ -54,6 +59,8 @@ class Transcript:
     input_tokens: int = 0
     output_tokens: int = 0
     timed_out: bool = False   # it was the time limit that ended it, not the turn limit
+    cut_off: bool = False     # a model call ended at a limit of length and not by itself: the run ended there
+    limit: int | None = None  # the tokens one call of this run might write: the bench's own limit for a model on this machine
     asked_again: bool = False     # a turn ended with thinking only and was asked once more with thinking off (run.run_case)
 
 
@@ -126,6 +133,10 @@ def score(case: Case, t: Transcript) -> Verdict:
     answer = _plain(t.answer) if t.finished else ""
     if t.timed_out:
         reasons.append(f"did not answer within {TIME_LIMIT // 60} minutes")
+    elif t.cut_off:
+        reasons.append("a model call did not end by itself: " + (
+            f"it was cut off at {t.limit:,} tokens, the most one call may write in a bench on this machine" if t.limit
+            else "its provider cut it off at its limit of length"))
     elif not t.finished:
         reasons.append(f"did not answer within {case.max_turns} model turns")
     elif not answer:
