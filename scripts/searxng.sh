@@ -12,6 +12,20 @@ if ! command -v docker >/dev/null 2>&1; then
   exit 1
 fi
 
+make() {
+  docker run -d --name "$NAME" --memory 1g -p 127.0.0.1:8888:8080 \
+    -v "$DIR:/etc/searxng" "$IMAGE" >/dev/null
+}
+stays_up() {
+  if [ "$(docker inspect -f '{{.State.Running}}' "$NAME" 2>/dev/null || true)" != "true" ]; then
+    echo "searxng: the container $NAME stopped right after it was started. Its last lines:"
+    docker logs --tail 20 "$NAME" 2>&1 || true
+    exit 1
+  fi
+}
+# What Docker publishes for the container now. How it was made does not say that.
+published() { docker port "$NAME" 8080/tcp 2>/dev/null | head -n 1 || true; }
+
 case "${1:-}" in
   start)
     # The container takes ownership of this folder on its first start, so chmod may be refused.
@@ -49,22 +63,34 @@ YML
     if docker container inspect "$NAME" >/dev/null 2>&1; then
       docker start "$NAME" >/dev/null
     else
-      docker run -d --name "$NAME" --memory 1g -p 127.0.0.1:8888:8080 \
-        -v "$DIR:/etc/searxng" "$IMAGE" >/dev/null
+      make
     fi
-    if [ "$(docker inspect -f '{{.State.Running}}' "$NAME" 2>/dev/null || true)" != "true" ]; then
-      echo "searxng: the container $NAME stopped right after it was started. Its last lines:"
-      docker logs --tail 20 "$NAME" 2>&1 || true
-      exit 1
+    stays_up
+    # A container that was made right can still run attached to no network of Docker: no port of it is published,
+    # nothing reaches it, it can look up no name, and a restart leaves it so. A new container is attached again.
+    if [ "$(published)" != "127.0.0.1:8888" ]; then
+      echo "searxng: the container $NAME runs, and Docker publishes no port for it: it is attached to no network, so nothing can reach it and it can look up no name. It is made again; its settings are kept in $DIR."
+      docker rm -f "$NAME" >/dev/null
+      make
+      stays_up
+      if [ "$(published)" != "127.0.0.1:8888" ]; then
+        echo "searxng: Docker publishes no port for the new container either. Restart Docker (sudo systemctl restart docker) and start HunterAI again."
+        exit 1
+      fi
     fi
+    began="$(date +%s)"
+    last=""
     for _ in $(seq 1 60); do
-      if curl -fsS "$URL" >/dev/null 2>&1; then
+      # A try is a real search and may take its time, 15 seconds at most: one that hangs must not hold the start
+      # for ever.
+      if last="$(curl -fsS -m 15 -o /dev/null "$URL" 2>&1)"; then
         echo "searxng: ready on http://127.0.0.1:8888"
         exit 0
       fi
+      [ $(( $(date +%s) - began )) -lt 60 ] || break       # sixty slow tries would be a quarter of an hour
       sleep 1
     done
-    echo "searxng: not answering after 60 s"
+    echo "searxng: not answering after 60 s${last:+. The last try: $last}"
     docker logs --tail 20 "$NAME" || true
     exit 1
     ;;
@@ -72,7 +98,7 @@ YML
     docker stop "$NAME" >/dev/null && echo "searxng: stopped"
     ;;
   status)
-    if curl -fsS "$URL" >/dev/null 2>&1; then echo "searxng: ready"; else echo "searxng: not running"; exit 1; fi
+    if curl -fsS -m 15 "$URL" >/dev/null 2>&1; then echo "searxng: ready"; else echo "searxng: not running"; exit 1; fi
     ;;
   *)
     echo "usage: scripts/searxng.sh start | stop | status"
