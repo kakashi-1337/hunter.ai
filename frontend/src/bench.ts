@@ -91,9 +91,12 @@ export function sizeLine(models: number, cases: number, repeats: number): string
 /** A model Ollama runs in its own cloud, not on this machine: its tag says so (gpt-oss:120b-cloud, glm-4.6:cloud). */
 const ollamaCloud = (model: string) => /:(.*-)?cloud$/i.test(model)
 
+/** The providers that are a server of the owner's own, at the address he gave: what is sent to them goes to no cloud. */
+const OWN_SERVERS = ['colibri', 'llamacpp']
+
 /** Where the prompts of a bench go when not every model runs here; null when all of them do. */
 export function cloudLine(models: ModelRef[]): string | null {
-  const where = models.map((m) => (m.provider === 'colibri' ? null : m.provider !== 'ollama' ? m.provider : ollamaCloud(m.model) ? "Ollama's cloud" : null))
+  const where = models.map((m) => (OWN_SERVERS.includes(m.provider) ? null : m.provider !== 'ollama' ? m.provider : ollamaCloud(m.model) ? "Ollama's cloud" : null))
   const names = [...new Set(where.filter((w): w is string => w !== null))]
   if (!names.length) return null
   const listed = names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`

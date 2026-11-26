@@ -1,4 +1,4 @@
-import type { AnswerCheckBlock, Block, ChangesBlock, CheckResult, ColibriServer, FolderCheck, Goal, Helper, FindingRow, LocalModel, Message, Options, PermissionRequest, Policy, ProviderInfo, RunEvent, SourcesBlock, Step, SwarmMember, SystemStatus, WebSourcesBlock } from './types'
+import type { AnswerCheckBlock, Block, ChangesBlock, CheckResult, ColibriServer, FolderCheck, Goal, Helper, FindingRow, LlamaModel, LlamaServer, LocalModel, Message, Options, PermissionRequest, Policy, ProviderInfo, RunEvent, SourcesBlock, Step, SwarmMember, SystemStatus, WebSourcesBlock } from './types'
 
 export function messageText(m: Message): string {
   return m.blocks.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('\n')
@@ -572,15 +572,19 @@ export function waitingToCool(steps: Step[]): string | null {
   return going ? `Waiting for the machine to cool before the local model is loaded: ${going.name}. The run goes on by itself.` : null
 }
 
-/** The line at the bottom of the sidebar: the models that hold memory now, Ollama's and the one a colibri server
- * holds. `about` says of each loaded model how much memory it takes, where Ollama runs it and with which window, and
- * what it means when part of it is on the processor; of colibri's, its context; '' when the server does not say. */
+/** The line at the bottom of the sidebar: the models that hold memory now, Ollama's, the one a colibri server holds
+ * and those a llama-server holds. `about` says of each loaded model how much memory it takes, where Ollama runs it and
+ * with which window, and what it means when part of it is on the processor; of colibri's and llama-server's, the
+ * context; and when Ollama and llama-server each hold one, that they share the memory. '' when the server does not say. */
 export function machineLine(s: SystemStatus): { text: string; level: '' | 'warn' | 'bad'; about: string } {
   const parts: string[] = []
   for (const p of heatParts(s)) parts.push(`${p.short} ${Math.round(p.degrees)}°C`)
   const held = s.colibri ?? null      // absent from a server from before it asked colibri
+  const served = s.llamacpp ?? []     // absent from a server from before it asked llama-server; null without one
+  const ollama = s.local_models ?? []
   const size = (m: Loaded) => `(${inMemory(m)} GB${share(m) ? `, ${share(m)}` : ''})`
-  const loaded = [...(s.local_models ?? []).map((m) => ({ name: m.name, how: size(m) })), ...(held ? [{ name: held.model, how: '(colibri)' }] : [])]
+  const loaded = [...ollama.map((m) => ({ name: m.name, how: size(m) })), ...(held ? [{ name: held.model, how: '(colibri)' }] : []),
+    ...served.map((m) => ({ name: m.model, how: '(llama.cpp)' }))]
   if (s.local_models === null) parts.push('Ollama is not running')
   if (loaded.length === 1) parts.push(`${loaded[0].name} loaded ${loaded[0].how}`)
   else if (loaded.length) parts.push(`${loaded.map((m) => `${m.name} ${m.how}`).join(', ')} loaded`)
@@ -590,6 +594,11 @@ export function machineLine(s: SystemStatus): { text: string; level: '' | 'warn'
       `${m.name}: ${inMemory(m)} GB in memory, ${m.processor} as \`ollama ps\` says it${m.context ? `, loaded with a window of ${whole(m.context)} tokens` : ''}.`
       + (split(m) ? ' Part of it is on the processor, which makes it slow. On a machine with a graphics card it did not fit the memory of that card with this window: a smaller window or a smaller model fits.' : '')),
     ...(held ? [`${held.model}: held by colibri${held.context ? `, with a context of ${whole(held.context)} tokens` : ''}.`] : []),
+    ...served.map((m) => `${m.model}: held by llama-server${m.context ? `, with a context of ${whole(m.context)} tokens` : ''}.`),
+    // Two programs that know nothing of each other on one card: the one that loads second gets what is left of it.
+    ...(ollama.length && served.length ? ['Ollama and llama-server each hold a model now and share the memory of this machine: what does not '
+      + 'fit the graphics card runs on the processor, which is slow. To have one at a time, unload Ollama\'s '
+      + `(${ollama.map((m) => `\`ollama stop ${m.name}\``).join(', ')}) or stop llama-server.`] : []),
   ].join(' ')
   const level = heat(s) || (s.local_models?.some(split) ? 'warn' : '')
   return { text: parts.join(' · '), level, about }
@@ -640,11 +649,48 @@ export function colibriHint(server: ColibriServer | null, keySet: boolean): { li
   return { lines, warn }
 }
 
+const ROUTER_SHOWN = 6        // the models of a router that are named in its line; the rest are counted
+
+/** What Settings says under the address of llama-server: what answers there, and a warning for what stands in the
+ * way of a chat with it. A server that does not answer or still loads its model is said without alarm: it may be off
+ * on purpose. The command to start it names the context that leaves room for a chat here. `keySet`: a key is stored. */
+export function llamaCppHint(server: LlamaServer | null, keySet: boolean): { lines: string[]; warn: string | null } {
+  if (!server || server.state === 'off') return { lines: [], warn: null }
+  if (server.state === 'down') return { lines: [`Nothing answers at ${server.url}. Start llama-server (llama-server -m your-model.gguf -c ${server.start_with}), then press Check.`], warn: null }
+  if (server.state === 'loading') return { lines: [`llama-server at ${server.url} is still loading its model. Press Check in a moment.`], warn: null }
+  if (server.state === 'key') return { lines: [], warn: `llama-server at ${server.url} ${keySet ? 'did not accept the key that is set' : 'asks for a key'}: enter the one it was started with (--api-key) below.` }
+  if (server.state !== 'ok') return { lines: [], warn: `llama.cpp: ${server.said}.` }
+  const reads = (m: LlamaModel) => (m.images ? 'reads pictures' : 'reads text only')
+  const lines: string[] = []
+  if (server.router) {
+    const one = (m: LlamaModel) => `${m.id} (${m.context ? `${whole(m.context)} tokens` : 'context not named'}, ${reads(m)}, ${m.failed ? 'did not load' : m.loaded ? 'loaded' : 'not loaded'})`
+    const more = server.models.length - ROUTER_SHOWN
+    lines.push(`It is a router with ${server.models.length} model${server.models.length === 1 ? '' : 's'} and loads the one a chat asks for: `
+      + `${server.models.slice(0, ROUTER_SHOWN).map(one).join('; ')}${more > 0 ? `; and ${more} more` : ''}. Pick one in the model list of a chat.`)
+    lines.push(`HunterAI's rules and tools take about ${whole(server.overhead)} tokens of a model's context.`)
+  } else {
+    const m = server.models[0]
+    lines.push(`It serves ${m.id}: ${m.context ? `a context of ${whole(m.context)} tokens` : 'a context it does not name'}, ${reads(m)}. Pick it in the model list of a chat.`)
+    lines.push(`HunterAI's rules and tools take about ${whole(server.overhead)} tokens of that context.`)
+  }
+  const warns: string[] = []
+  if (server.tools === false) warns.push("The chat template of this model has no tool calls, so a chat with it cannot use HunterAI's tools: start llama-server with a model whose template has them, or give it one (--chat-template-file).")
+  const small = server.models.filter((m) => m.enough)
+  if (small.length) warns.push(`Too small here: with the rules and tools, less than 8,192 tokens are left for the chat${server.router ? ` with ${small.map((m) => m.id).join(', ')}` : ''}. `
+    + `Start llama-server with a larger context: -c ${small[0].enough} (a larger context needs more memory).`)
+  const broke = server.models.filter((m) => m.failed)
+  if (broke.length) warns.push(`${broke.map((m) => m.id).join(', ')} did not load: llama-server says why in the terminal it runs in.`)
+  return { lines, warn: warns.length ? warns.join(' ') : null }
+}
+
+/** The providers that are a server of the owner's own: set up by its address in Settings, not by a key. */
+const BY_ADDRESS = ['colibri', 'llamacpp']
+
 /** How a provider stands in the list of models: the heading of its group, and the line that stands there in place
  * of models (null when it has models to offer). */
 export function providerGroup(p: ProviderInfo): { label: string; empty: string | null } {
   if (!p.configured) {
-    const how = p.name === 'codex' ? 'install the codex CLI' : p.name === 'colibri' ? 'set its address in Settings' : 'add key in settings'
+    const how = p.name === 'codex' ? 'install the codex CLI' : BY_ADDRESS.includes(p.name) ? 'set its address in Settings' : 'add key in settings'
     return { label: `${p.name} — ${how}`, empty: 'not configured' }
   }
   return { label: p.name, empty: p.models.length ? null : p.note ?? 'no models available' }
