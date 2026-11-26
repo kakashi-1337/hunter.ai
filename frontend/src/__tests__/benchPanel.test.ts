@@ -50,6 +50,7 @@ describe('the Bench panel', () => {
     vi.spyOn(api, 'listProviders').mockResolvedValue(PROVIDERS)
     vi.spyOn(api, 'benchSets').mockResolvedValue(SETS)
     vi.spyOn(api, 'benchRuns').mockResolvedValue([])
+    vi.spyOn(api, 'systemStatus').mockResolvedValue({ cpu_temp: null, cpu_limit: null, local_models: [] })
   })
   afterEach(() => { act(() => root.unmount()); host.remove(); vi.restoreAllMocks(); vi.useRealTimers(); closed.mockReset() })
 
@@ -168,6 +169,39 @@ describe('the Bench panel', () => {
     expect(second.querySelector('.bench-calls')!.textContent).toBe('nmap_scan {} (not run: Unknown tool "nmap_scan".)')
     expect(second.textContent).toContain('The first call of 60 is shown.')
     expect(second.textContent).toContain('No answer.')
+  })
+
+  it('warns before a bench of Ollama models while llama-server holds a model, and not for a model that runs elsewhere', async () => {
+    const asked = vi.spyOn(api, 'systemStatus').mockResolvedValue({ cpu_temp: null, cpu_limit: null, local_models: [],
+      llamacpp: [{ model: 'huihui-qwen3.5-9b', context: 32768 }] })
+    await open()
+    expect(asked).toHaveBeenCalledTimes(1)
+    expect($('.bench-shared')).toBeNull()        // nothing is picked: there is nothing to warn of
+    await tick('ollama/hf.co/x/qwen:9b')
+    expect(asked).toHaveBeenCalledTimes(2)       // asked again: what is held changes while the panel is open
+    expect($('.bench-shared')!.textContent).toBe('llama-server holds huihui-qwen3.5-9b in memory now. The models of this bench that run on Ollama '
+      + 'would share the memory of this machine with it: what does not fit the graphics card runs on the processor, which is slow. To have one at a time, stop llama-server first.')
+    await tick('ollama/hf.co/x/qwen:9b')
+    await tick('anthropic/claude-opus-5-5')
+    expect($('.bench-shared')).toBeNull()
+  })
+
+  it('has no warning when the server cannot say what is held, and still shows the form', async () => {
+    vi.spyOn(api, 'systemStatus').mockRejectedValue(new Error('no answer'))
+    await open()
+    await tick('ollama/hf.co/x/qwen:9b')
+    expect($('.bench-shared')).toBeNull()
+    expect($('.bench-error')).toBeNull()
+    expect(button('Run')).toBeTruthy()
+  })
+
+  it('names the tools of the open bench only once one of its runs has been made', async () => {
+    const early = run({ tools_offered: 0 })
+    vi.spyOn(api, 'benchRuns').mockResolvedValue([{ run: early, progress: null }])
+    vi.spyOn(api, 'benchRun').mockResolvedValue(detail({ run: early, marks: [] }))
+    await open()
+    expect($('.bench-opened')!.textContent).toContain('Finished · 2 models, 2 repeats')
+    expect($('.bench-opened')!.textContent).not.toContain('tools offered')
   })
 
   it('lets the owner set the mark of a run right by hand, counts it in the table, and takes it back', async () => {

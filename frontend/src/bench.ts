@@ -1,5 +1,5 @@
 // What the Bench panel shows, worked out from what the server sends. No React here: these are tested as they are.
-import type { BenchMark, BenchMarkStatus, BenchProgress, BenchRun, BenchStatus, ModelRef } from './types'
+import type { BenchMark, BenchMarkStatus, BenchProgress, BenchRun, BenchStatus, ModelRef, SystemStatus } from './types'
 
 /** The groups of cases in the order the table shows them. */
 export const GROUP_LABELS: Record<string, string> = { 'tool-use': 'Tool use', honesty: 'Honesty', scope: 'Scope', stopping: 'Stopping' }
@@ -109,6 +109,46 @@ export function cloudLine(models: ModelRef[]): string | null {
   if (!names.length) return null
   const listed = names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
   return `The prompts of this set are sent to ${listed}.`
+}
+
+/** The programs that run a model on this machine, as a line names them. */
+const PROGRAMS: Record<string, string> = { ollama: 'Ollama', llamacpp: 'llama-server', colibri: 'colibri' }
+
+/** The program on this machine that runs this model; null for a model that runs elsewhere. */
+const runsOn = (m: ModelRef): string | null =>
+  (m.provider === 'ollama' ? (ollamaCloud(m.model) ? null : 'ollama') : OWN_SERVERS.includes(m.provider) ? m.provider : null)
+
+const listed = (names: string[]) => (names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`)
+
+/** A warning before a bench of local models while another program on this machine holds a model in memory: the two
+ * know nothing of each other and share the memory of the machine. A model its own program holds is none: that program makes
+ * room by itself. null when there is nothing to warn of, and while the server has not said what is held. */
+export function sharedLine(models: ModelRef[], s: SystemStatus | null): string | null {
+  if (!s) return null
+  const picked = [...new Set(models.map(runsOn).filter((p): p is string => p !== null))]
+  const holds: [string, string[]][] = [
+    ['ollama', (s.local_models ?? []).map((m) => m.name)],
+    ['llamacpp', (s.llamacpp ?? []).map((m) => m.model)],
+    ['colibri', s.colibri ? [s.colibri.model] : []],
+  ]
+  const lines = holds.map(([program, names]) => {
+    const others = picked.filter((p) => p !== program).map((p) => PROGRAMS[p])
+    if (!names.length || !others.length) return null
+    const free = program === 'ollama'
+      ? `unload ${names.length === 1 ? 'it' : 'them'} first: ${names.map((n) => `\`ollama stop ${n}\``).join(', ')}.`
+      : `stop ${PROGRAMS[program]} first.`
+    return `${PROGRAMS[program]} holds ${listed(names)} in memory now. The models of this bench that run on ${listed(others)} would share `
+      + `the memory of this machine with it: what does not fit the graphics card runs on the processor, which is slow. To have one at a time, ${free}`
+  }).filter((line): line is string => line !== null)
+  return lines.length ? lines.join(' ') : null
+}
+
+/** What the bench that is open is, in the line over its table. `made`: how many of its runs have a mark. The tools
+ * are named once a run has been made: before the first one no model was offered any yet, and "0 tools offered" read
+ * as a bench without tools. */
+export function benchLine(run: BenchRun, made: number): string {
+  const tools = made > 0 || run.tools_offered > 0 ? `, ${many(run.tools_offered, 'tool')} offered` : ''
+  return `${stateWord(run.status)} · ${many(run.models.length, 'model')}, ${many(run.repeats, 'repeat')}${tools}`
 }
 
 export const stateWord = (status: BenchStatus): string =>

@@ -496,7 +496,12 @@ machine by the limit of 4,096 tokens a call long before it. The **Time** row
 of the table is what the model calls of a run took on average: a wait for the machine is
 not in it, so a model that ran after a pause does not look slower for it. A chat on a
 local model during a bench makes both slow. For a model that does not run here, the panel
-says that the prompts of the set are sent to its provider.
+says that the prompts of the set are sent to its provider. And when another program on
+this machine holds a model in memory while you pick one for a bench (llama-server holds
+one and you tick a model of Ollama, or the other way round), the panel says so before you
+start: the two would share the memory, and what does not fit the graphics card runs on the
+processor. It names what to stop or unload first. A model its own program holds is no
+warning: that program makes room by itself.
 
 ### When a server is down, or a command cannot work: no hammering
 

@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import * as api from '../api'
-import { benchTable, cloudLine, handChoice, modelNames, progressLine, seconds, sizeLine, stateWord, verdictLine } from '../bench'
+import { benchLine, benchTable, cloudLine, handChoice, modelNames, progressLine, seconds, sharedLine, sizeLine, stateWord, verdictLine } from '../bench'
 import { confirmBox } from '../dialog'
 import { useStore } from '../store'
 import { visible } from '../tree'
-import type { BenchDetail, BenchListed, BenchResult, BenchRun, BenchSet, ModelRef } from '../types'
+import type { BenchDetail, BenchListed, BenchResult, BenchRun, BenchSet, ModelRef, SystemStatus } from '../types'
 import { Modal } from './Modal'
 
 const POLL_MS = 2000
@@ -79,12 +79,14 @@ export function BenchPanel({ onClose }: { onClose: () => void }) {
   const [cell, setCell] = useState<{ model: ModelRef; caseId: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [machine, setMachine] = useState<SystemStatus | null>(null)       // what holds a model in memory now
 
   const offered = useMemo(() => providers.filter((p) => p.configured && p.models.length > 0), [providers])
   const models: ModelRef[] = offered.flatMap((p) => p.models.map((m) => ({ provider: p.name, model: m.id }))).filter((ref) => picked.includes(keyOf(ref)))
   const set = sets.find((s) => s.id === setId) ?? null       // never one that cannot be used: such a set cannot be picked
   const live = runs.some((r) => r.run.status === 'running') || opened?.run.status === 'running'
   const cloud = cloudLine(models)
+  const shared = sharedLine(models, machine)
 
   const open = useCallback(async (id: string) => {
     try { setOpened(await api.benchRun(id)) } catch (e) { setError(said(e)) }
@@ -94,6 +96,14 @@ export function BenchPanel({ onClose }: { onClose: () => void }) {
     setRuns(got)
     return got
   }
+
+  // Asked when the panel opens and again whenever the pick changes: what is held in memory changes while it is open.
+  const pick = picked.join('\n')
+  useEffect(() => {
+    let stop = false
+    api.systemStatus().then((got) => { if (!stop) setMachine(got) }).catch(() => {})       // without it there is no warning, and that is all
+    return () => { stop = true }
+  }, [pick])
 
   useEffect(() => {
     let stop = false
@@ -201,6 +211,7 @@ export function BenchPanel({ onClose }: { onClose: () => void }) {
           title={live ? 'A bench is running: one at a time' : undefined}>Run</button>
       </div>
       {cloud && <div className="bench-cloud">{cloud}</div>}
+      {shared && <div className="bench-shared">{shared}</div>}
       <div className="hint">A chat on a local model during a bench makes both slow. Your own sets are the .toml files in the bench folder of HunterAI&apos;s data folder.</div>
 
       <h3 className="section">Benches</h3>
@@ -223,7 +234,7 @@ export function BenchPanel({ onClose }: { onClose: () => void }) {
               ? <button className="btn danger" disabled={busy} onClick={() => void cancel(run.id)}>Cancel bench</button>
               : <button className="btn" onClick={() => again(run)} title="Tick these models, this set and these repeats above">Pick these again</button>}
           </div>
-          <div className="hint">{stateWord(run.status)} · {plural(run.models.length, 'model')}, {plural(run.repeats, 'repeat')}, {run.tools_offered} tools offered</div>
+          <div className="hint">{benchLine(run, opened!.marks.length)}</div>
           {run.note && <div className="bench-note">{run.note}</div>}
           {opened?.progress && <div className="bench-progress">{progressLine(opened.progress, run)}</div>}
           <table className="bench-table">
