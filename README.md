@@ -29,7 +29,7 @@ what is missing.
 - Chat with streaming, uploads, history grouped by target, search, edit-and-resend,
   retry, delete, and switchable message versions (nothing is overwritten).
 - Models from abliteration.ai (default), Anthropic, OpenAI, Google, xAI, Ollama, colibri,
-  and the Codex CLI, with per-model options.
+  llama.cpp, and the Codex CLI, with per-model options.
 - Fallback: if abliteration.ai is unreachable, times out, or keeps rate-limiting before
   it has produced any output, the answer comes from a local Ollama model and is labelled.
   The chat is shortened to fit that model's window first, so it still knows what the chat
@@ -663,8 +663,8 @@ What it costs, and what is done about it:
 - An answer that is written again costs the time of the first one. That is why it is done
   once per call and not for as long as it takes.
 
-A colibri server has the context it was started with: nothing grows there. Subagents get
-the chat's window as it is when they start.
+A colibri server and a llama-server have the context they were started with: nothing grows
+there. Subagents get the chat's window as it is when they start.
 
 A larger window keeps more of the chat and costs memory, and how much depends on the model.
 The field in Settings says it for the fallback model of your machine: what each 8,192
@@ -707,7 +707,9 @@ at the first call to a model, at the first call after Ollama dropped it from mem
 minutes without a call, unless Ollama is set otherwise), and when a chat changes to another
 local model. When a part is hot, HunterAI asks Ollama what it holds (`/api/ps`); an Ollama
 that does not say is treated as one that has to load the model. A colibri server holds its
-model for as long as it runs.
+model for as long as it runs. So does a llama-server with one model, unless it was started
+to sleep when idle (`--sleep-idle-seconds`); a llama-server with a folder of models loads
+the one a call names. A call that makes llama-server load a model waits like any other load.
 
 | Variable | Limit of | Unless set |
 |---|---|---|
@@ -729,9 +731,9 @@ What it does not do:
 - Only an NVIDIA card is read. Its driver puts no temperature under `/sys/class/hwmon`, so
   `nvidia-smi` is asked, every two seconds at most. A machine without that program, or
   with another make of card, is guarded by the processor's temperature alone.
-- A model that runs elsewhere is not held up: one of a cloud provider, one of an Ollama or
-  a colibri at another address than this machine's, and the models Ollama runs in its own
-  cloud (their tag ends in `cloud`).
+- A model that runs elsewhere is not held up: one of a cloud provider, one of an Ollama, a
+  colibri or a llama-server at another address than this machine's, and the models Ollama
+  runs in its own cloud (their tag ends in `cloud`).
 - The short calls of the decision model (answer check, risk gate) and the summary of a long
   chat are not looked at.
 - 90 °C and 85 °C are cautious guesses at "too hot to load a model", not figures from the
@@ -800,6 +802,100 @@ tool calls for the GLM and Qwen families, its refusals, a queue that is full, an
 that exits in the middle of an answer. `tests/colibri_wire.py` holds what it sent. Not
 tried: a real model, and a real picture.
 
+### llama.cpp: your own llama-server
+
+`llama-server` is the server of [llama.cpp](https://github.com/ggml-org/llama.cpp). It runs
+a GGUF model file on this machine and answers with an OpenAI-compatible API. You choose
+all of it yourself: the build, the model file, the context, how much of the model goes on
+the graphics card. HunterAI talks to that server; it does not install, start or stop it.
+
+```sh
+llama-server -m ~/models/your-model.gguf -c 32768
+```
+
+It prints the address it listens on: `http://127.0.0.1:9931`, or port 8080 with a build
+from before October 2026. Enter it under **Settings → llama.cpp**. It is written to `.env`
+as `HUNTERAI_LLAMACPP_URL`. Without an address llama.cpp is not used, and nothing is asked
+anywhere. With one, the lines under the field say what answers there, and the model is in
+the model list of every chat, under `llamacpp`.
+
+What HunterAI takes from the server, and nothing else is assumed:
+
+- **The context (`-c`) is all a chat has.** It is settled when llama-server starts, a
+  request and its answer share it, and nothing grows. HunterAI makes a chat fit it as
+  described above, and a request llama-server refuses for its size after all is made
+  smaller and sent once more. llama-server takes the memory of the whole context when it
+  starts (with a model of 0.8 billion parameters it held 1.2 GB at `-c 4096` and 1.9 GB at
+  `-c 65536` before the first request, and a larger model takes more per token), so a
+  larger one is a larger load on the card before the first word. **Always
+  give `-c`:** without it llama-server takes the length the model was trained with
+  (262,144 tokens for the Qwen3.5 model this was tried with), far more than a laptop card
+  holds beside the model. When the rules and tools of a new chat leave less than 8,192
+  tokens of the context, Settings and `scripts/smoke.sh` say which one to start
+  llama-server with. They name it in steps of 4,096 tokens and do not double it: the next
+  power of two above what is needed can be some gigabytes that are never used. While
+  nothing answers at the address, the line under the field shows the start command with
+  that context. With `-np N` the context is divided among N requests at a time (`-c 32768
+  -np 2` leaves 16,384 for a chat): leave `-np` out. And a model gets no more context
+  than it was trained with, however large `-c` is: started with `-c 4096`, a model trained
+  with 2,048 tokens holds 2,048, and HunterAI counts with that.
+- **One model, or a folder of them.** Started with `-m`, llama-server serves that model,
+  and answers with it whatever name a request carries: a chat set to another name is told
+  which model is served, and nothing is sent. Started with `--models-dir folder` and no
+  `-m`, it lists every model file of the folder and loads the one a chat asks for, each
+  in a process of its own; the first answer waits for the load (up to 15 minutes). It
+  keeps up to four models loaded unless `--models-max` says otherwise: on one graphics
+  card start it with `--models-max 1`. Started with `--no-models-autoload` it loads
+  nothing by itself, and a chat on a model that is not loaded is told so.
+- **Sleeping when idle.** Started with `--sleep-idle-seconds N`, llama-server puts its
+  model out of memory after N seconds without a request and loads it again for the next
+  one, as Ollama does after five minutes. HunterAI's look at what it serves (every half
+  minute while the page is open) neither wakes it nor keeps it awake. While it sleeps, the
+  line at the bottom of the sidebar does not name its model, the graphics card is not
+  asked for its temperature, and `scripts/smoke.sh --calls` does not call it.
+- **Tools need a chat template that has them.** llama-server leaves the tools out of a
+  request without a word when the template of the model has no tool calls, and the model
+  then answers as if it had none. Settings and `scripts/smoke.sh` say so for a server
+  with one model. The template of the Qwen3.5 model this was tried with has them.
+- **Whether the model reads pictures.** One that was started with its projector
+  (`--mmproj file.gguf`) says so in its list and gets the pictures of a chat, several in
+  one request. To one that does not, each picture becomes a line that names the
+  `look_at_image` tool.
+- **Thinking** is a switch (Options → Thinking): on, off, or as the model's own template
+  has it when the switch is not set. There is no "Reasoning effort" for a llama.cpp model.
+
+A chat on a llama.cpp model has no subagents: `delegate` and `swarm` are not offered to
+it, as with an Ollama model, and it does the work itself (see "Orchestrator").
+
+When llama-server stops in the middle of an answer (it was closed, or the machine ran out
+of memory), the answer breaks off under a status of success. HunterAI takes an answer that
+was never declared finished for a failure, keeps what came, and says so. The tool calls of
+such an answer are not run.
+
+A key is needed only when llama-server was started with one (`--api-key`): enter it beside
+the address (`LLAMACPP_API_KEY` in `.env`). The address may be another machine;
+llama-server then has to listen on more than this machine (`--host`), and should have a
+key. HunterAI asks it directly: neither the proxy for the model providers nor a proxy
+variable of the environment is used.
+
+Ollama and llama-server know nothing of each other. When each holds a model, they share
+the memory of the machine, and what does not fit the graphics card runs on the processor,
+which is slow and hot. The line at the bottom of the sidebar names both, and pointing at it
+says how to have one at a time (`ollama stop model`, or stop llama-server). To compare the
+two with the same model, run the Bench with one of them at a time.
+
+All of this was held against a real llama-server: llama.cpp built from its source at commit
+`074f1f3` (26 November 2026) and run on the processor with three small models (a story
+model of 260 thousand parameters, tinygemma3 with its projector, and Qwen3.5 0.8B with its
+projector). Its model list alone and with a folder of models, its streams with thinking,
+its tool calls (one, two in one answer, and one after thinking), a tool result, a picture, an
+answer bound to a JSON schema, a request that is too long, a wrong key, a model that is
+not loaded with and without `--no-models-autoload`, a server that sleeps (and that being
+asked for its list does not wake it), the memory it holds at three context sizes, and a
+server killed in the middle of an answer. `tests/llamacpp_wire.py` holds what it sent. Not tried:
+a graphics card, a model of the size you will use, a llama-server on another machine, and
+a folder of models that llama-server downloads itself.
+
 ### Answer check
 
 After a run in a chat that has tools, the decision model reads the final answer next to the
@@ -841,7 +937,7 @@ message, switch "offer notes" off under Settings, "Manage memory".
 
 Where the embedding model runs is Ollama's choice: on the graphics card when there is room.
 Beside a local chat model the two then share that card's memory, and when a program outside
-Ollama holds the card (colibri), the embedding model can fail to load. "Run the embedding
+Ollama holds the card (colibri, llama-server), the embedding model can fail to load. "Run the embedding
 model on the processor" (Settings, Knowledge base; `HUNTERAI_EMBED_ON_CPU=1`) asks Ollama for
 no layer on the card (`num_gpu` 0): the card stays with the chat model and searches find
 the same passages. Embedding is slower there, which shows when a large folder or repository
@@ -1086,7 +1182,7 @@ model that answers with JSON: with one that does not, nothing is marked.
 | `swarm` | Runs 2 to 6 such subagents on independent briefs, three at a time unless you set another number (Settings, 1 to 6: more load this machine and your provider's rate limit); each answer is judged on its own. Offered where `delegate` is, and the decision model has to be a cloud one too, because it checks every answer: with a local decision model a swarm is refused and `delegate` is the tool. A swarm member has no fallback to the local model, no browser (a chat has one), and no `look_at_image`. |
 
 - **A local model works alone.** A subagent runs on the chat's own model. A local model
-  (Ollama, colibri) that delegates would hand the task to itself: it reads the task once
+  (Ollama, colibri, llama.cpp) that delegates would hand the task to itself: it reads the task once
   more from an empty context, on a machine that runs one local model at a time, and
   nothing is won. A chat on a local model is therefore not offered `delegate` or `swarm`
   and is not told of them: it does the work itself, one part after another. The same
@@ -1690,7 +1786,7 @@ How it behaves:
 (`HUNTERAI_PROVIDER_PROXY` in `.env`). It is separate on purpose: what you send to a
 model should not go through a proxy that a program asked for. Anthropic, Gemini, the
 OpenAI-compatible providers, and the Claude and Codex programs use it; Ollama on this
-machine and your colibri server never do.
+machine, your colibri server and your llama-server never do.
 
 **SearXNG** takes a proxy in `~/.hunterai/searxng/settings.yml`:
 
@@ -1716,6 +1812,8 @@ the model itself has:
   that reports nothing keeps the Thinking switch as before.
 - **colibri**: a Thinking switch and no effort list (see "colibri: large models from memory
   and storage").
+- **llama.cpp**: a Thinking switch and no effort list (see "llama.cpp: your own
+  llama-server").
 - **Gemini 3 and later**: the effort is sent as the model's thinking level. A level the
   model does not have becomes the next one up (medium on a model with low and high is
   sent as high), "Thinking: off" is the lowest level the model has, and a thinking
@@ -1865,8 +1963,10 @@ chunker file. `HUNTERAI_SEARXNG_URL` points at another SearXNG. `HUNTERAI_DEV=1`
 ## Requirements
 
 Python 3.12 via [uv](https://docs.astral.sh/uv/), [Bun](https://bun.sh), and optionally
-[Ollama](https://ollama.com) for local models and the fallback, and
-[colibri](https://github.com/JustVugg/colibri) for models larger than this machine's memory.
+[Ollama](https://ollama.com) for local models and the fallback,
+[colibri](https://github.com/JustVugg/colibri) for models larger than this machine's memory,
+and the `llama-server` of [llama.cpp](https://github.com/ggml-org/llama.cpp) for a model
+file you start yourself.
 
 ## Run
 
@@ -1878,7 +1978,7 @@ scripts/dev.sh     # development: hot reload on http://127.0.0.1:5173
 The server listens on 127.0.0.1 only. Set `HUNTERAI_PORT` to use another port.
 
 On a start with no model to talk to (no API key, and no chat model in Ollama) the interface
-opens a **setup check**: one line per part (a model, Ollama, colibri when it has an address, the embedding model, Qdrant,
+opens a **setup check**: one line per part (a model, Ollama, colibri and llama.cpp when they have an address, the embedding model, Qdrant,
 SearXNG, Caido, Camoufox, your tool folder, the MCP servers) with what was found and the
 command or place that fixes it. Only the model is required; each other line switches one
 feature on. It is under Settings → "Setup check" at any time.
@@ -1917,7 +2017,8 @@ An error says what is wrong and what to do about it.
   the wait the provider named), no answer in time, a provider that cannot be reached (the
   connection, the proxy for model providers), Ollama that does not answer (`ollama serve`,
   `ollama ps`), colibri that does not answer (`./start-here.sh` in its folder, the address
-  under Settings), a request the provider did not accept (the model list, Options).
+  under Settings), llama-server that does not answer (start it, the address under
+  Settings), a request the provider did not accept (the model list, Options).
 - **An answer that did not end by itself** has a line under it: cut off at the "Max output
   tokens" of the chat, at the model's own limit for one answer, by the full context window
   of a local model (which holds the request and the answer together), or ended by the
@@ -1942,7 +2043,9 @@ yellow when a part is within ten degrees of its limit (`HUNTERAI_MAX_CPU_TEMP`,
 yellow when a model is partly on the processor, which makes it slow; pointing at the line
 says how Ollama runs each model (in the words of `ollama ps`) and with which window. The
 model a colibri server holds stands in the same line, marked `(colibri)`: it is loaded in
-colibri's own process, so Ollama does not list it. **Findings** next to it lists every finding of every
+colibri's own process, so Ollama does not list it. The models a llama-server holds stand
+there marked `(llama.cpp)`. When Ollama and llama-server each hold a model, pointing at the
+line says that they share this machine's memory, and how to have one at a time. **Findings** next to it lists every finding of every
 target, with filters, and exports what is shown as Markdown (evidence included: read it
 before you send it anywhere). A `swarm` call shows one line per subagent in the chat: its
 brief, whether it waits, works, or is finished, and whether its answer was verified.
@@ -2002,6 +2105,8 @@ shows a key again.
 | `HUNTERAI_OLLAMA_MAX_CTX` | How far that window grows by itself when a chat needs more room (default 131072; `0`: it stays as it is set; Settings writes it) |
 | `HUNTERAI_COLIBRI_URL` | Address of your colibri server (Settings writes it); empty: colibri is not used |
 | `COLIBRI_API_KEY` | Its key, only when colibri was started with one |
+| `HUNTERAI_LLAMACPP_URL` | Address of your llama-server (Settings writes it); empty: llama.cpp is not used |
+| `LLAMACPP_API_KEY` | Its key, only when llama-server was started with one (`--api-key`) |
 | `HUNTERAI_PORT` | Port (default 8790) |
 | `HUNTERAI_HOME` | Data folder (default `~/.hunterai`) |
 | `HUNTERAI_PROVIDER_PROXY` | Proxy the model providers are reached through (see "Your own proxy") |
@@ -2015,7 +2120,7 @@ Chats, uploads, and settings live in `~/.hunterai/` (`hunterai.db` and `uploads/
 ```sh
 scripts/smoke.sh                  # every check that costs nothing
 scripts/smoke.sh --deep           # and a long chat answered by the local model
-scripts/smoke.sh --calls          # and one short request to each cloud provider that is ready, and to colibri
+scripts/smoke.sh --calls          # and one short request to each cloud provider that is ready, to colibri and to llama.cpp
 scripts/smoke.sh --only local,proxy
 ```
 
@@ -2032,6 +2137,7 @@ failed.
 | `local` | The fallback model is told a word and asked for it two messages later, through HunterAI's own code. Also: the window it gets, and where Ollama runs it (CPU, GPU, both). |
 | `window` | How many tokens of rules and tool definitions a new chat sends before the conversation, against the window for local models. With a running HunterAI the tools of your MCP servers are counted too. |
 | `colibri` | Only with an address in Settings: does it answer, which model does it serve, with which context, and does that leave room for a chat beside the rules and tools? With `--calls` it is sent "Reply with the word OK". One that does not answer is a `FAIL` when new chats are set to use it, otherwise a `note`. |
+| `llamacpp` | Only with an address in Settings: does the llama-server answer, which model does it serve (or, for one with a folder of models, which does it have and which are loaded), does its chat template have tool calls, and does its context leave room for a chat beside the rules and tools? With `--calls` a model that is in memory is sent "Reply with the word OK"; one that is not loaded is not called, because the call would load it. One that does not answer is a `FAIL` when new chats are set to use it, otherwise a `note`. |
 | `embeddings` | Does the embedding model answer with numbers? |
 | `qdrant`, `searxng` | Do they answer? SearXNG is asked a real search in the format the tool needs. |
 | `proxy` | Your proxy carries a request: the address sites see through it, the one they see without it, and whether a command started with the proxy variables comes out at the same place. |

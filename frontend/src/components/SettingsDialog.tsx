@@ -1,10 +1,10 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import * as api from '../api'
 import { FONT_NAME, SUGGESTED_FONTS, fontIsHere } from '../font'
 import { proxyTestText } from '../proxy'
 import { useStore } from '../store'
-import { colibriHint, localWindowHint } from '../tree'
-import type { ColibriServer, LocalModel, McpStatus, Settings, ToolInfo } from '../types'
+import { colibriHint, llamaCppHint, localWindowHint } from '../tree'
+import type { LocalModel, McpStatus, Settings, ToolInfo } from '../types'
 import { McpManager } from './McpManager'
 import { MemoryManager } from './MemoryManager'
 import { PersonaManager } from './PersonaManager'
@@ -14,6 +14,7 @@ import { PolicyEditor } from './PermissionsPanel'
 const KEY_LABELS: Record<string, string> = {
   ABLIT_API_KEY: 'abliteration.ai', ANTHROPIC_API_KEY: 'Anthropic', OPENAI_API_KEY: 'OpenAI',
   XAI_API_KEY: 'xAI', GEMINI_API_KEY: 'Google Gemini', COLIBRI_API_KEY: 'colibri key, only when it was started with one',
+  LLAMACPP_API_KEY: 'llama.cpp key, only when llama-server was started with --api-key',
 }
 
 /** One proxy address with its Save and Test buttons. The field holds the address as the server shows it: with the
@@ -103,7 +104,7 @@ function ProxyRow({ settings, onSaved }: { settings: Settings; onSaved: (s: Sett
       <div className="hint">Your own proxy: Burp, mitmproxy, ZAP, a tunnel, or a proxy service (an http:// or socks5:// address, with a user name and password when it asks for them). It is the default; a target can have a proxy of its own, set in the target. Every host is still resolved and checked first (scope, local addresses); the proxy is then asked for the host by name. When the proxy does not carry a connection, nothing is sent directly. Commands get proxy variables that lead to it, through a local address that holds the login: a program that ignores them, or cannot speak through an HTTP proxy (nmap), connects from this machine itself. Not combined with the Caido switch above.</div>
       <ProxyAddress label="Proxy for the model providers" name="Proxy for the model providers" providers
         shown={settings.provider_proxy} kept={settings.provider_proxy_password} save={async (value) => (await put({ provider_proxy: value })).provider_proxy} />
-      <div className="hint">Separate on purpose: what you send to a model does not go through a proxy that a program asked for. Used for Anthropic, Gemini, the OpenAI-compatible providers, and the Claude and Codex programs; written to .env as HUNTERAI_PROVIDER_PROXY. Ollama on this machine and your colibri server are never sent through it.</div>
+      <div className="hint">Separate on purpose: what you send to a model does not go through a proxy that a program asked for. Used for Anthropic, Gemini, the OpenAI-compatible providers, and the Claude and Codex programs; written to .env as HUNTERAI_PROVIDER_PROXY. Ollama on this machine, your colibri server and your llama-server are never sent through it.</div>
     </>
   )
 }
@@ -204,24 +205,31 @@ function KeyRow({ name, isSet, onSaved }: { name: string; isSet: boolean; onSave
   )
 }
 
-/** The owner's colibri server: its address (`saved`: the one in use, "" for none), what answers there, and the key
- * it wants when it was started with one (`keySet`: one is stored). `save` answers with the address as the server
- * keeps it and rejects with the server's reason; `keySaved` reloads the settings after a key was stored. */
-function Colibri({ saved, keySet, save, keySaved }: { saved: string; keySet: boolean; save(address: string): Promise<string>; keySaved(): Promise<void> }) {
+/** A server of the owner's own that HunterAI asks at an address (colibri, llama-server): the address (`saved`: the
+ * one in use, "" for none), what answers there, and the key it wants when it was started with one (`keySet`: one is
+ * stored). `kind` names the section in the page, `title` the field and `field` the field for a screen reader.
+ * `ask` asks the server at the saved address what it serves, and `hint` puts the answer in words. `save` answers with
+ * the address as the server keeps it and rejects with the server's reason; `keySaved` reloads the settings after a
+ * key was stored. The children are what the section says about the server whatever answers. */
+function OwnServer<S>({ kind, title, field, placeholder, keyName, saved, keySet, save, keySaved, ask, hint, children }: {
+  kind: string; title: string; field: string; placeholder: string; keyName: string; saved: string; keySet: boolean
+  save(address: string): Promise<string>; keySaved(): Promise<void>; ask(): Promise<S>
+  hint(server: S | null, keySet: boolean): { lines: string[]; warn: string | null }; children: ReactNode
+}) {
   const [value, setValue] = useState(saved)
-  const [server, setServer] = useState<ColibriServer | null>(null)
+  const [server, setServer] = useState<S | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState<'' | 'save' | 'check'>('')
   const refreshProviders = useStore((s) => s.refreshProviders)
   const changed = value.trim() !== saved
   const look = async () => {
-    setServer(await api.systemColibri())
+    setServer(await ask())
     await refreshProviders()            // the model list of the chats follows what answers there now
   }
   useEffect(() => {                     // asked when Settings opens with an address, and after one was saved (the key of this component is the address)
     if (!saved) return
     let gone = false
-    api.systemColibri().then((found) => { if (!gone) { setServer(found); void refreshProviders().catch(() => {}) } }).catch(() => {})
+    ask().then((found) => { if (!gone) { setServer(found); void refreshProviders().catch(() => {}) } }).catch(() => {})
     return () => { gone = true }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
   const run = async (what: 'save' | 'check') => {
@@ -236,13 +244,13 @@ function Colibri({ saved, keySet, save, keySaved }: { saved: string; keySet: boo
       setBusy('')
     }
   }
-  const { lines, warn } = colibriHint(server, keySet)
+  const { lines, warn } = hint(server, keySet)
   return (
-    <div className="colibri">
+    <div className={kind}>
       <div className="keyrow">
         <label className="field">
-          <span>Address of your colibri server · <b className={saved ? 'state-on' : 'state-off'}>{saved ? 'in use' : 'none'}</b></span>
-          <input className="mono" spellCheck={false} autoComplete="off" value={value} aria-label="colibri address" placeholder="http://127.0.0.1:8000"
+          <span>{title} · <b className={saved ? 'state-on' : 'state-off'}>{saved ? 'in use' : 'none'}</b></span>
+          <input className="mono" spellCheck={false} autoComplete="off" value={value} aria-label={field} placeholder={placeholder}
             onChange={(e) => setValue(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && changed && void run('save')} />
         </label>
         <div className="row">
@@ -253,8 +261,8 @@ function Colibri({ saved, keySet, save, keySaved }: { saved: string; keySet: boo
       {error && <div className="ask-warning" role="alert">{error}</div>}
       {!changed && lines.map((line) => <div key={line} className="hint" role="status">{line}</div>)}
       {!changed && warn && <div className="ask-warning" role="alert">{warn}</div>}
-      <KeyRow name="COLIBRI_API_KEY" isSet={keySet} onSaved={async () => { await keySaved(); await look().catch(() => {}) }} />
-      <div className="hint">colibri (github.com/JustVugg/colibri) runs large models on this machine: what fits is held in memory and the rest is read from storage. It is installed and started with its own setup (./start-here.sh in the colibri folder), which ends by printing its addresses: enter the one it calls the OpenAI base URL here. It serves one model, and that model is then in the model list of every chat. HunterAI asks it directly, never through a proxy. Empty: colibri is not used. Written to .env as HUNTERAI_COLIBRI_URL.</div>
+      <KeyRow name={keyName} isSet={keySet} onSaved={async () => { await keySaved(); await look().catch(() => {}) }} />
+      <div className="hint">{children}</div>
     </div>
   )
 }
@@ -290,6 +298,15 @@ export function SettingsDialog({ onClose, onSetup }: { onClose: () => void; onSe
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
+  }
+
+  /** Saves the address of one of the owner's own servers; answers with it as the server keeps it. */
+  const address = (field: 'colibri_url' | 'llamacpp_url') => async (typed: string): Promise<string> => {
+    const s = await api.putSettings({ [field]: typed })
+    setSettings(s)
+    useStore.setState({ settings: s })
+    if (!s[field]) await refreshProviders().catch(() => {})     // cleared: nothing is asked any more, and the model list has to drop what it served
+    return s[field] ?? ''
   }
 
   const usable = providers.filter((p) => p.configured)
@@ -371,15 +388,19 @@ export function SettingsDialog({ onClose, onSetup }: { onClose: () => void; onSe
             // The page is newer than the server: after an update the server was not started again. Its settings
             // lack what this page added, and it would refuse an address that was sent to it.
             ? <div className="colibri hint">The HunterAI server that answers is from before it knew colibri. Start it again (press Ctrl+C where it runs, then scripts/start.sh), reload this page, and the address of your colibri server is set here.</div>
-            : <Colibri key={settings.colibri_url} saved={settings.colibri_url} keySet={settings.colibri_key_set === true}
-                save={async (address) => {
-                  const s = await api.putSettings({ colibri_url: address })
-                  setSettings(s)
-                  useStore.setState({ settings: s })
-                  if (!s.colibri_url) await refreshProviders().catch(() => {})     // cleared: nothing is asked any more, and the model list has to drop what it served
-                  return s.colibri_url ?? ''
-                }}
-                keySaved={reload} />}
+            : <OwnServer key={settings.colibri_url} kind="colibri" title="Address of your colibri server" field="colibri address" placeholder="http://127.0.0.1:8000"
+                keyName="COLIBRI_API_KEY" saved={settings.colibri_url} keySet={settings.colibri_key_set === true}
+                save={address('colibri_url')} keySaved={reload} ask={api.systemColibri} hint={colibriHint}>
+                colibri (github.com/JustVugg/colibri) runs large models on this machine: what fits is held in memory and the rest is read from storage. It is installed and started with its own setup (./start-here.sh in the colibri folder), which ends by printing its addresses: enter the one it calls the OpenAI base URL here. It serves one model, and that model is then in the model list of every chat. HunterAI asks it directly, never through a proxy. Empty: colibri is not used. Written to .env as HUNTERAI_COLIBRI_URL.
+              </OwnServer>}
+          <h3 className="section">llama.cpp</h3>
+          {settings.llamacpp_url === undefined
+            ? <div className="llamacpp hint">The HunterAI server that answers is from before it knew llama.cpp. Start it again (press Ctrl+C where it runs, then scripts/start.sh), reload this page, and the address of your llama-server is set here.</div>
+            : <OwnServer key={settings.llamacpp_url} kind="llamacpp" title="Address of your llama-server" field="llama.cpp address" placeholder="http://127.0.0.1:9931"
+                keyName="LLAMACPP_API_KEY" saved={settings.llamacpp_url} keySet={settings.llamacpp_key_set === true}
+                save={address('llamacpp_url')} keySaved={reload} ask={api.systemLlamaCpp} hint={llamaCppHint}>
+                llama-server is the server of llama.cpp (github.com/ggml-org/llama.cpp): it runs a GGUF model on this machine without Ollama in between. You install and start it yourself, with the model and the context you choose, and enter the address it prints when it starts (port 9931, or 8080 with a build from before October 2026). With an address saved, this section says which context (-c) leaves room for a chat here; the context is settled when llama-server starts and does not grow, and all of its memory is taken at the start. Its model is then in the model list of every chat, under llamacpp. Started with a folder of models and none named (--models-dir), it lists every model of the folder and loads the one a chat asks for. HunterAI asks it directly, never through a proxy. Empty: llama.cpp is not used. Written to .env as HUNTERAI_LLAMACPP_URL.
+              </OwnServer>}
           <h3 className="section">Images</h3>
           <label className="field"><span>Local model that reads images for the look_at_image tool (an Ollama model name; empty: the first installed one that can)</span>
             <input className="mono" defaultValue={settings.vision_model ?? ''} placeholder="automatic" onBlur={(e) => { if (e.target.value.trim() !== (settings.vision_model ?? '')) update({ vision_model: e.target.value.trim() }) }} /></label>
@@ -443,7 +464,7 @@ export function SettingsDialog({ onClose, onSetup }: { onClose: () => void; onSe
                     {standInModels.map((m) => <option key={m.id} value={m.id}>{m.id}</option>)}
                   </select>
                 </label>)}
-              <div className="hint">A chat on a local model (Ollama, colibri) has no subagents by itself: a subagent would be that same model starting again from an empty context. With a cloud model chosen here, the delegate and swarm tools of such a chat work on it. What a subagent reads and does (the task, the tool results, pages of the target) then goes to that provider. After a subagent that failed or did not do its task, the local model does the rest of that run itself.
+              <div className="hint">A chat on a local model (Ollama, colibri, llama.cpp) has no subagents by itself: a subagent would be that same model starting again from an empty context. With a cloud model chosen here, the delegate and swarm tools of such a chat work on it. What a subagent reads and does (the task, the tool results, pages of the target) then goes to that provider. After a subagent that failed or did not do its task, the local model does the rest of that run itself.
                 {standInLost ? ` ${settings.subagent_provider} has no key now: until it has one, a local model works alone.` : ''}</div>
             </>)}
           <div className="field"><span>MCP servers</span>

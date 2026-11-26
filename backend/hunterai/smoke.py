@@ -30,7 +30,7 @@ import httpx
 from . import config, db, engine, hop, problems, upstream
 from .api import system as system_api
 from .kb import embed
-from .providers import colibri, ollama, registry
+from .providers import colibri, llamacpp, ollama, registry
 from .providers.base import ModelInfo, Options, ProviderError, Stop, TextDelta, Usage, WireMessage
 from .repo import settings
 from .tools.base import ToolError
@@ -409,6 +409,72 @@ async def _check_proxy(env: Env) -> list[Result]:
         await hop.shutdown()
 
 
+# ---- llama.cpp
+
+async def _check_llamacpp(env: Env) -> list[Result]:
+    """llama.cpp, when the owner gave the address of his llama-server: whether it answers, what it serves, whether the
+    chat template has tool calls, whether its context holds the rules and tools of a new chat with room for the chat,
+    and with --calls whether a model it holds in memory answers a request (one that is not loaded, or that a sleeping
+    server put out of memory, is not called: the call would load it)."""
+    name = "llama.cpp"
+    provider = registry.get(llamacpp.NAME)
+    seen = await provider.served(fresh=True)
+    if seen.state == "off":
+        return [Result(name, "skip", "no address is set for it (Settings, llama.cpp)")]
+    if seen.state == "down":
+        if await settings.get(env.conn, "default_provider") == llamacpp.NAME:
+            return [Result(name, "FAIL", f"{llamacpp.why(seen)}, and new chats are set to use it: start llama-server")]
+        return [Result(name, "note", f"{llamacpp.why(seen)}: start llama-server when you want to use it")]
+    if seen.state == "loading":
+        return [Result(name, "note", f"{llamacpp.why(seen)}: run the check again in a moment")]
+    if seen.state != "ok":          # something answers there, and not as a llama-server with a chat model would
+        return [Result(name, "FAIL", f"{llamacpp.why(seen)} (the address is {seen.at}: Settings, llama.cpp)")]
+    loaded = [h for h in seen.held if h.loaded]
+    if seen.router:
+        names = ", ".join(h.info.id for h in seen.held[:6]) + (f" and {len(seen.held) - 6} more" if len(seen.held) > 6 else "")
+        now = "loaded now: " + ", ".join(h.info.id for h in loaded) if loaded else "none loaded now"
+        out = [Result(name, "ok", f"a router at {seen.at} with {len(seen.held)} model{'s' if len(seen.held) > 1 else ''}, {now}: {names}")]
+    else:
+        model = seen.models[0]
+        reads = "reads pictures" if model.supports_images else "reads text only"
+        window = f"a context of {model.context_window:,} tokens" if model.context_window else "a context it does not name"
+        out = [Result(name, "ok", f"{model.id} at {seen.at}, {window}, {reads}")]
+        if await provider.sleeping():       # its list names the model all the same
+            loaded = []
+            out.append(Result(name, "note", "it put its model out of memory for being idle (--sleep-idle-seconds): the next "
+                                            "request loads it again"))
+        tools = await provider.has_tools()
+        if tools is False:
+            out.append(Result(name, "FAIL", "its chat template has no tool calls, so the model cannot use HunterAI's tools: start "
+                                            "llama-server with a model whose template has them, or give it one (--chat-template-file)"))
+        elif tools:
+            out.append(Result(name, "ok", "its chat template has tool calls"))
+    tokens, _, _ = await _overhead(env)
+    said = f"a new chat sends about {tokens:,} tokens of rules and tools"
+    known = [h.info for h in seen.held if h.info.context_window]
+    small = [m.id for m in known if m.context_window < tokens + ROOM]
+    if small:
+        whom = f" with {', '.join(small[:6])}" if seen.router else ""
+        out.append(Result(name, "FAIL", f"{said}, which leaves too little of the context for the chat{whom}: start llama-server "
+                                        f"with a larger one (-c {llamacpp.context_for(tokens + ROOM)}; a larger context needs more memory)"))
+    elif known:
+        out.append(Result(name, "ok", f"{said}, which leaves room for the chat"))
+    if not env.calls:
+        return [*out, Result(name, "skip", "not called: run with --calls to send it one short request")]
+    if not loaded:
+        return [*out, Result(name, "skip", "not called: no model is loaded, and a call would load one")]
+    model = loaded[0].info
+    try:
+        _, used, seconds = await _answer(provider, model.id, "", [WireMessage("user", [TextBlock(text="Reply with the word OK.")])],
+                                         Options(max_tokens=16, thinking=False))     # the tokens are for the word
+        out.append(Result(name, "ok", f"{model.id} answered in {seconds:.1f} s ({used.input_tokens:,} tokens in, "
+                                      f"{used.output_tokens:,} out)"))
+    except ProviderError as e:
+        e.provider, e.model = llamacpp.NAME, model.id
+        out.append(Result(name, "FAIL", problems.model_call(e)))
+    return out
+
+
 # ---- the model providers
 
 def _cloud_providers() -> list:
@@ -416,7 +482,7 @@ def _cloud_providers() -> list:
     out = []
     for p in registry.all():
         try:
-            if p.name not in ("ollama", colibri.NAME, "mock") and p.configured():
+            if p.name not in ("ollama", colibri.NAME, llamacpp.NAME, "mock") and p.configured():
                 out.append(p)
         except Exception:  # noqa: BLE001 - one broken provider must not hide the others
             pass
@@ -545,7 +611,7 @@ class Check:
 
 CHECKS: dict[str, Check] = {
     "server": Check(_check_server), "ollama": Check(_check_ollama), "local": Check(_check_local), "window": Check(_check_window),
-    "colibri": Check(_check_colibri),
+    "colibri": Check(_check_colibri), "llamacpp": Check(_check_llamacpp),
     "embeddings": Check(_check_embeddings), "qdrant": Check(_check_qdrant), "searxng": Check(_check_searxng),
     "proxy": Check(_check_proxy), "providers": Check(_check_providers), "chat": Check(_check_long_chat, deep=True),
 }

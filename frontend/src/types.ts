@@ -309,6 +309,11 @@ export interface Settings {
   colibri_url?: string
   /** A key is stored for it. It is never sent to the page. */
   colibri_key_set?: boolean
+  /** Where the owner's llama-server is, as it is reached ("http://127.0.0.1:9931"); "" while llama.cpp is not used.
+   * Absent: the server that answers is from before it knew llama.cpp (it was updated and not started again). */
+  llamacpp_url?: string
+  /** A key is stored for it. It is never sent to the page. */
+  llamacpp_key_set?: boolean
   /** The embedding model of the knowledge base and of memory runs on the processor, not on the graphics card.
    * Absent: a server from before it knew of this. */
   embed_on_cpu?: boolean
@@ -646,6 +651,9 @@ export interface SystemStatus {
   /** The model a colibri server holds now, with its context. Null: no address is set, or what is there serves no
    * model to chat with. Absent: a server from before it asked colibri. */
   colibri?: { model: string; context: number | null } | null
+  /** The models a llama-server holds in memory now, each with its context: none for a router that has loaded none.
+   * Null: no address is set, or what is there serves no model to chat with. Absent: a server from before it asked. */
+  llamacpp?: { model: string; context: number | null }[] | null
   /** The server's code changed on disk after it started. Absent: a server from before it could tell. */
   restart_needed?: boolean
   /** The parts that were in use and do not run now: a service beside HunterAI that answered within the last week,
@@ -680,6 +688,30 @@ export interface ColibriServer {
   images: boolean              // the model reads pictures
   overhead: number | null      // what a new chat sends before the conversation, in tokens
   enough: number | null        // the context to start it with, when its own leaves no room for a chat
+}
+
+/** One model a llama-server lists. */
+export interface LlamaModel {
+  id: string
+  context: number | null       // the tokens one request to it has; null when the server does not say
+  images: boolean              // it reads pictures
+  loaded: boolean              // it is in memory now (a router loads a model when a chat asks for it)
+  failed: boolean              // the router tried to load it and could not
+  enough: number | null        // the context to start llama-server with, when this one leaves no room for a chat
+}
+
+/** What the llama-server at the address in Settings says of itself, for the lines under that address. */
+export interface LlamaServer {
+  url: string
+  /** off: no address is set. down: nothing answers. loading: it is still loading its model. key: it wants a key it
+   * was not given. odd: what answers is not llama-server. nomodel: it has no model to chat with. ok: `models`. */
+  state: 'off' | 'down' | 'loading' | 'key' | 'odd' | 'nomodel' | 'ok'
+  said: string                 // why it serves nothing to chat with, in words; '' for off and ok
+  router: boolean              // it was started with a folder of models and loads the one a chat asks for
+  models: LlamaModel[]
+  tools: boolean | null        // the chat template of a server with one model has tool calls; null: it does not say
+  overhead: number             // what a new chat sends before the conversation, in tokens
+  start_with: number           // the smallest context (-c) that holds that with room for a chat
 }
 
 export interface CheckupItem {

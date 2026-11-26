@@ -48,7 +48,7 @@ MAX_SUBAGENTS_PER_RUN = 8
 SWARM_NAME = "swarm"
 SWARM_WIDTH = 3                   # subagents of one swarm that run at the same time, until the owner sets another number
 SWARM_MAX_TASKS = 6
-LOCAL_PROVIDERS = frozenset({de.FALLBACK_PROVIDER, problems.COLIBRI})      # a model on the owner's own machine or server
+LOCAL_PROVIDERS = frozenset({de.FALLBACK_PROVIDER, problems.COLIBRI, problems.LLAMACPP})      # a model on the owner's own machine or server
 ALONE = ("a local model works alone: a subagent would be that same model starting again from an empty context. "
          "Do this work yourself with your own tools, one part after another.")
 NO_MORE = "Do the rest of this work yourself with your own tools: no further subagent is started in this run."

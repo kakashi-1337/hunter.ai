@@ -1,6 +1,6 @@
 import type { ProxyTest, Skill, SkillInspection } from './types'
 import type {
-  ActivitySummary, QueuedMessage, CaidoExchange, CaidoRow, CaidoStatus, Checkup, ColibriServer, FindingRow, LocalModel, SystemStatus,
+  ActivitySummary, QueuedMessage, CaidoExchange, CaidoRow, CaidoStatus, Checkup, ColibriServer, FindingRow, LlamaServer, LocalModel, SystemStatus,
   Memory, MemorySettings,
   Persona,
   McpCheck, McpInspection, McpReview, McpScan, McpServer,
@@ -101,7 +101,7 @@ export const uploadUrl = (id: string) => `/api/uploads/${id}`
 export const search = (text: string) => request<SearchHit[]>('GET', `/api/search${q({ q: text })}`)
 export const listProviders = () => request<ProviderInfo[]>('GET', '/api/providers')
 export const getSettings = () => request<Settings>('GET', '/api/settings')
-export const putSettings = (patch: Partial<Pick<Settings, 'default_provider' | 'default_model' | 'fallback_model' | 'permissions' | 'max_turns' | 'swarm_width' | 'subagent_provider' | 'subagent_model' | 'embed_on_cpu' | 'decision_provider' | 'decision_model' | 'decision_gate' | 'kb_redact' | 'kb_skip_generated' | 'interface_font' | 'kb_lookup' | 'web_lookup' | 'vision_model' | 'browser_via_caido' | 'answer_check' | 'mcp_on_demand' | 'notify_findings' | 'notify_min_severity' | 'decision_engine' | 'colibri_url'>> & { local_window?: number | null; local_window_max?: number | null }) =>
+export const putSettings = (patch: Partial<Pick<Settings, 'default_provider' | 'default_model' | 'fallback_model' | 'permissions' | 'max_turns' | 'swarm_width' | 'subagent_provider' | 'subagent_model' | 'embed_on_cpu' | 'decision_provider' | 'decision_model' | 'decision_gate' | 'kb_redact' | 'kb_skip_generated' | 'interface_font' | 'kb_lookup' | 'web_lookup' | 'vision_model' | 'browser_via_caido' | 'answer_check' | 'mcp_on_demand' | 'notify_findings' | 'notify_min_severity' | 'decision_engine' | 'colibri_url' | 'llamacpp_url'>> & { local_window?: number | null; local_window_max?: number | null }) =>
   request<Settings>('PUT', '/api/settings', patch)
 /** The owner's own proxy for the agent's web traffic. The server refuses an address it cannot use and says why. */
 export const putProxy = (proxy: Partial<Pick<Settings, 'upstream_proxy' | 'upstream_proxy_intercepts' | 'upstream_proxy_kb' | 'provider_proxy'>>) =>
@@ -231,6 +231,8 @@ export const systemCheckup = () => request<Checkup>('GET', '/api/system/checkup'
 export const systemLocal = () => request<LocalModel>('GET', '/api/system/local')
 /** Asks the colibri server at the address in Settings what it serves. The server makes its list of models anew too. */
 export const systemColibri = () => request<ColibriServer>('GET', '/api/system/colibri')
+/** Asks the llama-server at the address in Settings what it serves. The server makes its list of models anew too. */
+export const systemLlamaCpp = () => request<LlamaServer>('GET', '/api/system/llamacpp')
 /** The parts that do not run now are not announced again until they have run again. */
 export const hideStopped = () => request<{ stopped: { id: string; label: string }[] }>('POST', '/api/system/stopped/hide')
 /** The state of this install as text for a report: versions, what runs and what does not. No key, proxy address, target or message. */

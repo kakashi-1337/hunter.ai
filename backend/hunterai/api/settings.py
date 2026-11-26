@@ -11,7 +11,7 @@ from pydantic import BaseModel, StrictInt, ValidationError
 from .. import answer_check, caido, config, engine, envfile, notify, permissions, problems, stale, subagents, weblookup
 from ..kb import embed
 from ..tools import on_demand
-from ..providers import colibri, ollama, registry
+from ..providers import colibri, llamacpp, ollama, registry
 from . import providers as providers_api
 from ..repo import kb as kb_repo
 from ..repo import settings
@@ -23,7 +23,9 @@ router = APIRouter(prefix="/api/settings")
 
 KEY_NAMES = ["ABLIT_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "XAI_API_KEY",
              "GEMINI_API_KEY"]
-SECRET_NAMES = [*KEY_NAMES, notify.KEY, colibri.KEY_ENV]      # what Settings may write to the .env file
+SECRET_NAMES = [*KEY_NAMES, notify.KEY, colibri.KEY_ENV, llamacpp.KEY_ENV]      # what Settings may write to the .env file
+# The servers of the owner's own that have an address in Settings: the field of the request, the module, and its name in words.
+OWN_SERVERS = (("colibri_url", colibri, "colibri"), ("llamacpp_url", llamacpp, "llama.cpp"))
 # The name of a font, and nothing that could be more than a name where the page puts it into its style.
 FONT_NAME = re.compile(r"[^\W_][\w .+\-]{0,59}")
 
@@ -59,6 +61,7 @@ class SettingsIn(BaseModel):
     upstream_proxy_kb: bool | None = None   # knowledge crawls go through the proxy too (off: they connect directly)
     provider_proxy: str | None = None       # the proxy the model providers are reached through; "" for none
     colibri_url: str | None = None          # where the owner's colibri server is; "" for none (colibri is then not used)
+    llamacpp_url: str | None = None         # where the owner's llama-server is; "" for none (llama.cpp is then not used)
     decision_engine: bool | None = None     # the built-in decide_* tools and the risk gate (off: another engine is used)
     embed_on_cpu: bool | None = None        # the embedding model runs on the processor, not on the graphics card
     subagent_provider: str | None = None    # the cloud model that does the subagent work of a chat on a local model;
@@ -126,6 +129,8 @@ async def _view(conn) -> dict:
         "provider_proxy_password": bool(models_via and models_via.password),
         "colibri_url": colibri.address() or "",
         "colibri_key_set": bool(config.env(colibri.KEY_ENV)),
+        "llamacpp_url": llamacpp.address() or "",
+        "llamacpp_key_set": bool(config.env(llamacpp.KEY_ENV)),
         "embed_on_cpu": embed.on_cpu(),
         "subagent_provider": await settings.get(conn, "subagent_provider") or None,
         "subagent_model": await settings.get(conn, "subagent_model") or None,
@@ -185,16 +190,20 @@ async def put_settings(body: SettingsIn, conn=Depends(get_conn)):
     if chosen and chosen not in subagents.stand_in_providers():
         raise HTTPException(400, "The subagents of a chat on a local model can be given to a cloud provider that uses tools ("
                                  + ", ".join(subagents.stand_in_providers()) + f"); {chosen} is not one.")
-    at = fields.pop("colibri_url", None)
-    if at is not None and at.strip():
-        try:
-            at = colibri.typed(at)
-        except ValueError as e:
-            raise HTTPException(400, f"colibri address: {e}") from None
+    addresses: dict[str, str] = {}         # the name in the .env file of each address that was sent, and the address
+    for field, server, name in OWN_SERVERS:
+        at = fields.pop(field, None)
+        if at is not None and at.strip():
+            try:
+                at = server.typed(at)
+            except ValueError as e:
+                raise HTTPException(400, f"{name} address: {e}") from None
+        if at is not None:
+            addresses[server.URL_ENV] = at
     if {"upstream_proxy", "upstream_proxy_intercepts"} & fields.keys() or fields.get("browser_via_caido"):
         await _put_proxy(conn, fields)
-    if at is not None:
-        envfile.set_var(config.env_file(), colibri.URL_ENV, at.strip())
+    for name, at in addresses.items():
+        envfile.set_var(config.env_file(), name, at)
         registry._instances.clear()      # what the last server said of itself is not what this one says
         providers_api.clear_cache()
     if typed is not None:
