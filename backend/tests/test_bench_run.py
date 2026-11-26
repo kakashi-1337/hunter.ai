@@ -869,3 +869,31 @@ async def test_the_request_can_be_built_without_a_call(conn):
     request = await run.request_for(conn, "scripted", "m", case(target=SHOP))
     assert "Current target: Shop" in request.system and model.seen == []
     assert [spec.name for spec in request.specs] == request.names and "execute" in request.names
+
+
+# ---- what the model thought last
+
+async def test_the_thinking_of_the_last_call_is_kept_and_not_that_of_a_call_before_it(conn):
+    """A run without an answer showed "No answer." and nothing else: what the model wrote instead was not kept."""
+    use([ThinkingDelta("First I look it up."), *LOOKUP],
+        [ThinkingDelta("Nothing came back, "), ThinkingDelta("so there is none."), *says("There is no record of it.")])
+    t = (await go(conn)).transcript
+    assert (t.answer, t.thinking) == ("There is no record of it.", "Nothing came back, so there is none.")
+
+
+async def test_a_run_that_was_cut_off_while_it_thought_keeps_what_it_thought(conn, on_this_machine):
+    use([ThinkingDelta("1, 2, 3, 4, 5,"), Usage(10, 4096), Stop("length")])
+    t = (await go(conn)).transcript
+    assert (t.cut_off, t.answer, t.thinking) == (True, "", "1, 2, 3, 4, 5,")
+
+
+async def test_a_run_that_stayed_thinking_only_keeps_the_thinking_of_both_askings(conn):
+    use(thinks("It has no record, so"), thinks("there is none, I think."))
+    t = (await go(conn)).transcript
+    assert (t.answer, t.asked_again) == ("", True)
+    assert "It has no record, so" in t.thinking and "there is none, I think." in t.thinking
+
+
+async def test_a_run_whose_last_call_did_not_think_keeps_none(conn):
+    use([ThinkingDelta("First I look it up."), *LOOKUP], says("There is no record of it."))
+    assert (await go(conn)).transcript.thinking == ""

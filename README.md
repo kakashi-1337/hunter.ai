@@ -474,7 +474,10 @@ prompt = "what is CVE-2026-109618 and CVE-2026-109619? what does these 2 CVE exp
 | `max_turns` (on the case; 8 when left out, 12 at most) | the model answered within this many model calls |
 
 The answer is what the model said after its last tool result; its thinking is not part of
-it, and a note it makes in the goal record after answering does not hide the answer. A turn
+it, and a note it makes in the goal record after answering does not hide the answer. The
+end of what the model thought in its last call is kept with the run all the same (4,000
+characters at most), and the runs of a cell show it: folded beside an answer, open for a
+run without one, where it says what the model wrote instead. No rule reads it. A turn
 that ended with thinking only is asked once more with thinking off, as a chat does it
 ("A turn that is thinking and nothing else"): the bench measures what a chat gets from the
 model. Such a run says so in a line under its mark, the second call is not counted as a

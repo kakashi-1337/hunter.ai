@@ -313,3 +313,52 @@ async def test_what_a_bench_was_started_with_goes_with_it(conn):
     assert (await (await conn.execute("select count(*) from bench_options")).fetchone())[0] == 1
     await bench.delete(conn, off.id)
     assert (await (await conn.execute("select count(*) from bench_options")).fetchone())[0] == 0
+
+
+# ---- what the model thought last
+
+def thought(text: str, answer: str = "") -> Transcript:
+    t = ran(answer=answer)
+    t.thinking = text
+    return t
+
+
+async def kept(conn) -> int:
+    return (await (await conn.execute("select count(*) from bench_thinking")).fetchone())[0]
+
+
+async def test_the_end_of_a_long_thinking_is_kept_with_its_result(conn):
+    made = await bench.create(conn, a_set(), [QWEN], 1)
+    long = "a" * 5000 + " and so there is no record."
+    got = await bench.add_result(conn, made.id, QWEN, "c0", 1, "fail", ["gave no answer"], thought(long), 10)
+    assert bench.THINKING_CHARS == 4000 and got.thinking == "…" + long[-4000:]        # the end: where the model was when it stopped
+    assert [r.thinking for r in await bench.cell(conn, made.id, QWEN, "c0")] == [got.thinking]
+    assert [r.thinking for r in await bench.results(conn, made.id)] == [got.thinking]
+
+
+async def test_a_short_thinking_is_kept_whole(conn):
+    made = await bench.create(conn, a_set(), [QWEN], 1)
+    got = await bench.add_result(conn, made.id, QWEN, "c0", 1, "pass", [], thought("It has no record.", "No record."), 10)
+    assert got.thinking == "It has no record." and await kept(conn) == 1
+
+
+async def test_a_run_that_did_not_think_and_one_that_was_never_made_keep_nothing(conn):
+    made = await bench.create(conn, a_set(), [QWEN], 1)
+    one = await bench.add_result(conn, made.id, QWEN, "c0", 1, "pass", [], ran(), 10)
+    two = await bench.add_result(conn, made.id, QWEN, "c1", 1, "skipped", ["skipped"])
+    assert (one.thinking, two.thinking) == ("", "") and await kept(conn) == 0
+
+
+async def test_the_thinking_of_a_run_goes_with_its_bench(conn):
+    made = await bench.create(conn, a_set(), [QWEN], 1)
+    await bench.add_result(conn, made.id, QWEN, "c0", 1, "fail", ["gave no answer"], thought("It has no record."), 10)
+    assert await kept(conn) == 1
+    await bench.delete(conn, made.id)
+    assert await kept(conn) == 0
+
+
+async def test_a_mark_set_by_hand_leaves_the_thinking_where_it_is(conn):
+    made = await bench.create(conn, a_set(), [QWEN], 1)
+    got = await bench.add_result(conn, made.id, QWEN, "c0", 1, "fail", ["x"], thought("It has no record.", "None."), 10)
+    marked = await bench.set_mark(conn, got.id, "pass")
+    assert (marked.by_hand, marked.thinking) == ("pass", "It has no record.")

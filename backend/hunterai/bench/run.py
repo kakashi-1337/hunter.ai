@@ -176,6 +176,7 @@ async def run_case(conn, provider_name: str, model: str, case: Case, tell: Tell 
     limit = score.OUTPUT_LIMIT if here else None     # a provider elsewhere has limits of its own
     t = Transcript(calls=[], answer="", turns=0, finished=False, limit=limit)
     answer_from = 0             # where in `blocks` the answer begins: after the last result of a tool that is no bookkeeping
+    last_from = 0               # where in `blocks` the last model call began to write
     spent = 0.0                 # seconds the model calls took; the wait for a hot machine is not the model's time
     quiet = thinking_off        # thinking is off: for the whole run when the bench says so, else from a turn of thinking only on
 
@@ -205,7 +206,7 @@ async def run_case(conn, provider_name: str, model: str, case: Case, tell: Tell 
             window = await context.roomier(provider_name, model, request.system, wire, Options(context_window=window or None),
                                            request.specs) or window
             options = Options(context_window=window or None, thinking=False if quiet else None, max_tokens=limit)
-            began_at = len(blocks)
+            began_at = last_from = len(blocks)
             reply = await ask(wire, options)
             if reply is not None and not quiet and problems.only_thought(blocks[began_at:], reply.stop):
                 # What a chat does with such a turn (engine._call): the same question once more, thinking off. The bench
@@ -239,6 +240,7 @@ async def run_case(conn, provider_name: str, model: str, case: Case, tell: Tell 
                 break
     except ProviderError as e:
         t.error = e.message
+    t.thinking = "\n".join(b.text for b in blocks[last_from:] if b.type == "thinking" and b.text).strip()
     if t.finished:
         t.answer = "\n".join(b.text for b in blocks[answer_from:] if b.type == "text" and b.text).strip()
     return Ran(t, len(request.names), window, spent)

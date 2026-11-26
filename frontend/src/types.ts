@@ -871,6 +871,8 @@ export interface BenchResult extends BenchMark {
   /** How many calls the model made; `calls` holds the first of them. */
   calls_made: number
   answer: string
+  /** The end of what the model thought in its last call; '' when it did not think. Absent: a server from before it kept any. */
+  thinking?: string
   created_at: string
 }
 
