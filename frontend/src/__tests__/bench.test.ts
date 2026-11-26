@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { GROUP_LABELS, benchTable, cellOf, cloudLine, handChoice, modelNames, progressLine, seconds, sizeLine, stateWord, timeLine, verdictLine, verdictWord } from '../bench'
-import type { BenchMark, BenchMarkStatus, BenchProgress, BenchRun, ModelRef } from '../types'
+import { GROUP_LABELS, benchLine, benchTable, cellOf, cloudLine, handChoice, modelNames, progressLine, seconds, sharedLine, sizeLine, stateWord, timeLine, verdictLine, verdictWord } from '../bench'
+import type { BenchMark, BenchMarkStatus, BenchProgress, BenchRun, ModelRef, SystemStatus } from '../types'
 
 const A: ModelRef = { provider: 'ollama', model: 'hf.co/mradermacher/Huihui-Qwen3.5-9B-abliterated-GGUF:Q6_K' }
 const B: ModelRef = { provider: 'ollama', model: 'maternion/mimo-v2.6-heretic:9b-thinking-q6_K' }
@@ -156,6 +156,64 @@ describe('the words for states and marks', () => {
   })
   it('names each mark of a run', () => {
     expect((['pass', 'fail', 'error', 'skipped'] as const).map(verdictWord)).toEqual(['Pass', 'Fail', 'Error', 'Skipped'])
+  })
+})
+
+describe('the line of the bench that is open', () => {
+  it('names the tools once a run has been made, and not before', () => {
+    // Before the first run nobody was offered a tool yet, and "0 tools offered" read as a bench without tools.
+    expect(benchLine(run({ status: 'running', tools_offered: 0 }), 0)).toBe('Running · 2 models, 3 repeats')
+    expect(benchLine(run({ status: 'running', tools_offered: 37 }), 1)).toBe('Running · 2 models, 3 repeats, 37 tools offered')
+    expect(benchLine(run(), 9)).toBe('Finished · 2 models, 3 repeats, 37 tools offered')
+  })
+  it('says so when the runs that were made were offered none', () => {
+    expect(benchLine(run({ tools_offered: 0 }), 4)).toBe('Finished · 2 models, 3 repeats, 0 tools offered')
+  })
+  it('counts one of a kind in the singular', () => {
+    expect(benchLine(run({ models: [A], repeats: 1, tools_offered: 1 }), 1)).toBe('Finished · 1 model, 1 repeat, 1 tool offered')
+  })
+})
+
+// Two programs on one graphics card know nothing of each other: the one that loads second gets what is left of it.
+describe('a bench of local models while another program holds a model in memory', () => {
+  const LLAMA: ModelRef = { provider: 'llamacpp', model: 'huihui-qwen3.5-9b' }
+  const CLOUD: ModelRef = { provider: 'anthropic', model: 'claude-opus-5-5' }
+  const status = (over: Partial<SystemStatus> = {}): SystemStatus => ({ cpu_temp: null, cpu_limit: null, local_models: [], ...over })
+  const held = { llamacpp: [{ model: 'huihui-qwen3.5-9b', context: 32768 }] }
+  const SLOW = 'would share the memory of this machine with it: what does not fit the graphics card runs on the processor, which is slow.'
+
+  it('warns when llama-server holds one and the bench is of Ollama models', () => {
+    expect(sharedLine([A, B], status(held))).toBe(
+      `llama-server holds huihui-qwen3.5-9b in memory now. The models of this bench that run on Ollama ${SLOW} To have one at a time, stop llama-server first.`)
+  })
+  it('warns the other way round, and says how a model of Ollama is unloaded', () => {
+    const ollama = { local_models: [{ name: 'qwen3:8b', vram_mb: 6000 }, { name: 'mimo:9b', vram_mb: 7000 }] }
+    expect(sharedLine([LLAMA], status(ollama))).toBe(
+      `Ollama holds qwen3:8b and mimo:9b in memory now. The models of this bench that run on llama-server ${SLOW} `
+      + 'To have one at a time, unload them first: `ollama stop qwen3:8b`, `ollama stop mimo:9b`.')
+  })
+  it('names colibri too', () => {
+    expect(sharedLine([A], status({ colibri: { model: 'qwen3.6-27b', context: 8192 } }))).toBe(
+      `colibri holds qwen3.6-27b in memory now. The models of this bench that run on Ollama ${SLOW} To have one at a time, stop colibri first.`)
+  })
+  it('says nothing of a model its own program holds: that program makes room by itself', () => {
+    expect(sharedLine([A], status({ local_models: [{ name: 'qwen3:8b', vram_mb: 6000 }] }))).toBeNull()
+    expect(sharedLine([LLAMA], status(held))).toBeNull()
+  })
+  it('says nothing when no model of the bench runs here, when none is picked, and when nothing is held', () => {
+    expect(sharedLine([CLOUD, { provider: 'ollama', model: 'glm-4.6:cloud' }], status(held))).toBeNull()
+    expect(sharedLine([], status(held))).toBeNull()
+    expect(sharedLine([A], status())).toBeNull()
+    expect(sharedLine([A], status({ llamacpp: null, colibri: null, local_models: null }))).toBeNull()
+  })
+  it('says nothing while the server has not said what is held', () => {
+    expect(sharedLine([A], null)).toBeNull()
+  })
+  it('warns of each program that holds one when the bench has models of two', () => {
+    const both = { ...held, local_models: [{ name: 'qwen3:8b', vram_mb: 6000 }] }
+    expect(sharedLine([A, LLAMA], status(both))).toBe(
+      `Ollama holds qwen3:8b in memory now. The models of this bench that run on llama-server ${SLOW} To have one at a time, unload it first: \`ollama stop qwen3:8b\`. `
+      + `llama-server holds huihui-qwen3.5-9b in memory now. The models of this bench that run on Ollama ${SLOW} To have one at a time, stop llama-server first.`)
   })
 })
 
