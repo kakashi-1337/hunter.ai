@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { addLines, briefSummary, emptyScopeForm, placeEntry, scopeLines, scopeOf, scopeProblemMark, scopeProblemText, withBrief } from '../scope'
+import { addLines, briefSummary, emptyScopeForm, placeEntry, scopeCheckKey, scopeLines, scopeOf, scopeProblemMark, scopeProblemText, scopeTone, withBrief } from '../scope'
 import type { BriefResult } from '../types'
 
 const brief = (over: Partial<BriefResult> = {}): BriefResult =>
@@ -72,5 +72,39 @@ describe('lines of a stored scope that cannot be read', () => {
   it('mark the target in the sidebar with how many there are', () => {
     expect(scopeProblemMark({ name: 'acme', scope_problems: problems })).toBe('2 scope lines of acme cannot be read and are not checked. Edit the target to fix them.')
     expect(scopeProblemMark({ name: 'acme', scope_problems: problems.slice(1) })).toBe('1 scope line of acme cannot be read and is not checked. Edit the target to fix it.')
+  })
+})
+
+describe('checking one host against the lists of the form', () => {
+  const f = { ...emptyScopeForm(), inScope: '*.example.com', outScope: 'blog.example.com' }
+  it('ties an answer to the lists and the host it was given for, and to nothing else in the form', () => {
+    const key = scopeCheckKey(f, 'shop.example.com')
+    expect(scopeCheckKey({ ...f, name: 'Acme', notes: 'no DoS', unplaced: ['x.example.net'] }, ' shop.example.com ')).toBe(key)
+    expect(scopeCheckKey({ ...f, inScope: ' *.example.com \n\n' }, 'shop.example.com')).toBe(key)      // the same lines, spaced differently
+    expect(scopeCheckKey({ ...f, inScope: '*.example.com\napi.example.com' }, 'shop.example.com')).not.toBe(key)
+    expect(scopeCheckKey({ ...f, outScope: '' }, 'shop.example.com')).not.toBe(key)
+    expect(scopeCheckKey(f, 'api.example.com')).not.toBe(key)
+  })
+  it('tells a line on one list from the same line on the other', () => {
+    expect(scopeCheckKey({ ...f, inScope: 'a.example.com\nb.example.com', outScope: '' }, 'x.example.com'))
+      .not.toBe(scopeCheckKey({ ...f, inScope: 'a.example.com', outScope: 'b.example.com' }, 'x.example.com'))
+    expect(scopeCheckKey({ ...f, inScope: 'a.example.com', outScope: '' }, 'b.example.com'))
+      .not.toBe(scopeCheckKey({ ...f, inScope: '', outScope: 'a.example.com' }, 'b.example.com'))
+  })
+  it('marks an answer by what the check will do with a call', () => {
+    expect(scopeTone('in')).toBe('ok')
+    expect(scopeTone('out')).toBe('warn')
+    expect(scopeTone('not_in')).toBe('warn')
+    expect(scopeTone('no_list')).toBe('plain')
+    expect(scopeTone('local')).toBe('plain')
+  })
+  it('marks the whole answer by the part that asks, where a command gets another answer', () => {
+    expect(scopeTone('in', 'out')).toBe('warn')
+    expect(scopeTone('out', 'in')).toBe('warn')
+    expect(scopeTone('not_in', 'in')).toBe('warn')
+    expect(scopeTone('local', 'out')).toBe('warn')
+    expect(scopeTone('no_list', 'out')).toBe('warn')
+    expect(scopeTone('local', 'in')).toBe('plain')
+    expect(scopeTone('in', undefined)).toBe('ok')
   })
 })

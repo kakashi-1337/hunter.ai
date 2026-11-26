@@ -152,6 +152,21 @@ export interface McpStatus {
 /** A line of a stored scope that the scope check cannot read: it is checked against nothing until it is rewritten. */
 export interface ScopeProblem { side: 'in' | 'out'; line: string; why: string }
 
+/** What the two scope lists say about one host, address or URL: the verdict of the permission check, the line behind
+ * it, and what stands in the way. */
+export interface ScopeAnswer {
+  host: string
+  port: number | null
+  path: string | null
+  verdict: 'in' | 'out' | 'not_in' | 'no_list' | 'local'   // not_in: a call is asked about; no_list: no In scope line; local: this machine
+  line: string | null       // the line that decides, as written: of In scope for "in", of Out of scope for "out"
+  says: string
+  /** Where a command that names this address gets another answer: a command is checked without the path. */
+  command: { verdict: 'in' | 'out'; says: string } | null
+  hints: string[]
+  unreadable: ScopeProblem[]
+}
+
 export interface Target {
   id: string
   name: string

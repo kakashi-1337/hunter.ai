@@ -157,6 +157,32 @@ excludes `*.example.com` and lists `shop.example.com` means the shop. A wildcard
 range on the in-scope list lifts nothing, and a host named on both lists is out. The
 model is told the same rule.
 
+### Checking one host
+
+A call is asked about with "… is not in this target's in-scope list" or "… is on this
+target's out-of-scope list", and the prompt does not say which line did that. The target
+form does. Open the target (the pencil in the sidebar), type the host, an address or a
+full URL into **Check a host against these lists** and press Enter. The answer is the
+verdict of the same check that runs on tool calls, the line that decides as you wrote
+it, and what stands in the way:
+
+- `*.example.com` covers the names under `example.com` and not `example.com` itself, and
+  a line with a `:port` or a `/path` is only for that port or path.
+- A full URL is checked with its path, as `web_fetch` and the browser name it. A host
+  alone is checked as a command names it. A command hands the check no path, so a line
+  with a path counts for the whole host there: an out-of-scope line such as
+  `www.example.com/blog`, which is what a brief's "out of scope:
+  https://www.example.com/blog/*" becomes, asks about every command that names
+  `www.example.com`. Where a command gets another answer than the URL you typed, the
+  form shows both.
+- A line that is an address or a network covers a call that names the address. No name
+  is looked up for such a line before you are asked, and this check looks none up.
+- With an empty in-scope list only the out-of-scope list is checked, and auto-approve
+  asks about every call that names a host.
+
+The check reads the two lists as they stand in the form, saved or not. It changes no
+line and saves nothing.
+
 ## Knowledge base
 
 Open **Knowledge** in the sidebar (Ctrl+Shift+K). A collection has one embedder, a local

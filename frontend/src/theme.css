@@ -456,3 +456,10 @@ button.bench-cell[aria-pressed="true"] { border-color: currentColor; }
 .unplaced { display: flex; flex-direction: column; gap: 4px; border: 1px dashed var(--line); border-radius: 6px; padding: 8px; }
 .unplaced .mono { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .scope-problem { white-space: pre-line; overflow-wrap: anywhere; }
+.scope-check { display: flex; flex-direction: column; gap: 6px; }
+.scope-answer { display: flex; flex-direction: column; gap: 4px; border-left: 2px solid var(--line); padding: 2px 0 2px 8px; overflow-wrap: anywhere; }
+.scope-answer.ok { border-left-color: var(--accent); }
+.scope-answer.warn { border-left-color: var(--warn); }
+.scope-answer .says.ok { color: var(--accent); }
+.scope-answer .says.warn { color: var(--warn); }
+.scope-answer .hint { color: var(--muted); }

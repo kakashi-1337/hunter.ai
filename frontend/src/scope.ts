@@ -1,4 +1,4 @@
-import type { BriefResult, ScopeProblem } from './types'
+import type { BriefResult, ScopeAnswer, ScopeProblem } from './types'
 
 /** The target form as it is typed: the two scope lists one entry a line, and what a pasted brief left open. */
 export interface ScopeForm {
@@ -55,6 +55,17 @@ export function placeEntry(form: ScopeForm, entry: string, side: 'in' | 'out'): 
 
 export const scopeOf = (form: ScopeForm): { in: string[]; out: string[] } =>
   ({ in: scopeLines(form.inScope), out: scopeLines(form.outScope) })
+
+/** What an answer of the host check was given for: the two lists as they are sent, and the host. An answer is shown
+ * only while this still fits the form, because it says nothing about lists that were edited since. */
+export const scopeCheckKey = (form: ScopeForm, ask: string): string => JSON.stringify([scopeLines(form.inScope), scopeLines(form.outScope), ask.trim()])
+
+/** How an answer of the host check is marked: a call goes through, a call is asked about, or the lists have no say.
+ * With the verdict a command gets where that is another one, the mark is for both: it warns when either one asks. */
+export function scopeTone(verdict: ScopeAnswer['verdict'], command?: ScopeAnswer['verdict']): 'ok' | 'warn' | 'plain' {
+  const one = (v: ScopeAnswer['verdict']) => (v === 'in' ? 'ok' : v === 'out' || v === 'not_in' ? 'warn' : 'plain')
+  return command !== undefined && one(command) === 'warn' ? 'warn' : one(verdict)
+}
 
 export function briefSummary(brief: BriefResult): string {
   const parts = [

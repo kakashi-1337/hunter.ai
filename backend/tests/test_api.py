@@ -382,3 +382,33 @@ async def test_a_brief_longer_than_the_limit_is_refused(client):
     r = await client.post("/api/targets/brief", json={"text": "a" * (brief.MAX_TEXT + 1)})
     assert r.status_code == 422 and "longer than" in r.text
     assert (await client.post("/api/targets/brief", json={})).status_code == 422
+
+
+async def test_a_host_is_checked_against_the_lists_as_the_form_holds_them_and_nothing_is_saved(client):
+    scope = {"in": ["*.example.com"], "out": ["blog.example.com/drafts"]}
+    r = await client.post("/api/targets/scope-check", json={"scope": scope, "ask": "example.com"})
+    assert r.status_code == 200
+    assert r.json() == {
+        "host": "example.com", "port": None, "path": None, "verdict": "not_in", "line": None, "command": None,
+        "says": "example.com is not on the In scope list, so a call that names it is asked about.",
+        "hints": [("The In scope line *.example.com covers the names under example.com, not example.com itself. If the "
+                   "program covers example.com too, add it on a line of its own.")],
+        "unreadable": []}
+    out = (await client.post("/api/targets/scope-check", json={"scope": scope, "ask": "https://blog.example.com/drafts/1"})).json()
+    assert (out["verdict"], out["line"], out["port"], out["path"]) == ("out", "blog.example.com/drafts", 443, "/drafts/1")
+    other = (await client.post("/api/targets/scope-check", json={"scope": scope, "ask": "https://blog.example.com/posts"})).json()
+    assert other["verdict"] == "in" and other["command"] == {
+        "verdict": "out", "says": "In a command, blog.example.com is out of scope: the Out of scope line blog.example.com/drafts names it."}
+    bad = (await client.post("/api/targets/scope-check", json={"scope": {"in": ["example.*"], "out": []}, "ask": "example.com"})).json()
+    assert bad["unreadable"] == [{"side": "in", "line": "example.*", "why": "a * is read as the first label (*.example.com), "
+                                  "as any port (:*), or alone at the end of a path (/api/*)"}]
+    assert (await client.get("/api/targets")).json() == []
+
+
+async def test_a_scope_check_of_what_is_no_host_says_what_to_type(client):
+    from hunterai import scopecheck
+    r = await client.post("/api/targets/scope-check", json={"scope": {"in": ["*.example.com"], "out": []}, "ask": "two words"})
+    assert r.status_code == 422 and r.json()["detail"] == scopecheck.EXAMPLE
+    assert (await client.post("/api/targets/scope-check", json={"scope": {"in": [], "out": []}})).status_code == 422
+    r = await client.post("/api/targets/scope-check", json={"ask": "shop.example.com"})        # no lists yet: both are empty
+    assert r.status_code == 200 and r.json()["verdict"] == "no_list"
