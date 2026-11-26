@@ -383,6 +383,47 @@ async def indexed_documents(conn, collection_id: str) -> list[Document]:
     return [_doc(r) for r in rows]
 
 
+def _like(text: str) -> str:
+    """`text` as itself inside a LIKE pattern whose escape character is the backslash."""
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+async def documents_with(conn, collection_ids: builtins.list[str], words: builtins.list[str],
+                         limit: int) -> tuple[int, builtins.list[Document]]:
+    """(how many there are, the first `limit` of them by path): the searched documents (`ok`) of these collections whose
+    path holds every one of `words`, whatever the case of its ASCII letters. Without words, all of them."""
+    if not collection_ids:
+        return 0, []
+    marks = ",".join("?" * len(collection_ids))
+    where = f"collection_id in ({marks}) and status='ok'" + " and source_uri like ? escape '\\'" * len(words)
+    args = [*collection_ids, *(f"%{_like(w)}%" for w in words)]
+    total = (await (await conn.execute(f"select count(*) from kb_documents where {where}", args)).fetchone())[0]
+    rows = await (await conn.execute(f"select * from kb_documents where {where} order by source_uri, collection_id limit ?",
+                                     (*args, limit))).fetchall()
+    return total, [_doc(r) for r in rows]
+
+
+async def documents_ending(conn, collection_ids: builtins.list[str], ending: str, limit: int) -> builtins.list[Document]:
+    """The searched documents (`ok`) of these collections whose path ends in `ending`, whatever the case of its ASCII
+    letters, by path, `limit` at most."""
+    if not collection_ids or not ending:
+        return []
+    marks = ",".join("?" * len(collection_ids))
+    rows = await (await conn.execute(
+        f"select * from kb_documents where collection_id in ({marks}) and status='ok' and source_uri like ? escape '\\' "
+        "order by source_uri, collection_id limit ?", (*collection_ids, "%" + _like(ending), limit))).fetchall()
+    return [_doc(r) for r in rows]
+
+
+async def part_at_line(conn, document_id: str, line: int) -> tuple[int | None, int]:
+    """(the number, counted from 1, of the first part of a document that reaches `line`, or None when the document
+    ends before it; the document's last line)."""
+    r = await (await conn.execute("select min(ordinal) as first from kb_chunks where document_id=? and line_end>=?",
+                                  (document_id, line))).fetchone()
+    last = await (await conn.execute("select max(line_end) as last from kb_chunks where document_id=?", (document_id,))).fetchone()
+    return (None if r["first"] is None else r["first"] + 1), (last["last"] or 0)
+
+
 async def chunk_texts(conn, document_id: str) -> list[str]:
     """The passages of a document, in its order."""
     rows = await (await conn.execute("select text from kb_chunks where document_id=? order by ordinal", (document_id,))).fetchall()
