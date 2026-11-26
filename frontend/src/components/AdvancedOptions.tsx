@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { SAMPLING, effortChoices } from '../options'
 import { useChatView, useStore } from '../store'
-import { pruneOptions } from '../tree'
+import { optionsNote, pruneOptions } from '../tree'
 import type { Options } from '../types'
 import { useModelInfo } from './ModelPicker'
 
@@ -36,6 +36,7 @@ export function AdvancedOptions() {
   const chat = useChatView()
   const patchChat = useStore((s) => s.patchChat)
   const info = useModelInfo()
+  const providers = useStore((s) => s.providers)
   const [open, setOpen] = useState(false)
   const [draft, setDraft] = useState<Options>({})
   const root = useRef<HTMLDivElement>(null)
@@ -60,13 +61,14 @@ export function AdvancedOptions() {
     void patchChat({ options: next })
   }
   const active = Object.keys(pruneOptions(chat.options, allowed)).length
+  const note = optionsNote(chat.provider, chat.model, providers)
 
   return (
     <div className="popover" ref={root}>
       <button className="btn" aria-expanded={open} onClick={() => setOpen((o) => !o)}>Options{active ? ` · ${active}` : ''}</button>
       {open && (
         <div className="sheet" role="dialog" aria-label="Model options">
-          {allowed.length === 0 && <div className="hint">This model has no adjustable options.</div>}
+          {note && <div className="hint">{note}</div>}
           {has('temperature') && <Slider label="Temperature" value={draft.temperature} min={0} max={2} step={0.1} onChange={(v) => set({ temperature: v })} />}
           {has('top_p') && <Slider label="Top P" value={draft.top_p} min={0} max={1} step={0.05} onChange={(v) => set({ top_p: v })} />}
           {has('max_tokens') && <NumberField label="Max output tokens" value={draft.max_tokens} placeholder="model default" onChange={(v) => set({ max_tokens: v })} />}
@@ -105,7 +107,7 @@ export function AdvancedOptions() {
           {has('frequency_penalty') && <Slider label="Frequency penalty" value={draft.frequency_penalty} min={-2} max={2} step={0.1} rest={0} onChange={(v) => set({ frequency_penalty: v })} />}
           {has('seed') && <NumberField label="Seed" value={draft.seed} placeholder="by chance" least={0} onChange={(v) => set({ seed: v })} />}
           {sampling && <div className="hint">Sent to the model's server as they are; what is not set is the server's own default. Top K and Min P narrow the choice of the next token to the likeliest ones. The penalties make tokens that already stand in the last N tokens less likely: Repeat penalty above 1 (1 is none), Presence for a token that stands there at all, Frequency the more often it does. The same seed gives the same answer to the same request.</div>}
-          <div className="hint">Only options this model accepts are shown. Saved for this chat.</div>
+          {!note && <div className="hint">Only options this model accepts are shown. Saved for this chat.</div>}
         </div>
       )}
     </div>
