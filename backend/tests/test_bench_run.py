@@ -138,6 +138,28 @@ async def test_thinking_that_was_cut_off_at_a_limit_is_not_asked_again(conn):
     assert (t.answer, t.asked_again, len(model.seen)) == ("", False, 1)
 
 
+# ---- a bench that is asked without thinking
+
+async def test_a_run_without_thinking_asks_every_call_with_thinking_off(conn):
+    model = use(LOOKUP, says("There is no record of it."))
+    t = (await go(conn, thinking_off=True)).transcript
+    assert [s["options"].thinking for s in model.seen] == [False, False]
+    assert (t.answer, t.asked_again) == ("There is no record of it.", False)
+
+
+async def test_a_run_with_thinking_as_the_model_has_it_says_nothing_about_thinking(conn):
+    model = use(LOOKUP, says("There is no record of it."))
+    await go(conn)
+    assert [s["options"].thinking for s in model.seen] == [None, None]
+
+
+async def test_a_model_that_thinks_all_the_same_is_not_asked_a_second_time(conn):
+    """Thinking was off already: the second asking of a chat would be the same call again."""
+    model = use(thinks(), says("never asked for"))
+    t = (await go(conn, thinking_off=True)).transcript
+    assert (t.answer, t.finished, t.asked_again, t.turns, len(model.seen)) == ("", True, False, 1, 1)
+
+
 # ---- a call that does not end
 
 @pytest.fixture

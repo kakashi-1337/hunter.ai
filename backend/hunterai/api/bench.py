@@ -29,6 +29,7 @@ class StartIn(BaseModel):
     models: list[ModelIn]                  # how many: the runner says (runner.MODELS_MAX)
     set_id: str = Field(max_length=200)
     repeats: int = 3
+    thinking_off: bool = False             # every call is asked without thinking; else as the model has it
 
 
 class MarkIn(BaseModel):
@@ -59,7 +60,7 @@ async def list_sets():
 async def start(body: StartIn):
     refs = [ModelRef(provider=m.provider, model=m.model) for m in body.models]
     try:
-        return await runner.start(db.connect, refs, body.set_id, body.repeats)
+        return await runner.start(db.connect, refs, body.set_id, body.repeats, body.thinking_off)
     except runner.Busy:
         raise HTTPException(409, BUSY) from None
     except KeyError:

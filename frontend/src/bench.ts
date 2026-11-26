@@ -145,10 +145,10 @@ export function sharedLine(models: ModelRef[], s: SystemStatus | null): string |
 
 /** What the bench that is open is, in the line over its table. `made`: how many of its runs have a mark. The tools
  * are named once a run has been made: before the first one no model was offered any yet, and "0 tools offered" read
- * as a bench without tools. */
+ * as a bench without tools. A bench whose calls were asked without thinking says so. */
 export function benchLine(run: BenchRun, made: number): string {
   const tools = made > 0 || run.tools_offered > 0 ? `, ${many(run.tools_offered, 'tool')} offered` : ''
-  return `${stateWord(run.status)} · ${many(run.models.length, 'model')}, ${many(run.repeats, 'repeat')}${tools}`
+  return `${stateWord(run.status)} · ${many(run.models.length, 'model')}, ${many(run.repeats, 'repeat')}${tools}${run.thinking_off ? ', thinking off' : ''}`
 }
 
 export const stateWord = (status: BenchStatus): string =>

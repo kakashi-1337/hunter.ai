@@ -73,9 +73,10 @@ def _unknown_tools(set_: CaseSet) -> str:
             "A test that needs one of them cannot pass.")
 
 
-async def start(conn_factory, models: list[ModelRef], set_id: str, repeats: int) -> BenchRun:
+async def start(conn_factory, models: list[ModelRef], set_id: str, repeats: int, thinking_off: bool = False) -> BenchRun:
     """Starts a bench and returns it as it was stored. Busy when one runs; KeyError for a set that is not there,
-    CaseError for one that cannot be used; ValueError, with the reason, for the rest."""
+    CaseError for one that cannot be used; ValueError, with the reason, for the rest. `thinking_off`: every call of
+    it is asked without thinking."""
     global _now, _starting
     picked = list(dict.fromkeys((m.provider, m.model) for m in models))      # a model picked twice runs once
     if not picked:
@@ -98,7 +99,7 @@ async def start(conn_factory, models: list[ModelRef], set_id: str, repeats: int)
         note = _unknown_tools(set_)
         conn = await conn_factory()
         try:
-            bench = await store.create(conn, set_, refs, repeats, note)
+            bench = await store.create(conn, set_, refs, repeats, note, thinking_off)
         finally:
             await conn.close()
         state = _State(bench.id, {"model": 1, "models": len(refs), "case": 1, "cases": len(set_.cases), "repeat": 1,
@@ -210,7 +211,7 @@ async def _all(conn, state: _State, bench: BenchRun, set_: CaseSet) -> None:
                     continue
                 began, ran, t = time.monotonic(), None, None
                 try:
-                    ran = await run_case(conn, ref.provider, ref.model, case, tell, window)
+                    ran = await run_case(conn, ref.provider, ref.model, case, tell, window, bench.thinking_off)
                     t, window = ran.transcript, ran.window
                     verdict = score.score(case, t)
                 except (cooling.TooHot, asyncio.CancelledError):

@@ -92,9 +92,48 @@ describe('the Bench panel', () => {
     expect($('.bench-size')!.textContent).toBe('2 models × 2 cases × 1 repeat = 4 runs')
     expect(button('Run')!.disabled).toBe(false)
     await click(button('Run'))
-    expect(start).toHaveBeenCalledWith([QWEN, MIMO], 'starter', 1)
+    expect(start).toHaveBeenCalledWith([QWEN, MIMO], 'starter', 1, false)
     expect(read).toHaveBeenCalledWith('new')
     expect($('.bench-opened h3')!.textContent).toContain('Starter')
+  })
+
+  it('starts a bench without thinking when that is ticked, and says so over its table', async () => {
+    const started = run({ id: 'new', status: 'running', models: [QWEN], thinking_off: true, ended_at: null })
+    const start = vi.spyOn(api, 'startBench').mockResolvedValue(started)
+    vi.spyOn(api, 'benchRun').mockResolvedValue({ run: { ...started, status: 'done' }, marks: [mark(QWEN, 'look-up', 1, 'pass')], progress: null })
+    await open()
+    await tick('ollama/hf.co/x/qwen:9b')
+    const box = () => $<HTMLInputElement>('input[aria-label="Thinking off"]')!
+    expect(box().checked).toBe(false)        // as the model has it, unless the owner says otherwise
+    await click(box())
+    expect(box().checked).toBe(true)
+    await click(button('Run'))
+    expect(start).toHaveBeenCalledWith([QWEN], 'starter', 3, true)
+    expect($('.bench-opened')!.textContent).toContain('Finished · 1 model, 2 repeats, 37 tools offered, thinking off')
+  })
+
+  it('sends the choice with the start of a bench, and "as the model has it" when nothing is said', async () => {
+    const fetched = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response(JSON.stringify(run()), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    const sent = (thinkingOff: boolean) => ({ method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ models: [QWEN], set_id: 'starter', repeats: 2, thinking_off: thinkingOff }) })
+    await api.startBench([QWEN], 'starter', 2, true)
+    expect(fetched).toHaveBeenLastCalledWith('/api/bench/runs', sent(true))
+    await api.startBench([QWEN], 'starter', 2)
+    expect(fetched).toHaveBeenLastCalledWith('/api/bench/runs', sent(false))
+  })
+
+  it('ticks thinking off again for an earlier bench that was asked that way, and unticks it for one that was not', async () => {
+    const off = run({ id: 'off', thinking_off: true }), plain = run({ id: 'plain' })
+    vi.spyOn(api, 'benchRuns').mockResolvedValue([{ run: off, progress: null }, { run: plain, progress: null }])
+    vi.spyOn(api, 'benchRun').mockImplementation(async (id) => detail({ run: id === 'off' ? off : plain }))
+    await open()
+    const box = () => $<HTMLInputElement>('input[aria-label="Thinking off"]')!
+    await click(button('Pick these again'))
+    expect(box().checked).toBe(true)
+    await click($$<HTMLButtonElement>('.bench-list button').filter((b) => b.textContent === 'Open')[1])
+    await click(button('Pick these again'))
+    expect(box().checked).toBe(false)
   })
 
   it('counts the cases of the set that is picked, and unticks a model that is ticked again', async () => {

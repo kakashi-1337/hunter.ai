@@ -829,6 +829,8 @@ export interface BenchRun {
   /** What the bench has to say: tools its set names that are not there, and why it ended early. */
   note: string
   tools_offered: number
+  /** Every call of it was asked without thinking. Absent: a server from before a bench could be started that way. */
+  thinking_off?: boolean
   created_at: string
   ended_at: string | null
 }

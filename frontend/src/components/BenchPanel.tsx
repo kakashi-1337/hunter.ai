@@ -80,6 +80,7 @@ export function BenchPanel({ onClose }: { onClose: () => void }) {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [machine, setMachine] = useState<SystemStatus | null>(null)       // what holds a model in memory now
+  const [thinkingOff, setThinkingOff] = useState(false)                   // every call is asked without thinking
 
   const offered = useMemo(() => providers.filter((p) => p.configured && p.models.length > 0), [providers])
   const models: ModelRef[] = offered.flatMap((p) => p.models.map((m) => ({ provider: p.name, model: m.id }))).filter((ref) => picked.includes(keyOf(ref)))
@@ -141,7 +142,7 @@ export function BenchPanel({ onClose }: { onClose: () => void }) {
     try { await what() } catch (e) { setError(said(e)) } finally { setBusy(false) }
   }
   const start = () => act(async () => {
-    const started = await api.startBench(models, setId, repeats)
+    const started = await api.startBench(models, setId, repeats, thinkingOff)
     setCell(null)
     await open(started.id)
     await list()
@@ -164,6 +165,7 @@ export function BenchPanel({ onClose }: { onClose: () => void }) {
     setPicked(run.models.map(keyOf))
     if (sets.some((s) => s.id === run.set_id && !s.problem)) setSetId(run.set_id)
     setRepeats(run.repeats)
+    setThinkingOff(run.thinking_off === true)
   }
   const toggle = (ref: ModelRef) => setPicked((now) => (now.includes(keyOf(ref)) ? now.filter((k) => k !== keyOf(ref)) : [...now, keyOf(ref)]))
 
@@ -206,6 +208,10 @@ export function BenchPanel({ onClose }: { onClose: () => void }) {
         <select aria-label="Repeats" value={repeats} onChange={(e) => setRepeats(Number(e.target.value))}>
           {[1, 2, 3, 4, 5].map((n) => <option key={n} value={n}>{plural(n, 'repeat')}</option>)}
         </select>
+        <label className="check" title="Every call of the bench is asked without thinking: faster, and the same for every model. Unticked, each model is asked as it is: one that thinks by itself thinks, and a turn that ends with thinking only is asked once more without.">
+          <input type="checkbox" aria-label="Thinking off" checked={thinkingOff} onChange={(e) => setThinkingOff(e.target.checked)} />
+          <span>Thinking off</span>
+        </label>
         <span className="bench-size hint grow">{set ? sizeLine(models.length, set.cases.length, repeats) : ''}</span>
         <button className="btn primary" disabled={busy || live || !models.length || !set} onClick={() => void start()}
           title={live ? 'A bench is running: one at a time' : undefined}>Run</button>

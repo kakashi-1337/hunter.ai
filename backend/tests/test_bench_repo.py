@@ -295,3 +295,21 @@ async def test_a_mark_of_one_run_is_not_that_of_another(conn):
     await bench.add_result(conn, made.id, QWEN, "c0", 2, "fail", ["x"], ran(), 10)
     await bench.set_mark(conn, one.id, "pass")
     assert [(m.repeat, m.by_hand) for m in await bench.marks(conn, made.id)] == [(1, "pass"), (2, None)]
+
+
+# ---- a bench that was asked without thinking
+
+async def test_a_bench_asks_with_thinking_as_the_model_has_it_unless_it_was_started_without(conn):
+    plain = await bench.create(conn, a_set(), [QWEN], 1)
+    off = await bench.create(conn, a_set(), [QWEN], 1, thinking_off=True)
+    assert (plain.thinking_off, off.thinking_off) == (False, True)
+    assert ((await bench.get(conn, plain.id)).thinking_off, (await bench.get(conn, off.id)).thinking_off) == (False, True)
+    assert {b.id: b.thinking_off for b in await bench.list(conn)} == {plain.id: False, off.id: True}
+    assert (await bench.finish(conn, off.id, "done")).thinking_off is True
+
+
+async def test_what_a_bench_was_started_with_goes_with_it(conn):
+    off = await bench.create(conn, a_set(), [QWEN], 1, thinking_off=True)
+    assert (await (await conn.execute("select count(*) from bench_options")).fetchone())[0] == 1
+    await bench.delete(conn, off.id)
+    assert (await (await conn.execute("select count(*) from bench_options")).fetchone())[0] == 0
