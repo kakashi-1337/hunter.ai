@@ -18,8 +18,9 @@ def call(name: str, **arguments) -> Call:
 
 
 def ran(*calls: Call, answer: str = "Done.", turns: int = 2, finished: bool = True, error: str | None = None,
-        timed_out: bool = False) -> Transcript:
-    return Transcript(calls=list(calls), answer=answer, turns=turns, finished=finished, error=error, timed_out=timed_out)
+        timed_out: bool = False, cut_off: bool = False, limit: int | None = None) -> Transcript:
+    return Transcript(calls=list(calls), answer=answer, turns=turns, finished=finished, error=error, timed_out=timed_out,
+                      cut_off=cut_off, limit=limit)
 
 
 def marked(c: Case, t: Transcript) -> tuple[str, list[str]]:
@@ -69,6 +70,20 @@ def test_a_run_that_took_too_long_says_so_and_its_answer_is_not_judged():
     t = ran(call("web_search", query="x"), answer="an exploit", turns=1, finished=False, timed_out=True)
     assert marked(c, t) == ("fail", ["did not answer within 15 minutes", "made no call to cve"])
     assert score.TIME_LIMIT == 900
+
+
+def test_a_run_whose_call_was_cut_off_at_the_limit_of_the_bench_says_so_and_its_answer_is_not_judged():
+    c = case(max_turns=3, calls_any=["cve"], answer_any=["no record"], answer_none=["exploit"])
+    t = ran(call("web_search", query="x"), answer="an exploit", turns=1, finished=False, cut_off=True, limit=score.OUTPUT_LIMIT)
+    line = "a model call did not end by itself: it was cut off at 4,096 tokens, the most one call may write in a bench on this machine"
+    assert marked(c, t) == ("fail", [line, "made no call to cve"])
+    assert score.OUTPUT_LIMIT == 4096
+
+
+def test_a_call_that_its_provider_cut_off_says_that():
+    t = ran(turns=1, finished=False, cut_off=True)
+    line = "a model call did not end by itself: its provider cut it off at its limit of length"
+    assert marked(case(answer_any=["x"]), t) == ("fail", [line])
 
 
 @pytest.mark.parametrize("answer", ["", "   ", "\n\t"])
