@@ -39,7 +39,7 @@ from .providers import registry
 from .providers.base import Options, ProviderError, Reply, ToolCall, ToolSpec, WireMessage, collect
 from .repo import chats, goals, runs, settings, targets
 from .tools import registry as tool_registry
-from .tools import loopguard, runner
+from .tools import loopguard, runner, scopeguard
 from .tools.base import Prepared, Tool, ToolContext, ToolError, ToolResult
 from .types import Block, BlockList, TextBlock, ToolResultBlock
 
@@ -149,7 +149,8 @@ async def _loop(conn, ctx: ToolContext, worker: tuple[str, str], options: Option
     first = [WireMessage("user", [TextBlock(text=brief)])]
     provider, model = worker
     taken: set[str] = set()
-    guard = loopguard.Guard()          # this subagent's memory of calls that keep failing
+    # This subagent's memory of calls that keep failing, and around it the guard for out-of-scope hosts.
+    guard = scopeguard.Guard(loopguard.Guard())
 
     async def quiet(event: dict) -> None:
         # The chat's live view shows the delegate call, not the subagent's own tool results;
@@ -186,6 +187,7 @@ async def _loop(conn, ctx: ToolContext, worker: tuple[str, str], options: Option
                     content=f"Not run: more than {MAX_CALLS_PER_TURN} tool calls in one turn. "
                             "Send the remaining calls in your next turn."))
                 continue
+            await guard.judge(conn, ctx.chat_id, ctx.run_id, tc, names)
             outcome = await runner.call(conn, chat_id=ctx.chat_id, run_id=ctx.run_id, tc=tc, offered=names,
                                         publish=quiet, parent_step_id=ctx.step_id, guard=guard)
             blocks.append(outcome.block)

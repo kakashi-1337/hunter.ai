@@ -295,6 +295,8 @@ export interface Settings {
   vision_model: string | null
   browser_via_caido: boolean
   answer_check: boolean
+  /** A call that names a host of its target's out-of-scope list is not run. Missing from a server of before the setting. */
+  scope_refusal?: boolean
   mcp_on_demand: boolean
   notify_findings: boolean
   notify_min_severity: Severity
