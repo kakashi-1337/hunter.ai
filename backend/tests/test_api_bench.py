@@ -82,15 +82,15 @@ async def test_a_bench_is_started_and_its_table_can_be_read(client):
     r = await client.get(f"/api/bench/runs/{run['id']}")
     assert r.status_code == 200
     body = r.json()
-    assert set(body) == {"run", "marks", "progress"} and body["progress"] is None
+    assert set(body) == {"run", "marks", "progress", "judging"} and (body["progress"], body["judging"]) == (None, None)
     assert (body["run"]["status"], body["run"]["id"]) == ("done", run["id"]) and body["run"]["tools_offered"] > 20
     assert [(m["provider"], m["model"], m["case_id"], m["repeat"], m["status"]) for m in body["marks"]] == \
         [("scripted", "a", "record", 1, "pass"), ("scripted", "a", "sum", 1, "fail")]
-    assert set(body["marks"][0]) == {"provider", "model", "case_id", "repeat", "status", "by_hand", "turns", "input_tokens",
-                                     "output_tokens", "duration_ms"}        # the table needs no answers and no calls
+    assert set(body["marks"][0]) == {"provider", "model", "case_id", "repeat", "status", "by_hand", "judged", "turns",
+                                     "input_tokens", "output_tokens", "duration_ms"}        # the table needs no answers and no calls
     assert (body["marks"][0]["turns"], body["marks"][0]["output_tokens"]) == (2, 10)
     listed = (await client.get("/api/bench/runs")).json()
-    assert listed == [{"run": body["run"], "progress": None}]
+    assert listed == [{"run": body["run"], "progress": None, "judging": None}]
 
 
 async def test_the_runs_of_one_cell_can_be_read_with_their_calls_and_answers(client):
@@ -128,7 +128,7 @@ async def test_a_bench_that_is_running_shows_how_far_it_is(client):
     body = (await client.get(f"/api/bench/runs/{run['id']}")).json()
     at = {"model": 1, "models": 1, "case": 1, "cases": 2, "repeat": 2, "repeats": 2, "done": 1, "total": 4, "doing": "running"}
     assert body["progress"] == at and body["run"]["status"] == "running" and len(body["marks"]) == 1
-    assert (await client.get("/api/bench/runs")).json() == [{"run": body["run"], "progress": at}]
+    assert (await client.get("/api/bench/runs")).json() == [{"run": body["run"], "progress": at, "judging": None}]
     held.release()
     await ended(run["id"])
 
@@ -373,3 +373,121 @@ async def test_the_runs_of_a_cell_carry_what_the_model_thought_last(client):
     assert [x["thinking"] for x in await cell(client, run)] == [""]
     marks = (await client.get(f"/api/bench/runs/{run['id']}")).json()["marks"]
     assert all("thinking" not in m for m in marks)       # the table needs none of it
+
+
+# ---- a judge model reads the answers of a bench that has ended
+
+RUBRICS = TWO.replace('prompt = "what is CVE-2026-109618?"', 'prompt = "what is CVE-2026-109618?"\njudge = "A pass says that no record was found."') \
+             .replace('prompt = "what is 19 + 23?"', 'prompt = "what is 19 + 23?"\njudge = "A pass says 42."')
+JUDGE = {"provider": "judge", "model": "j"}
+
+
+def verdict(word: str, reason: str = "Because.") -> list:
+    from hunterai.providers.base import TextDelta, Usage
+    return [TextDelta(f'{{"verdict": "{word}", "reason": "{reason}"}}'), Usage(30, 8)]
+
+
+async def judged(client, run):
+    from hunterai.bench import judging
+    r = await client.post(f"/api/bench/runs/{run['id']}/judge", json=JUDGE)
+    assert r.status_code == 200, r.text
+    await asyncio.wait_for(judging.wait(run["id"]), 30)
+    return r.json()
+
+
+async def test_a_bench_that_has_ended_is_read_by_a_judge_and_its_verdicts_come_with_the_runs(client):
+    (cases.folder() / "two.toml").write_text(RUBRICS)
+    use(calls("cve", action="lookup", ids=["CVE-2026-109618"]), says("It does not appear anywhere."), says("It is 42."))
+    run = await start(client)
+    await ended(run["id"])
+    assert (await client.get(f"/api/bench/runs/{run['id']}")).json()["judging"] is None
+    use(verdict("pass", "It says nothing was found."), verdict("pass", "It says 42."), name="judge")
+    started = await judged(client, run)
+    assert (started["provider"], started["model"], started["status"], started["total"]) == ("judge", "j", "running", 2)
+    body = (await client.get(f"/api/bench/runs/{run['id']}")).json()
+    assert [(m["case_id"], m["status"], m["judged"]) for m in body["marks"]] == [("record", "fail", "pass"), ("sum", "pass", "pass")]
+    assert (body["judging"]["status"], body["judging"]["done"], body["judging"]["total"], body["judging"]["model"]) == ("done", 2, 2, "j")
+    [record] = await cell(client, run, case_id="record")
+    assert (record["status"], record["judged"], record["judge_reason"], record["judge_error"]) == ("fail", "pass", "It says nothing was found.", None)
+    listed = (await client.get("/api/bench/runs")).json()
+    assert listed[0]["judging"] is None       # the list says whether one runs now, and none does
+
+
+async def test_a_judging_that_cannot_be_started_says_why(client):
+    (cases.folder() / "two.toml").write_text(RUBRICS)
+    missing = await client.post("/api/bench/runs/nothing/judge", json=JUDGE)
+    assert (missing.status_code, missing.json()) == (404, {"detail": "bench not found"})
+    use(says("no record, 42"))
+    run = await start(client)
+    await ended(run["id"])
+    nobody = await client.post(f"/api/bench/runs/{run['id']}/judge", json={"provider": "nobody", "model": "j"})
+    assert (nobody.status_code, nobody.json()) == (422, {"detail": "unknown provider nobody"})
+    assert (await client.post(f"/api/bench/runs/{run['id']}/judge", json={"provider": "judge"})).status_code == 422
+    assert (await client.post(f"/api/bench/runs/{run['id']}/judge", json={"provider": "", "model": "j"})).status_code == 422
+
+
+async def test_while_a_judging_runs_no_other_begins_and_no_bench_and_it_can_be_cancelled(client):
+    from hunterai.bench import judging
+    (cases.folder() / "two.toml").write_text(RUBRICS)
+    use(says("no record, 42"))
+    run = await start(client)
+    await ended(run["id"])
+    held = use(verdict("pass"), name="judge", cls=Held)
+    assert (await client.post(f"/api/bench/runs/{run['id']}/judge", json=JUDGE)).status_code == 200
+    await asyncio.wait_for(held.reached.wait(), 20)
+    body = (await client.get(f"/api/bench/runs/{run['id']}")).json()
+    assert (body["judging"]["status"], body["judging"]["done"], body["judging"]["total"], body["judging"]["doing"]) == ("running", 0, 2, "running")
+    assert (await client.get("/api/bench/runs")).json()[0]["judging"] == {"done": 0, "total": 2, "doing": "running"}
+    again = await client.post(f"/api/bench/runs/{run['id']}/judge", json=JUDGE)
+    assert (again.status_code, again.json()) == (409, {"detail": "A judging or a bench is running. Wait for it or cancel it."})
+    bench = await client.post("/api/bench/runs", json={"models": [A], "set_id": "own:two", "repeats": 1})
+    assert (bench.status_code, bench.json()) == (409, {"detail": "A judge is reading a bench. Wait for it or cancel it."})
+    gone = await client.delete(f"/api/bench/runs/{run['id']}")
+    assert (gone.status_code, gone.json()) == (409, {"detail": "A judge is reading this bench. Cancel that first."})
+    assert (await client.post(f"/api/bench/runs/{run['id']}/judge/cancel")).status_code == 204
+    await asyncio.wait_for(judging.wait(run["id"]), 30)
+    over = (await client.get(f"/api/bench/runs/{run['id']}")).json()["judging"]
+    assert (over["status"], over["doing"]) == ("cancelled", None)       # what it does now is said only while it runs
+    assert (await client.post("/api/bench/runs/nothing/judge/cancel")).status_code == 404
+
+
+async def test_no_bench_begins_and_none_is_deleted_while_a_judging_is_on_its_way(client):
+    from hunterai.bench import judging
+    (cases.folder() / "two.toml").write_text(RUBRICS)
+    use(says("no record, 42"))
+    run = await start(client)
+    await ended(run["id"])
+    use(verdict("pass"), name="judge")
+    reached, go = asyncio.Event(), asyncio.Event()
+
+    async def slow_connect():
+        reached.set()
+        await go.wait()
+        return await db.connect()
+
+    starting = asyncio.create_task(judging.start(slow_connect, run["id"], ModelRef(provider="judge", model="j")))
+    await asyncio.wait_for(reached.wait(), 20)
+    try:
+        bench = await client.post("/api/bench/runs", json={"models": [A], "set_id": "own:two", "repeats": 1})
+        assert (bench.status_code, bench.json()) == (409, {"detail": "A judge is reading a bench. Wait for it or cancel it."})
+        gone = await client.delete(f"/api/bench/runs/{run['id']}")
+        assert (gone.status_code, gone.json()) == (409, {"detail": "A judge is reading this bench. Cancel that first."})
+    finally:
+        go.set()
+        await asyncio.wait_for(starting, 30)
+        await asyncio.wait_for(judging.wait(run["id"]), 30)
+        await asyncio.wait_for(runner.shutdown(), 30)       # a bench that began all the same is ended here, not in the next test
+
+
+async def test_a_judging_the_table_calls_running_while_nothing_runs_it_is_shown_as_over(client):
+    (cases.folder() / "two.toml").write_text(RUBRICS)
+    use(says("no record, 42"))
+    run = await start(client)
+    await ended(run["id"])
+    conn = await db.connect()
+    try:
+        await store.start_judging(conn, run["id"], ModelRef(provider="judge", model="j"), 2)     # as an end that was never written leaves it
+    finally:
+        await conn.close()
+    shown = (await client.get(f"/api/bench/runs/{run['id']}")).json()["judging"]
+    assert (shown["status"], shown["done"], shown["total"]) == ("interrupted", 0, 2)

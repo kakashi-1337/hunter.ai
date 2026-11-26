@@ -52,6 +52,11 @@ def running() -> str | None:
     return _now.run_id if _now is not None else None
 
 
+def busy() -> bool:
+    """Whether a bench runs or one is on its way: from the request to start one, before it has an id."""
+    return _now is not None or _starting
+
+
 def progress(run_id: str) -> dict | None:
     """Where the bench is: the model, case and repeat it is at (counted from 1) of how many, the runs done of the
     total, and `doing`: "running", or "cooling" while it waits for the machine. None when that bench is not running."""

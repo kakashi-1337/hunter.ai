@@ -8,7 +8,7 @@ import type {
   ChatKb, Collection, Job, JobAction, KbDocument, KbHealth, KbHit, KbStatus, UploadResult,
   Chat, Finding, Goal, Grant, McpStatus, Message, Mode, Options, PermissionDecision, PermissionRequest, ProcessInfo, ProviderInfo,
   BriefResult, RunDetail, RunSummary, ScopeAnswer, SearchHit, Settings, StartedRun, Target, ToolInfo, Upload,
-  BenchDetail, BenchListed, BenchResult, BenchRun, BenchSet, ModelRef,
+  BenchDetail, BenchJudging, BenchListed, BenchResult, BenchRun, BenchSet, ModelRef,
 } from './types'
 
 export class ApiError extends Error {
@@ -264,5 +264,8 @@ export const benchCell = (id: string, model: ModelRef, caseId: string) =>
 /** The owner's own mark for one run, where the rules misread its answer; null takes it away again. */
 export const setBenchMark = (resultId: string, status: 'pass' | 'fail' | null) =>
   request<BenchResult>('PUT', `/api/bench/results/${resultId}/mark`, { status })
+/** A judge model reads the answers of a bench that has ended. Its verdicts change no mark. */
+export const judgeBench = (id: string, judge: ModelRef) => request<BenchJudging>('POST', `/api/bench/runs/${id}/judge`, judge)
+export const cancelJudging = (id: string) => request<void>('POST', `/api/bench/runs/${id}/judge/cancel`)
 export const cancelBench = (id: string) => request<void>('POST', `/api/bench/runs/${id}/cancel`)
 export const deleteBench = (id: string) => request<void>('DELETE', `/api/bench/runs/${id}`)

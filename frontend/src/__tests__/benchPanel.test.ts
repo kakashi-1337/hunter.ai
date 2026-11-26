@@ -7,7 +7,7 @@ import * as dialog from '../dialog'
 import { BenchPanel } from '../components/BenchPanel'
 import { Sidebar } from '../components/Sidebar'
 import { useStore } from '../store'
-import type { BenchDetail, BenchMark, BenchMarkStatus, BenchResult, BenchRun, BenchSet, ModelRef, ProviderInfo } from '../types'
+import type { BenchDetail, BenchJudging, BenchMark, BenchMarkStatus, BenchResult, BenchRun, BenchSet, ModelRef, ProviderInfo } from '../types'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -262,6 +262,130 @@ describe('the Bench panel', () => {
       [true, 'The end of what it thought last', '…1, 2, 3, 4, 5,'],
       null, null])
     expect($$('.bench-detail .bench-run')[1].textContent).toContain('No answer.')
+  })
+
+  const judging = (over: Partial<BenchJudging> = {}): BenchJudging => ({ run_id: 'r1', provider: 'ollama', model: 'mimo:9b', status: 'done', note: '',
+    total: 4, done: 4, created_at: '2026-11-27T10:00:00+00:00', ended_at: '2026-11-27T10:02:00+00:00', ...over })
+
+  it('lets a judge model read the answers of a bench that has ended, and shows how far it is', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(api, 'benchRuns').mockResolvedValue([{ run: run(), progress: null }])
+    const read = vi.spyOn(api, 'benchRun').mockResolvedValue(detail({ judging: null }))
+    const start = vi.spyOn(api, 'judgeBench').mockResolvedValue(judging({ status: 'running', done: 0 }))
+    await open()
+    const pick = () => $<HTMLSelectElement>('select[aria-label="Judge"]')!
+    expect([...pick().options].map((o) => o.value)).toEqual(['', 'ollama/hf.co/x/qwen:9b', 'ollama/mimo:9b', 'anthropic/claude-opus-5-5'])
+    expect(button('Judge this bench')!.disabled).toBe(true)          // no judge is picked
+    await choose(pick(), 'ollama/mimo:9b')
+    read.mockResolvedValue(detail({ judging: judging({ status: 'running', done: 1 }) }))
+    await click(button('Judge this bench'))
+    expect(start).toHaveBeenCalledWith('r1', MIMO)
+    expect($('.bench-judging')!.textContent).toBe('mimo:9b is reading the answers: 1 of 4.')
+    expect(button('Judge this bench')).toBeUndefined()
+    const asked = read.mock.calls.length
+    read.mockResolvedValue(detail({ judging: judging(), marks: MARKS.map((m, i) => (i === 1 ? { ...m, judged: 'pass' as const } : m)) }))
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000) })        // asked again while the judge reads
+    expect(read.mock.calls.length).toBe(asked + 1)
+    expect($('.bench-judging')!.textContent).toBe('Read by mimo:9b: 4 of 4 answers, 1 to check.')
+    expect($('.bench-table tbody tr:nth-child(2) .bench-cell')!.textContent).toBe('1/2 · 1 to check')
+    expect(button('Judge this bench')).toBeTruthy()
+    await act(async () => { await vi.advanceTimersByTimeAsync(4000) })
+    expect(read.mock.calls.length).toBe(asked + 1)                           // it has ended: nothing is asked for any more
+  })
+
+  it('cancels a judging when asked, and offers none while the bench itself still runs', async () => {
+    vi.spyOn(api, 'benchRuns').mockResolvedValue([{ run: run(), progress: null }])
+    const read = vi.spyOn(api, 'benchRun').mockResolvedValue(detail({ judging: judging({ status: 'running', done: 2 }) }))
+    const stop = vi.spyOn(api, 'cancelJudging').mockResolvedValue(undefined)
+    await open()
+    read.mockResolvedValue(detail({ judging: judging({ status: 'cancelled', done: 2 }) }))
+    await click(button('Cancel judging'))
+    expect(stop).toHaveBeenCalledWith('r1')
+    expect($('.bench-judging')!.textContent).toBe('Read by mimo:9b: 2 of 4 answers, none to check. Cancelled.')
+    act(() => root.unmount())
+    root = createRoot(host)
+    const going = run({ status: 'running', ended_at: null })
+    vi.spyOn(api, 'benchRuns').mockResolvedValue([{ run: going, progress: null }])
+    read.mockResolvedValue(detail({ run: going }))
+    vi.useFakeTimers()
+    await open()
+    expect($('select[aria-label="Judge"]')).toBeNull()
+    expect(button('Judge this bench')).toBeUndefined()
+  })
+
+  it('starts no bench while a judge reads, and lets no other judge be picked', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(api, 'benchRuns').mockResolvedValue([{ run: run(), progress: null }])
+    const read = vi.spyOn(api, 'benchRun').mockResolvedValue(detail({ judging: judging({ status: 'running', done: 1 }) }))
+    await open()
+    await tick('ollama/mimo:9b')
+    expect(button('Run')!.disabled).toBe(true)                 // the judge is a model too: one at a time
+    expect(button('Run')!.title).toBe('A judge is reading a bench: one at a time')
+    expect($<HTMLSelectElement>('select[aria-label="Judge"]')!.disabled).toBe(true)
+    read.mockResolvedValue(detail({ judging: judging() }))
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000) })
+    expect(button('Run')!.disabled).toBe(false)
+    expect(button('Run')!.title).toBe('')
+    expect($<HTMLSelectElement>('select[aria-label="Judge"]')!.disabled).toBe(false)
+  })
+
+  it('warns under the judge pick when another program holds a model, and asks the machine again when the pick changes', async () => {
+    const asked = vi.spyOn(api, 'systemStatus').mockResolvedValue({ cpu_temp: null, cpu_limit: null, local_models: [],
+      llamacpp: [{ model: 'huihui-qwen3.5-9b', context: 32768 }] })
+    vi.spyOn(api, 'benchRuns').mockResolvedValue([{ run: run(), progress: null }])
+    vi.spyOn(api, 'benchRun').mockResolvedValue(detail())
+    await open()
+    expect($('.bench-shared')).toBeNull()
+    const before = asked.mock.calls.length
+    await choose($<HTMLSelectElement>('select[aria-label="Judge"]'), 'ollama/mimo:9b')
+    expect(asked.mock.calls.length).toBe(before + 1)           // what is held changes while the panel is open
+    expect($('.bench-shared.judge')!.textContent).toBe('llama-server holds huihui-qwen3.5-9b in memory now. The judge, which runs on Ollama, would share '
+      + 'the memory of this machine with it: what does not fit the graphics card runs on the processor, which is slow. To have one at a time, stop llama-server first.')
+    await choose($<HTMLSelectElement>('select[aria-label="Judge"]'), 'anthropic/claude-opus-5-5')
+    expect($('.bench-shared')).toBeNull()                      // a judge that runs elsewhere shares nothing
+  })
+
+  it('shows what the judge said under the mark of a run, and marks it where the two differ', async () => {
+    const base = { run_id: 'r1', calls_made: 0, calls: [], created_at: '', reasons: [] }
+    const results: BenchResult[] = [
+      { ...mark(QWEN, 'look-up', 1, 'pass'), ...base, id: 'a', answer: 'It is 7.42.1.', judged: 'pass', judge_reason: 'It names 7.42.1.' },
+      { ...mark(QWEN, 'look-up', 2, 'fail'), ...base, id: 'b', answer: 'The newest is 7.42.1', judged: 'pass', judge_reason: 'It names 7.42.1.' },
+      { ...mark(QWEN, 'look-up', 3, 'fail'), ...base, id: 'c', answer: 'x', judged: null, judge_error: 'its reply could not be read as one' },
+      { ...mark(QWEN, 'look-up', 4, 'fail'), ...base, id: 'd', answer: 'x' },
+    ]
+    vi.spyOn(api, 'benchRuns').mockResolvedValue([{ run: run(), progress: null }])
+    vi.spyOn(api, 'benchRun').mockResolvedValue(detail())
+    vi.spyOn(api, 'benchCell').mockResolvedValue(results)
+    await open()
+    await click($('.bench-table tbody tr:nth-child(2) .bench-cell'))
+    const said = $$('.bench-detail .bench-run').map((r) => r.querySelector('.bench-judge'))
+    expect(said.map((el) => (el ? [el.textContent, el.classList.contains('differs')] : null))).toEqual([
+      ['The judge says Pass: It names 7.42.1.', false],
+      ['The judge says Pass: It names 7.42.1.', true],
+      ['The judge gave no verdict (its reply could not be read as one).', false],
+      null])
+  })
+
+  it('asks for a judging of the bench with the judge that was picked, and for its cancel', async () => {
+    const begun = judging({ status: 'running', done: 0, ended_at: null })
+    const fetched = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response(JSON.stringify(begun), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    expect(await api.judgeBench('r1', MIMO)).toEqual(begun)
+    expect(fetched).toHaveBeenLastCalledWith('/api/bench/runs/r1/judge', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(MIMO) })
+    fetched.mockImplementation(async () => new Response(null, { status: 204 }))
+    expect(await api.cancelJudging('r1')).toBeUndefined()
+    expect(fetched).toHaveBeenLastCalledWith('/api/bench/runs/r1/judge/cancel', { method: 'POST', headers: undefined, body: undefined })
+  })
+
+  it('says so when a judging cannot be started', async () => {
+    vi.spyOn(api, 'benchRuns').mockResolvedValue([{ run: run(), progress: null }])
+    vi.spyOn(api, 'benchRun').mockResolvedValue(detail())
+    vi.spyOn(api, 'judgeBench').mockRejectedValue(new Error('No run of this bench has an answer whose mark hangs on its wording, in a test that says what a right answer is.'))
+    await open()
+    await choose($<HTMLSelectElement>('select[aria-label="Judge"]'), 'ollama/mimo:9b')
+    await click(button('Judge this bench'))
+    expect($('.bench-error')!.textContent).toContain('No run of this bench has an answer whose mark hangs on its wording')
   })
 
   it('lets the owner set the mark of a run right by hand, counts it in the table, and takes it back', async () => {

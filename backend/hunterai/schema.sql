@@ -389,6 +389,25 @@ create table if not exists bench_options (
   run_id text primary key references bench_runs(id) on delete cascade,
   options_json text not null           -- {"thinking_off": true}
 );
+-- A judge model's reading of the answers of a bench, made after the bench ended (hunterai/bench/judging.py). A row of
+-- bench_judgings is the last judging of a bench, a row of bench_judgments its verdict on one run. No mark is changed.
+create table if not exists bench_judgings (
+  run_id text primary key references bench_runs(id) on delete cascade,
+  provider text not null,
+  model text not null,
+  status text not null,                -- running | done | cancelled | interrupted | stopped
+  note text not null default '',       -- why it ended early, in words for the owner
+  total integer not null default 0,    -- the runs whose mark hangs on the wording of their answer
+  created_at text not null,
+  ended_at text
+);
+create table if not exists bench_judgments (
+  result_id text primary key references bench_results(id) on delete cascade,
+  verdict text,                        -- pass | fail; null when the judge gave none, and `error` says why
+  reason text not null default '',     -- the judge's own sentence
+  error text,
+  created_at text not null
+);
 -- The end of what the model thought in the last call of a run. No rule reads it: the owner sees it beside the run.
 create table if not exists bench_thinking (
   result_id text primary key references bench_results(id) on delete cascade,

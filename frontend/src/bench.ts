@@ -1,5 +1,5 @@
 // What the Bench panel shows, worked out from what the server sends. No React here: these are tested as they are.
-import type { BenchMark, BenchMarkStatus, BenchProgress, BenchRun, BenchStatus, ModelRef, SystemStatus } from './types'
+import type { BenchJudging, BenchMark, BenchMarkStatus, BenchProgress, BenchResult, BenchRun, BenchStatus, ModelRef, SystemStatus } from './types'
 
 /** The groups of cases in the order the table shows them. */
 export const GROUP_LABELS: Record<string, string> = { 'tool-use': 'Tool use', honesty: 'Honesty', scope: 'Scope', stopping: 'Stopping' }
@@ -12,6 +12,8 @@ export interface Cell {
   skipped: number
   /** Runs whose mark the owner set by hand. They are counted with his mark, and the cell says that it holds them. */
   byHand: number
+  /** Runs of which a judge model said something else than the mark that counts: the owner looks at them. */
+  toCheck: number
   text: string
   tone: 'good' | 'mixed' | 'bad' | 'none'
 }
@@ -19,9 +21,13 @@ export interface Cell {
 const many = (n: number, one: string, more = `${one}s`) => `${n} ${n === 1 ? one : more}`
 
 type Marked = Pick<BenchMark, 'status' | 'by_hand'>
+type Judged = Marked & Pick<BenchMark, 'judged'>
 
 /** The mark a run counts with: the owner's own where he set one, else the one the rules gave. */
 export const markOf = (m: Marked): BenchMarkStatus => m.by_hand ?? m.status
+
+/** Whether a judge model said something else of this run than the mark it counts with. */
+export const differs = (m: Judged): boolean => m.judged != null && (markOf(m) === 'pass' || markOf(m) === 'fail') && m.judged !== markOf(m)
 
 /** What a set of runs comes to: "2/3", with errors and skipped runs named beside it. */
 export function cellOf(marks: BenchMark[]): Cell {
@@ -29,10 +35,12 @@ export function cellOf(marks: BenchMark[]): Cell {
   const passed = count('pass'), errors = count('error'), skipped = count('skipped')
   const counted = passed + count('fail')
   const byHand = marks.filter((m) => m.by_hand != null).length
+  const toCheck = marks.filter(differs).length
   const parts = [...(counted ? [`${passed}/${counted}`] : []), ...(errors ? [many(errors, 'error')] : []),
-    ...(skipped ? [counted || errors ? `${skipped} skipped` : 'skipped'] : []), ...(byHand ? [`${byHand} by hand`] : [])]
+    ...(skipped ? [counted || errors ? `${skipped} skipped` : 'skipped'] : []), ...(byHand ? [`${byHand} by hand`] : []),
+    ...(toCheck ? [`${toCheck} to check`] : [])]
   const tone = !counted ? 'none' : passed === counted ? 'good' : passed === 0 ? 'bad' : 'mixed'
-  return { passed, counted, errors, skipped, byHand, text: parts.join(' · ') || '…', tone }
+  return { passed, counted, errors, skipped, byHand, toCheck, text: parts.join(' · ') || '…', tone }
 }
 
 /** A time a person reads at a glance: "4.3 s", "42 s", "2.5 min". */
@@ -122,8 +130,9 @@ const listed = (names: string[]) => (names.length === 1 ? names[0] : `${names.sl
 
 /** A warning before a bench of local models while another program on this machine holds a model in memory: the two
  * know nothing of each other and share the memory of the machine. A model its own program holds is none: that program makes
- * room by itself. null when there is nothing to warn of, and while the server has not said what is held. */
-export function sharedLine(models: ModelRef[], s: SystemStatus | null): string | null {
+ * room by itself. null when there is nothing to warn of, and while the server has not said what is held. `judge`: the
+ * one model is the judge that reads the answers of a bench that has ended, and the words say so. */
+export function sharedLine(models: ModelRef[], s: SystemStatus | null, judge = false): string | null {
   if (!s) return null
   const picked = [...new Set(models.map(runsOn).filter((p): p is string => p !== null))]
   const holds: [string, string[]][] = [
@@ -137,7 +146,8 @@ export function sharedLine(models: ModelRef[], s: SystemStatus | null): string |
     const free = program === 'ollama'
       ? `unload ${names.length === 1 ? 'it' : 'them'} first: ${names.map((n) => `\`ollama stop ${n}\``).join(', ')}.`
       : `stop ${PROGRAMS[program]} first.`
-    return `${PROGRAMS[program]} holds ${listed(names)} in memory now. The models of this bench that run on ${listed(others)} would share `
+    const who = judge ? `The judge, which runs on ${listed(others)},` : `The models of this bench that run on ${listed(others)}`
+    return `${PROGRAMS[program]} holds ${listed(names)} in memory now. ${who} would share `
       + `the memory of this machine with it: what does not fit the graphics card runs on the processor, which is slow. To have one at a time, ${free}`
   }).filter((line): line is string => line !== null)
   return lines.length ? lines.join(' ') : null
@@ -159,6 +169,24 @@ export const verdictWord = (status: BenchMarkStatus): string => ({ pass: 'Pass',
 /** The mark of a run in its line: the owner's own with what the rules said beside it, else the one the rules gave. */
 export const verdictLine = (r: Marked): string =>
   r.by_hand ? `${verdictWord(r.by_hand)} · set by hand (the rules said ${verdictWord(r.status)})` : verdictWord(r.status)
+
+/** What a judge model said of a run, for the line under its mark; `differs` when that is not the mark the run counts
+ * with. null for a run the judge was not asked about. */
+export function judgeLine(r: Judged & Pick<BenchResult, 'judge_reason' | 'judge_error'>): { text: string; differs: boolean } | null {
+  if (r.judged) return { text: `The judge says ${verdictWord(r.judged)}${r.judge_reason ? `: ${r.judge_reason}` : '.'}`, differs: differs(r) }
+  return r.judge_error ? { text: `The judge gave no verdict (${r.judge_error}).`, differs: false } : null
+}
+
+/** Who read the answers of a bench, how far, and how it ended. `toCheck`: the runs of which it said something else
+ * than their mark. */
+export function judgingLine(j: BenchJudging, toCheck: number): string {
+  if (j.status === 'running') {
+    return j.doing === 'cooling' ? `${j.model} is waiting for the machine to cool: ${j.done} of ${many(j.total, 'answer')} read.`
+      : `${j.model} is reading the answers: ${j.done} of ${j.total}.`
+  }
+  const end = j.status === 'done' ? '' : ` ${stateWord(j.status)}${j.note ? `: ${j.note}` : '.'}`
+  return `Read by ${j.model}: ${j.done} of ${many(j.total, 'answer')}, ${toCheck || 'none'} to check.${end}`
+}
 
 /** What the owner can do with the mark of a run: set the other one, or take his own back. null for a run the rules
  * gave no mark: an error and a skipped run have no answer to judge. */
