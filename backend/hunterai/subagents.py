@@ -36,7 +36,7 @@ from . import cooling, db, hub, permissions, problems
 from .decision import engine as de
 from .modes import build_system
 from .providers import registry
-from .providers.base import Options, ProviderError, Reply, ToolCall, ToolSpec, WireMessage, collect
+from .providers.base import Options, ProviderError, Reply, ToolCall, ToolSpec, WireMessage, collect, written
 from .repo import chats, goals, runs, settings, targets
 from .tools import registry as tool_registry
 from .tools import loopguard, runner
@@ -105,17 +105,18 @@ async def _decision(conn, run_id: str, parent_step: str, name: str, state: str, 
 
 async def _model_call(conn, run_id: str, parent_step: str, provider_name: str, model: str, system: str,
                       wire: list[WireMessage], options: Options, specs: list[ToolSpec],
-                      blocks: list[Block], taken: set[str]) -> list[ToolCall]:
+                      blocks: list[Block], taken: set[str], reply: Reply | None = None) -> list[ToolCall]:
     """One model call of the subagent; appends to `blocks`, returns the tool calls it made. Like a call of the
     run itself, one that has to load a model onto this machine waits for a hot machine to cool, and fails when it
-    does not."""
+    does not. `reply`: filled with what the call sent besides its blocks, for a caller that wants to know how it ended."""
     try:
         await cooling.before_call(conn, run_id, provider_name, model, parent_step)
     except cooling.TooHot as e:
         raise ProviderError("unavailable", str(e), complete=True) from None
     step = await runs.add_step(conn, run_id, "model_call", f"{provider_name}/{model}", {}, parent_step)
     await hub.publish(run_id, {"type": "step_started", "step": step.model_dump()})
-    reply, status, detail = Reply(), "error", {}    # the reply is filled as the call comes: its tokens count when it fails, too
+    reply = Reply() if reply is None else reply     # filled as the call comes: its tokens count when it fails, too
+    status, detail = "error", {}
     try:
         provider = registry.get(provider_name)
         stream = provider.stream(model, system, wire, options, tools=specs) \
@@ -159,22 +160,39 @@ async def _loop(conn, ctx: ToolContext, worker: tuple[str, str], options: Option
 
     for turn in range(1, SUBAGENT_MAX_TURNS + 1):
         wire = first + ([WireMessage("assistant", list(blocks))] if blocks else [])
+        began_at, reply = len(blocks), Reply()
         try:
             calls = await _model_call(conn, ctx.run_id, ctx.step_id, provider, model, system, wire,
-                                      options, specs, blocks, taken)
+                                      options, specs, blocks, taken, reply)
         except ProviderError as e:
             # Same rule as a chat's first call: the default provider may fall back once.
             if fallback and turn == 1 and not blocks and e.fallback_eligible and provider == de.DEFAULT_PROVIDER:
                 from .engine import DEFAULT_FALLBACK_MODEL
                 provider = de.FALLBACK_PROVIDER
                 model = await settings.get(conn, "fallback_model", DEFAULT_FALLBACK_MODEL)
+                reply = Reply()
                 try:
                     calls = await _model_call(conn, ctx.run_id, ctx.step_id, provider, model, system,
-                                              wire, options, specs, blocks, taken)
+                                              wire, options, specs, blocks, taken, reply)
                 except ProviderError as e2:
                     return "error", e2.message
             else:
                 return "error", e.message
+        if options.thinking is not False and problems.only_thought(blocks[began_at:], reply.stop):
+            # As a chat's own turn (engine._call): the same question once more with thinking off, and off for the rest
+            # of this subagent's work. A second call that fails leaves the subagent with what it had.
+            options = options.model_copy(update={"thinking": False})
+            step = await runs.add_step(conn, ctx.run_id, "thinking", "ended with thinking only: asked again with thinking off", {},
+                                       ctx.step_id)
+            await hub.publish(ctx.run_id, {"type": "step_started", "step": step.model_dump()})
+            step = await runs.patch_step(conn, step.id, status="done", close=True)
+            await hub.publish(ctx.run_id, {"type": "step_finished", "step": step.model_dump()})
+            before = written(blocks)
+            try:
+                calls = await _model_call(conn, ctx.run_id, ctx.step_id, provider, model, system, wire, options, specs, blocks, taken)
+            except ProviderError as e:
+                if written(blocks) != before:
+                    return "error", e.message
         if not calls:
             return "done", None
         if turn == SUBAGENT_MAX_TURNS:

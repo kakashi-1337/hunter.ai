@@ -18,7 +18,7 @@ from collections.abc import Awaitable, Callable, Collection
 from dataclasses import dataclass
 from pathlib import Path
 
-from .. import config, context, cooling, thermal, upstream
+from .. import config, context, cooling, problems, thermal, upstream
 from ..modes import build_system
 from ..providers import registry
 from ..providers.base import (
@@ -29,6 +29,7 @@ from ..providers.base import (
     ToolSpec,
     WireMessage,
     collect,
+    written,
 )
 from ..tools import kb_tools, on_demand, runner
 from ..tools import registry as tools
@@ -174,28 +175,51 @@ async def run_case(conn, provider_name: str, model: str, case: Case, tell: Tell 
     t = Transcript(calls=[], answer="", turns=0, finished=False)
     answer_from = 0             # where in `blocks` the answer begins: after the last result of a tool that is no bookkeeping
     spent = 0.0                 # seconds the model calls took; the wait for a hot machine is not the model's time
+    quiet = False               # a turn of this run ended with thinking only: the rest of the run is asked with thinking off
+
+    async def ask(wire: list[WireMessage], options: Options) -> Reply | None:
+        """One model call, read into `blocks`. None when the time of the run ended in it."""
+        nonlocal spent
+        stream = provider.stream(model, request.system, wire, options, tools=request.specs) if with_tools \
+            else provider.stream(model, request.system, wire, options)
+        reply, began = Reply(), time.monotonic()
+        try:
+            async with asyncio.timeout(max(0.0, score.TIME_LIMIT - spent)):
+                await collect(stream, blocks, taken, reply)
+        except TimeoutError:
+            t.timed_out = True
+            return None
+        finally:
+            spent += time.monotonic() - began
+            t.input_tokens += reply.usage.input_tokens
+            t.output_tokens += reply.usage.output_tokens
+        return reply
+
     try:
         while t.turns < case.max_turns:
             if here:
                 await _cool(model, tell)
             wire = first + ([WireMessage("assistant", list(blocks))] if blocks else [])
-            options = Options(context_window=window) if window else Options()
-            larger = await context.roomier(provider_name, model, request.system, wire, options, request.specs)
-            if larger:
-                window, options = larger, Options(context_window=larger)
-            stream = provider.stream(model, request.system, wire, options, tools=request.specs) if with_tools \
-                else provider.stream(model, request.system, wire, options)
-            reply, began = Reply(), time.monotonic()
-            try:
-                async with asyncio.timeout(max(0.0, score.TIME_LIMIT - spent)):
-                    await collect(stream, blocks, taken, reply)
-            except TimeoutError:
-                t.timed_out = True
+            window = await context.roomier(provider_name, model, request.system, wire, Options(context_window=window or None),
+                                           request.specs) or window
+            options = Options(context_window=window or None, thinking=False if quiet else None)
+            began_at = len(blocks)
+            reply = await ask(wire, options)
+            if reply is not None and not quiet and problems.only_thought(blocks[began_at:], reply.stop):
+                # What a chat does with such a turn (engine._call): the same question once more, thinking off. The bench
+                # measures what a chat gets from the model, so it asks as a chat asks.
+                quiet = t.asked_again = True
+                before = written(blocks)
+                if here:
+                    await _cool(model, tell)
+                try:
+                    reply = await ask(wire, options.model_copy(update={"thinking": False}))
+                except ProviderError:
+                    if written(blocks) != before:
+                        raise
+                    reply = Reply()         # the turn stays as it was, without an answer: no failure of the run
+            if reply is None:
                 break
-            finally:
-                spent += time.monotonic() - began
-                t.input_tokens += reply.usage.input_tokens
-                t.output_tokens += reply.usage.output_tokens
             t.turns += 1
             if not reply.calls:
                 t.finished = True

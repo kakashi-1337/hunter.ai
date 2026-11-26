@@ -412,7 +412,11 @@ prompt = "what is CVE-2026-109618 and CVE-2026-109619? what does these 2 CVE exp
 | `max_turns` (on the case; 8 when left out, 12 at most) | the model answered within this many model calls |
 
 The answer is what the model said after its last tool result; its thinking is not part of
-it, and a note it makes in the goal record after answering does not hide the answer.
+it, and a note it makes in the goal record after answering does not hide the answer. A turn
+that ended with thinking only is asked once more with thinking off, as a chat does it
+("A turn that is thinking and nothing else"): the bench measures what a chat gets from the
+model. Such a run says so in a line under its mark, the second call is not counted as a
+turn, and its time and tokens are the run's.
 Phrases are compared without regard to case, to marks for emphasis, and to the kind of
 quote, dash and space. A set that names a tool HunterAI does not have at the moment (a
 typo, an MCP server that is not connected) says so in the note of its bench.
@@ -1825,6 +1829,40 @@ the model itself has:
 
 An effort the model does not have (xhigh or max where high is the top) is sent as its
 highest.
+
+#### A turn that is thinking and nothing else
+
+Some models end a turn with thinking only: no answer and no tool call. The chat then shows
+a turn that says nothing. Seen on the owner's laptop on 26 November 2026 with
+Huihui-Qwen3.5-9B-abliterated and thinking on, through Ollama and through llama-server
+alike: its turn after a tool result was thinking only, and with thinking off the same model
+answered.
+
+HunterAI asks such a turn once more by itself, with the same question and thinking off:
+
+- What the model thought stays above the answer it then writes.
+- Thinking stays off for the rest of that run, so a run of many turns does not ask each of
+  them twice. The next run starts as the chat is set.
+- The chat's own options are not changed. A line under the answer says what happened and
+  where the switch is: **Options → Thinking: off** makes it so from the start and saves the
+  second call.
+- It happens once in a run, and not in a chat whose Thinking is off already. When the
+  second call gives no answer either, or the model's server refuses it, the turn stays as
+  it was with a line that says so; the run does not fail for it.
+- A turn that was cut off at a limit, or ended by a provider's filter, is not asked again:
+  those have their own line. Neither is thinking that a provider sealed (Claude's, for one),
+  which has to go back to it as it came.
+
+A subagent does the same, and so does the Bench (see there). The trajectory shows a step of
+the kind "thinking" between the two model calls: "ended with thinking only: asked again
+with thinking off".
+
+Held against real programs on 26 November 2026, with Qwen3.5 0.8B: an Ollama built from its
+source answered a request with `think: false` with text and no thinking, and llama-server
+did the same for `reasoning_effort: "none"`; asked as they are, both spent every token they
+were given on thinking. That small model does not end a turn with thinking only by itself
+(it thinks until it is cut off), so the second call as a whole was tried against a stand-in
+server, and not yet with the 9B model it was built for.
 
 ### Sampling, for a local model
 

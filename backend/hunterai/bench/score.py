@@ -54,6 +54,11 @@ class Transcript:
     input_tokens: int = 0
     output_tokens: int = 0
     timed_out: bool = False   # it was the time limit that ended it, not the turn limit
+    asked_again: bool = False     # a turn ended with thinking only and was asked once more with thinking off (run.run_case)
+
+
+# Under the mark of a run whose turn was asked again. It is no rule's line: a run that passed keeps its pass.
+ASKED_AGAIN = "a turn ended with thinking only and was asked once more with thinking off, as a chat does it (not counted as a turn)"
 
 
 class Verdict(BaseModel):

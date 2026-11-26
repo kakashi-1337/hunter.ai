@@ -11,7 +11,7 @@ from hunterai.providers.base import TextDelta
 from hunterai.repo import bench as store
 from hunterai.repo.bench import ModelRef
 from hunterai.tools import native
-from tests.bench_model import TWO, Held, Model, Wordy, calls, fails, says
+from tests.bench_model import TWO, Held, Model, Wordy, calls, fails, says, thinks
 
 A, B = ModelRef(provider="scripted", model="a"), ModelRef(provider="other", model="b")
 LOOKUP = calls("cve", action="lookup", ids=["CVE-2026-109618"])
@@ -80,6 +80,19 @@ async def test_a_pass_and_a_fail_are_stored_with_their_reasons(conn):
     assert (total.status, total.answer) == ("fail", "It is 41.")
     assert total.reasons == ["the answer does not say '42'", "made 1 tool call, more than 0"]
     assert run.status == "done"
+
+
+def test_the_line_under_such_a_run_says_what_was_done_and_that_it_is_no_turn():
+    assert score.ASKED_AGAIN == ("a turn ended with thinking only and was asked once more with thinking off, as a chat does it "
+                                 "(not counted as a turn)")
+
+
+async def test_a_run_that_was_asked_again_with_thinking_off_says_so_under_its_mark(conn):
+    use(LOOKUP, thinks(), says("There is no record of it."), calls("encode_decode", operation="md5", text="19+23"), says("It is 41."))
+    _, (record, total) = await stored(conn, await bench())
+    assert (record.status, record.answer, record.turns) == ("pass", "There is no record of it.", 2)
+    assert record.reasons == [score.ASKED_AGAIN]
+    assert total.reasons == ["the answer does not say '42'", "made 1 tool call, more than 0"]       # thinking is on again for the next run
 
 
 async def test_the_time_a_run_took_is_stored(conn):
