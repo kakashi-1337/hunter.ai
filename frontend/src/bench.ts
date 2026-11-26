@@ -10,21 +10,29 @@ export interface Cell {
   counted: number
   errors: number
   skipped: number
+  /** Runs whose mark the owner set by hand. They are counted with his mark, and the cell says that it holds them. */
+  byHand: number
   text: string
   tone: 'good' | 'mixed' | 'bad' | 'none'
 }
 
 const many = (n: number, one: string, more = `${one}s`) => `${n} ${n === 1 ? one : more}`
 
+type Marked = Pick<BenchMark, 'status' | 'by_hand'>
+
+/** The mark a run counts with: the owner's own where he set one, else the one the rules gave. */
+export const markOf = (m: Marked): BenchMarkStatus => m.by_hand ?? m.status
+
 /** What a set of runs comes to: "2/3", with errors and skipped runs named beside it. */
 export function cellOf(marks: BenchMark[]): Cell {
-  const count = (status: BenchMarkStatus) => marks.filter((m) => m.status === status).length
+  const count = (status: BenchMarkStatus) => marks.filter((m) => markOf(m) === status).length
   const passed = count('pass'), errors = count('error'), skipped = count('skipped')
   const counted = passed + count('fail')
+  const byHand = marks.filter((m) => m.by_hand != null).length
   const parts = [...(counted ? [`${passed}/${counted}`] : []), ...(errors ? [many(errors, 'error')] : []),
-    ...(skipped ? [counted || errors ? `${skipped} skipped` : 'skipped'] : [])]
+    ...(skipped ? [counted || errors ? `${skipped} skipped` : 'skipped'] : []), ...(byHand ? [`${byHand} by hand`] : [])]
   const tone = !counted ? 'none' : passed === counted ? 'good' : passed === 0 ? 'bad' : 'mixed'
-  return { passed, counted, errors, skipped, text: parts.join(' · ') || '…', tone }
+  return { passed, counted, errors, skipped, byHand, text: parts.join(' · ') || '…', tone }
 }
 
 /** A time a person reads at a glance: "4.3 s", "42 s", "2.5 min". */
@@ -107,3 +115,15 @@ export const stateWord = (status: BenchStatus): string =>
   ({ running: 'Running', done: 'Finished', cancelled: 'Cancelled', interrupted: 'Interrupted', stopped: 'Stopped' })[status]
 
 export const verdictWord = (status: BenchMarkStatus): string => ({ pass: 'Pass', fail: 'Fail', error: 'Error', skipped: 'Skipped' })[status]
+
+/** The mark of a run in its line: the owner's own with what the rules said beside it, else the one the rules gave. */
+export const verdictLine = (r: Marked): string =>
+  r.by_hand ? `${verdictWord(r.by_hand)} · set by hand (the rules said ${verdictWord(r.status)})` : verdictWord(r.status)
+
+/** What the owner can do with the mark of a run: set the other one, or take his own back. null for a run the rules
+ * gave no mark: an error and a skipped run have no answer to judge. */
+export function handChoice(r: Marked): { label: string; status: 'pass' | 'fail' | null } | null {
+  if (r.status !== 'pass' && r.status !== 'fail') return null
+  if (r.by_hand) return { label: 'Undo', status: null }
+  return r.status === 'fail' ? { label: 'Count as pass', status: 'pass' } : { label: 'Count as fail', status: 'fail' }
+}

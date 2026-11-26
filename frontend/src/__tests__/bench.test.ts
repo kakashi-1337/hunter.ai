@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { GROUP_LABELS, benchTable, cellOf, cloudLine, modelNames, progressLine, seconds, sizeLine, stateWord, timeLine, verdictWord } from '../bench'
+import { GROUP_LABELS, benchTable, cellOf, cloudLine, handChoice, modelNames, progressLine, seconds, sizeLine, stateWord, timeLine, verdictLine, verdictWord } from '../bench'
 import type { BenchMark, BenchMarkStatus, BenchProgress, BenchRun, ModelRef } from '../types'
 
 const A: ModelRef = { provider: 'ollama', model: 'hf.co/mradermacher/Huihui-Qwen3.5-9B-abliterated-GGUF:Q6_K' }
@@ -20,21 +20,21 @@ const run = (over: Partial<BenchRun> = {}): BenchRun => ({
 
 describe('a cell of the table', () => {
   it('counts the runs that passed among those that were marked', () => {
-    expect(cellOf(marksOf('pass', 'pass', 'fail'))).toEqual({ passed: 2, counted: 3, errors: 0, skipped: 0, text: '2/3', tone: 'mixed' })
+    expect(cellOf(marksOf('pass', 'pass', 'fail'))).toEqual({ passed: 2, counted: 3, errors: 0, skipped: 0, byHand: 0, text: '2/3', tone: 'mixed' })
     expect(cellOf(marksOf('pass', 'pass', 'pass'))).toMatchObject({ text: '3/3', tone: 'good' })
     expect(cellOf(marksOf('fail', 'fail', 'fail'))).toMatchObject({ text: '0/3', tone: 'bad' })
     expect(cellOf(marksOf('pass'))).toMatchObject({ text: '1/1', tone: 'good' })
   })
   it('keeps errors and skipped runs apart: they are neither a pass nor a fail', () => {
-    expect(cellOf(marksOf('pass', 'pass', 'error'))).toEqual({ passed: 2, counted: 2, errors: 1, skipped: 0, text: '2/2 · 1 error', tone: 'good' })
+    expect(cellOf(marksOf('pass', 'pass', 'error'))).toEqual({ passed: 2, counted: 2, errors: 1, skipped: 0, byHand: 0, text: '2/2 · 1 error', tone: 'good' })
     expect(cellOf(marksOf('fail', 'error', 'error'))).toMatchObject({ text: '0/1 · 2 errors', tone: 'bad' })
     expect(cellOf(marksOf('pass', 'fail', 'skipped'))).toMatchObject({ text: '1/2 · 1 skipped', tone: 'mixed' })
-    expect(cellOf(marksOf('error', 'error'))).toEqual({ passed: 0, counted: 0, errors: 2, skipped: 0, text: '2 errors', tone: 'none' })
+    expect(cellOf(marksOf('error', 'error'))).toEqual({ passed: 0, counted: 0, errors: 2, skipped: 0, byHand: 0, text: '2 errors', tone: 'none' })
     expect(cellOf(marksOf('error', 'skipped', 'skipped'))).toMatchObject({ text: '1 error · 2 skipped', tone: 'none' })
     expect(cellOf(marksOf('skipped', 'skipped', 'skipped'))).toMatchObject({ text: 'skipped', tone: 'none', skipped: 3 })
   })
   it('shows that nothing ran yet', () => {
-    expect(cellOf([])).toEqual({ passed: 0, counted: 0, errors: 0, skipped: 0, text: '…', tone: 'none' })
+    expect(cellOf([])).toEqual({ passed: 0, counted: 0, errors: 0, skipped: 0, byHand: 0, text: '…', tone: 'none' })
   })
 })
 
@@ -156,5 +156,48 @@ describe('the words for states and marks', () => {
   })
   it('names each mark of a run', () => {
     expect((['pass', 'fail', 'error', 'skipped'] as const).map(verdictWord)).toEqual(['Pass', 'Fail', 'Error', 'Skipped'])
+  })
+})
+
+// The rules of a set are lists of phrases, and a wording nobody thought of gets a wrong mark. The owner reads the
+// answer and sets the mark right; the table counts his mark and says that it holds one.
+describe('a mark the owner set by hand', () => {
+  const set = (status: 'pass' | 'fail', byHand: 'pass' | 'fail' | null, repeat = 1): BenchMark => ({ ...mark(A, 'c', repeat, status), by_hand: byHand })
+
+  it('is the one a cell counts with, and the cell says how many it holds', () => {
+    expect(cellOf([set('fail', 'pass'), ...marksOf('pass', 'fail')]))
+      .toEqual({ passed: 2, counted: 3, errors: 0, skipped: 0, byHand: 1, text: '2/3 · 1 by hand', tone: 'mixed' })
+    expect(cellOf([set('pass', 'fail'), set('pass', 'fail', 2)])).toMatchObject({ passed: 0, counted: 2, byHand: 2, text: '0/2 · 2 by hand', tone: 'bad' })
+    expect(cellOf([set('fail', 'pass'), mark(A, 'c', 2, 'error'), mark(A, 'c', 3, 'skipped')]))
+      .toMatchObject({ passed: 1, counted: 1, text: '1/1 · 1 error · 1 skipped · 1 by hand', tone: 'good' })
+  })
+
+  it('is not there when the server sent none, or sent nothing of the kind', () => {
+    expect(cellOf([set('fail', null), mark(A, 'c', 2, 'pass')])).toMatchObject({ passed: 1, counted: 2, byHand: 0, text: '1/2' })
+  })
+
+  it('is counted in the rows of the table and in its totals', () => {
+    const marks = [{ ...mark(A, 'fake-cve', 1, 'fail'), by_hand: 'pass' as const }, mark(A, 'fake-cve', 2, 'fail'), mark(A, 'look-up', 1, 'pass')]
+    const table = benchTable(run({ models: [A] }), marks)
+    expect(table.groups.map((g) => [g.label, g.totals[0].text, ...g.rows.map((r) => r.cells[0].text)]))
+      .toEqual([['Tool use', '1/1', '1/1'], ['Honesty', '1/2 · 1 by hand', '1/2 · 1 by hand', '…']])
+    expect(table.totals[0].text).toBe('2/3 · 1 by hand')
+  })
+
+  it('is named in the line of its run beside what the rules said', () => {
+    expect(verdictLine({ status: 'fail', by_hand: 'pass' })).toBe('Pass · set by hand (the rules said Fail)')
+    expect(verdictLine({ status: 'pass', by_hand: 'fail' })).toBe('Fail · set by hand (the rules said Pass)')
+    expect(verdictLine({ status: 'pass', by_hand: null })).toBe('Pass')
+    expect(verdictLine({ status: 'fail' })).toBe('Fail')
+    expect(verdictLine({ status: 'error' })).toBe('Error')
+  })
+
+  it('can be set for a run the rules marked, taken back where it was set, and nothing else', () => {
+    expect(handChoice({ status: 'fail' })).toEqual({ label: 'Count as pass', status: 'pass' })
+    expect(handChoice({ status: 'pass', by_hand: null })).toEqual({ label: 'Count as fail', status: 'fail' })
+    expect(handChoice({ status: 'fail', by_hand: 'pass' })).toEqual({ label: 'Undo', status: null })
+    expect(handChoice({ status: 'pass', by_hand: 'fail' })).toEqual({ label: 'Undo', status: null })
+    expect(handChoice({ status: 'error' })).toBeNull()
+    expect(handChoice({ status: 'skipped' })).toBeNull()
   })
 })

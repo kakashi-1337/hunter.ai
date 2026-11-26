@@ -384,3 +384,10 @@ create table if not exists bench_results (
   created_at text not null
 );
 create index if not exists bench_results_run on bench_results(run_id);
+-- A mark the owner set right by hand. The rules of a set are lists of phrases, and a wording nobody thought of gets
+-- a wrong mark: the owner reads the answer and says what the run is. What the rules said stays in bench_results.
+create table if not exists bench_corrections (
+  result_id text primary key references bench_results(id) on delete cascade,
+  status text not null,                -- pass | fail: never the mark the rules gave
+  created_at text not null
+);

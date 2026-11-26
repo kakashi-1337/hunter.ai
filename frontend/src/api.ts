@@ -260,5 +260,8 @@ export const benchRun = (id: string) => request<BenchDetail>('GET', `/api/bench/
 /** The runs of one case on one model, with their lines, calls and answers. */
 export const benchCell = (id: string, model: ModelRef, caseId: string) =>
   request<BenchResult[]>('GET', `/api/bench/runs/${id}/results${q({ provider: model.provider, model: model.model, case_id: caseId })}`)
+/** The owner's own mark for one run, where the rules misread its answer; null takes it away again. */
+export const setBenchMark = (resultId: string, status: 'pass' | 'fail' | null) =>
+  request<BenchResult>('PUT', `/api/bench/results/${resultId}/mark`, { status })
 export const cancelBench = (id: string) => request<void>('POST', `/api/bench/runs/${id}/cancel`)
 export const deleteBench = (id: string) => request<void>('DELETE', `/api/bench/runs/${id}`)

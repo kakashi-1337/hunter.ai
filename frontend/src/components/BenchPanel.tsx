@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import * as api from '../api'
-import { benchTable, cloudLine, modelNames, progressLine, seconds, sizeLine, stateWord, verdictWord } from '../bench'
+import { benchTable, cloudLine, handChoice, modelNames, progressLine, seconds, sizeLine, stateWord, verdictLine } from '../bench'
 import { confirmBox } from '../dialog'
 import { useStore } from '../store'
 import { visible } from '../tree'
@@ -13,8 +13,11 @@ const said = (e: unknown) => (e instanceof Error ? e.message : String(e))
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`
 
 /** The runs of one case on one model: for each repeat the mark, the lines of the rules that did not hold, the
- * calls and the answer, so a mark can be seen for what it is. */
-function CellDetail({ run, model, name, caseId, made }: { run: BenchRun; model: ModelRef; name: string; caseId: string; made: number }) {
+ * calls and the answer, so a mark can be seen for what it is. A mark the rules got wrong can be set right here:
+ * `onMarked` is called after it, for the table to be counted again. */
+function CellDetail({ run, model, name, caseId, made, onMarked }: {
+  run: BenchRun; model: ModelRef; name: string; caseId: string; made: number; onMarked: () => void
+}) {
   const [results, setResults] = useState<BenchResult[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const { provider, model: id } = model
@@ -26,17 +29,29 @@ function CellDetail({ run, model, name, caseId, made }: { run: BenchRun; model: 
     return () => { stop = true }
   }, [run.id, provider, id, caseId, made])
   const prompt = run.cases.find((c) => c.id === caseId)?.prompt ?? ''
+  const mark = async (result: BenchResult, status: 'pass' | 'fail' | null) => {
+    try {
+      const now = await api.setBenchMark(result.id, status)
+      setResults((have) => have && have.map((r) => (r.id === now.id ? now : r)))
+      setError(null)
+      onMarked()
+    } catch (e) { setError(said(e)) }
+  }
   return (
     <div className="bench-detail">
       <h3 className="section">{caseId} on {name}</h3>
       <div className="hint">{visible(prompt)}</div>
       {error && <div className="bench-error">{error}</div>}
       {results && results.length === 0 && <div className="hint">This case has not run on this model yet.</div>}
-      {results?.map((r) => (
+      {results?.map((r) => {
+        const choice = handChoice(r)
+        return (
         <div className="bench-run" key={r.id}>
           <div className="row">
-            <span className="bench-verdict">Repeat {r.repeat}: {verdictWord(r.status)}</span>
+            <span className="bench-verdict">Repeat {r.repeat}: {verdictLine(r)}</span>
             {r.status !== 'skipped' && <span className="hint">{plural(r.turns, 'model turn')}, {seconds(r.duration_ms)}, {r.input_tokens.toLocaleString()} tokens in, {r.output_tokens.toLocaleString()} out</span>}
+            {choice && <button className="link bench-by-hand" onClick={() => void mark(r, choice.status)}
+              title={choice.status ? 'The rules of a set are lists of phrases and can misread an answer. Your mark is counted, and what the rules said stays.' : 'Take your mark back: the run counts as the rules marked it.'}>{choice.label}</button>}
           </div>
           {r.reasons.length > 0 && <ul className="bench-reasons">{r.reasons.map((line, i) => <li key={i}>{visible(line)}</li>)}</ul>}
           {r.calls.length > 0 && <ul className="bench-calls">{r.calls.map((c, i) => (
@@ -44,7 +59,8 @@ function CellDetail({ run, model, name, caseId, made }: { run: BenchRun; model: 
           {r.calls_made > r.calls.length && <div className="hint">{r.calls.length === 1 ? 'The first call' : `The first ${r.calls.length} calls`} of {r.calls_made} {r.calls.length === 1 ? 'is' : 'are'} shown.</div>}
           {r.status !== 'skipped' && (r.answer ? <pre>{visible(r.answer)}</pre> : <div className="hint">No answer.</div>)}
         </div>
-      ))}
+        )
+      })}
     </div>
   )
 }
@@ -232,10 +248,11 @@ export function BenchPanel({ onClose }: { onClose: () => void }) {
               <tr className="bench-all"><th>Time</th>{table.times.map((t, i) => <td key={i}>{t}</td>)}</tr>
             </tbody>
           </table>
-          {!shownCell && <div className="hint">Press a cell to see its runs: what the model called, what it answered, and which rule did not hold.</div>}
+          {!shownCell && <div className="hint">Press a cell to see its runs: what the model called, what it answered, and which rule did not hold. A mark the rules got wrong can be set right there.</div>}
           {shownCell && <CellDetail key={`${run.id}/${keyOf(shownCell.model)}/${shownCell.caseId}`} run={run} model={shownCell.model} caseId={shownCell.caseId}
             name={names[run.models.findIndex((m) => keyOf(m) === keyOf(shownCell.model))]}
-            made={opened!.marks.filter((m) => m.case_id === shownCell.caseId && m.provider === shownCell.model.provider && m.model === shownCell.model.model).length} />}
+            made={opened!.marks.filter((m) => m.case_id === shownCell.caseId && m.provider === shownCell.model.provider && m.model === shownCell.model.model).length}
+            onMarked={() => void open(run.id)} />}
         </div>
       )}
     </Modal>

@@ -17,6 +17,12 @@ PROBLEM_CHARS = 300      # of what a refused call was told
 CALLS_KEPT = 50          # calls of one run; how many were made is kept beside them
 REASONS_KEPT = 40        # lines of one mark
 INTERRUPTED = "HunterAI stopped while this bench was running."
+# A result with the mark its owner set by hand beside it, when he set one
+RESULTS = "select r.*, c.status as by_hand from bench_results r left join bench_corrections c on c.result_id = r.id"
+
+
+class NotJudged(Exception):
+    """The run has no mark of the rules that could be set right: its model call failed, or it was never made."""
 
 
 class ModelRef(BaseModel):
@@ -51,7 +57,8 @@ class BenchResult(BaseModel):
     model: str
     case_id: str
     repeat: int
-    status: Literal["pass", "fail", "error", "skipped"]
+    status: Literal["pass", "fail", "error", "skipped"]        # what the rules of the set gave
+    by_hand: Literal["pass", "fail"] | None = None             # what the owner says it is, where he set the mark right
     reasons: list[str]
     calls: list[CallBrief]
     calls_made: int
@@ -70,6 +77,7 @@ class Mark(BaseModel):
     case_id: str
     repeat: int
     status: Literal["pass", "fail", "error", "skipped"]
+    by_hand: Literal["pass", "fail"] | None = None
     turns: int
     input_tokens: int
     output_tokens: int
@@ -88,7 +96,7 @@ def _run(r) -> BenchRun:
 
 def _result(r) -> BenchResult:
     return BenchResult(id=r["id"], run_id=r["run_id"], provider=r["provider"], model=r["model"], case_id=r["case_id"],
-                       repeat=r["repeat"], status=r["status"], reasons=json.loads(r["reasons_json"]),
+                       repeat=r["repeat"], status=r["status"], by_hand=r["by_hand"], reasons=json.loads(r["reasons_json"]),
                        calls=json.loads(r["calls_json"]), calls_made=r["calls_made"], answer=r["answer"], turns=r["turns"],
                        input_tokens=r["input_tokens"], output_tokens=r["output_tokens"], duration_ms=r["duration_ms"],
                        created_at=r["created_at"])
@@ -124,7 +132,31 @@ async def add_result(conn, run_id: str, ref: ModelRef, case_id: str, repeat: int
          _cut(t.answer, ANSWER_CHARS) if t is not None else "", t.turns if t is not None else 0,
          t.input_tokens if t is not None else 0, t.output_tokens if t is not None else 0, duration_ms, now()))
     await conn.commit()
-    return _result(await (await conn.execute("select * from bench_results where id=?", (rid,))).fetchone())
+    return await result(conn, rid)
+
+
+async def result(conn, result_id: str) -> BenchResult | None:
+    r = await (await conn.execute(f"{RESULTS} where r.id=?", (result_id,))).fetchone()
+    return _result(r) if r else None
+
+
+async def set_mark(conn, result_id: str, status: Literal["pass", "fail"] | None) -> BenchResult | None:
+    """The owner's own mark for one run. None for `status`, and the mark the rules gave, take his mark away again:
+    a correction that says what the rules say is none. Returns the result as it is now, None when there is no such
+    result. NotJudged for a run the rules gave no mark."""
+    was = await result(conn, result_id)
+    if was is None:
+        return None
+    if was.status not in ("pass", "fail"):
+        raise NotJudged(result_id)
+    if status is None or status == was.status:
+        await conn.execute("delete from bench_corrections where result_id=?", (result_id,))
+    else:
+        await conn.execute("insert into bench_corrections(result_id,status,created_at) values(?,?,?)"
+                           " on conflict(result_id) do update set status=excluded.status, created_at=excluded.created_at",
+                           (result_id, status, now()))
+    await conn.commit()
+    return await result(conn, result_id)
 
 
 async def note_tools(conn, run_id: str, offered: int) -> None:
@@ -145,22 +177,23 @@ async def get(conn, run_id: str) -> BenchRun | None:
 
 async def results(conn, run_id: str) -> builtins.list[BenchResult]:
     """The results of a bench in the order they were added."""
-    rows = await (await conn.execute("select * from bench_results where run_id=? order by rowid", (run_id,))).fetchall()
+    rows = await (await conn.execute(f"{RESULTS} where r.run_id=? order by r.rowid", (run_id,))).fetchall()
     return [_result(r) for r in rows]
 
 
 async def marks(conn, run_id: str) -> builtins.list[Mark]:
     """Every result of a bench in the order they were added, as the table needs them."""
     rows = await (await conn.execute(
-        "select provider, model, case_id, repeat, status, turns, input_tokens, output_tokens, duration_ms"
-        " from bench_results where run_id=? order by rowid", (run_id,))).fetchall()
+        "select r.provider, r.model, r.case_id, r.repeat, r.status, c.status as by_hand, r.turns, r.input_tokens,"
+        " r.output_tokens, r.duration_ms from bench_results r left join bench_corrections c on c.result_id = r.id"
+        " where r.run_id=? order by r.rowid", (run_id,))).fetchall()
     return [Mark(**dict(r)) for r in rows]
 
 
 async def cell(conn, run_id: str, ref: ModelRef, case_id: str) -> builtins.list[BenchResult]:
     """The runs of one case on one model, by repeat."""
     rows = await (await conn.execute(
-        "select * from bench_results where run_id=? and provider=? and model=? and case_id=? order by repeat, rowid",
+        f"{RESULTS} where r.run_id=? and r.provider=? and r.model=? and r.case_id=? order by r.repeat, r.rowid",
         (run_id, ref.provider, ref.model, case_id))).fetchall()
     return [_result(r) for r in rows]
 

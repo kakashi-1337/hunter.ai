@@ -404,6 +404,15 @@ Put a model and its fine-tuned version into one bench to see what the training c
   overflow'", "a call named payments.shop.example". Press a cell of the table to see its
   runs: the calls, the answer, and those lines. The rules do not judge quality, and a
   phrase rule can misread an answer; the answer is shown so that a mark can be checked.
+- **A mark the rules got wrong can be set right by hand.** The rules are lists of phrases,
+  and an answer in words nobody thought of gets a wrong mark, in either direction. Among
+  the runs of a cell, a run the rules marked has a button: **Count as pass** on a fail,
+  **Count as fail** on a pass. The run then reads "Pass · set by hand (the rules said
+  Fail)", the table counts your mark, and every cell and total that holds one says so:
+  "3/3 · 1 by hand". **Undo** takes it back. The lines of the rules stay beside your mark.
+  An error and a skipped run have no button: there is no answer to judge. Your mark is for
+  that one stored run; the next bench marks the same wording as the rules do, until the
+  phrases of the set are changed.
 - **Each test runs several times**: three, or what you pick from 1 to 5. A cell reads
   "2/3". A run the provider failed is an error, shown apart: neither a pass nor a fail.
   After three runs of one model in a row that end with an error or at the time limit, the
