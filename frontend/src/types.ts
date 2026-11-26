@@ -265,6 +265,7 @@ export interface Settings {
   kb_redact: boolean
   /** Build output, bundles, source maps and lock files are left out of a collection when a folder is indexed. */
   kb_skip_generated: boolean
+  interface_font: string              // a font of this computer that the interface is set in; '' for the system's
   /** A chat's collections are searched before every answer, unless the chat switched that off for itself. */
   kb_lookup?: boolean
   /** The web is asked before every answer, with words of the message. Off until the owner switches it on. */

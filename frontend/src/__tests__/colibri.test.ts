@@ -87,7 +87,7 @@ const SETTINGS: Settings = {
   decision_engine: true, kb_redact: true, kb_skip_generated: true, vision_model: null, browser_via_caido: false, answer_check: false,
   mcp_on_demand: true, notify_findings: false, notify_min_severity: 'high', notify_webhook_set: false, caido_available: false,
   upstream_proxy: '', upstream_proxy_password: false, upstream_proxy_intercepts: false, upstream_proxy_kb: false,
-  provider_proxy: '', provider_proxy_password: false, colibri_url: '', colibri_key_set: false,
+  provider_proxy: '', provider_proxy_password: false, colibri_url: '', colibri_key_set: false, interface_font: '',
 }
 const LOCAL: LocalModel = {
   answers: true, model: 'qwen3:8b', installed: true, window: 16384, limit: 40960, bytes_per_token: 147456,

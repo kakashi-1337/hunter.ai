@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from typing import Literal
@@ -23,6 +24,8 @@ router = APIRouter(prefix="/api/settings")
 KEY_NAMES = ["ABLIT_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "XAI_API_KEY",
              "GEMINI_API_KEY"]
 SECRET_NAMES = [*KEY_NAMES, notify.KEY, colibri.KEY_ENV]      # what Settings may write to the .env file
+# The name of a font, and nothing that could be more than a name where the page puts it into its style.
+FONT_NAME = re.compile(r"[^\W_][\w .+\-]{0,59}")
 
 
 class KeyIn(BaseModel):
@@ -60,6 +63,7 @@ class SettingsIn(BaseModel):
     embed_on_cpu: bool | None = None        # the embedding model runs on the processor, not on the graphics card
     subagent_provider: str | None = None    # the cloud model that does the subagent work of a chat on a local model;
     subagent_model: str | None = None       # "" or null: such a chat has no subagents
+    interface_font: str | None = None       # a font of the owner's computer that the interface is set in; "": the system's
 
 
 def _machine() -> dict:
@@ -108,6 +112,7 @@ async def _view(conn) -> dict:
         "decision_engine": bool(await settings.get(conn, "decision_engine", runner.ENGINE_DEFAULT)),
         "kb_redact": bool(await settings.get(conn, "kb_redact", True)),
         "kb_skip_generated": bool(await settings.get(conn, "kb_skip_generated", True)),
+        "interface_font": await settings.get(conn, "interface_font", "") or "",
         "kb_lookup": bool(await settings.get(conn, kb_repo.LOOKUP, kb_repo.LOOKUP_DEFAULT)),
         "web_lookup": bool(await settings.get(conn, weblookup.SETTING, weblookup.DEFAULT)),
         "vision_model": await settings.get(conn, "vision_model") or None,
@@ -170,6 +175,12 @@ async def put_settings(body: SettingsIn, conn=Depends(get_conn)):
             models_via = upstream.typed(typed, _provider_proxy())
         except upstream.ProxyError as e:
             raise HTTPException(400, f"proxy for the model providers: {e}") from None
+    font = fields.pop("interface_font", None)
+    if font is not None:
+        font = font.strip()
+        if font and not FONT_NAME.fullmatch(font):
+            raise HTTPException(400, "A font is named with letters, digits, spaces and . _ + - (60 characters at most), "
+                                     "like Ubuntu Mono.")
     chosen = (fields.get("subagent_provider") or "").strip()
     if chosen and chosen not in subagents.stand_in_providers():
         raise HTTPException(400, "The subagents of a chat on a local model can be given to a cloud provider that uses tools ("
@@ -245,6 +256,8 @@ async def put_settings(body: SettingsIn, conn=Depends(get_conn)):
     if fields.get("kb_skip_generated") is not None:
         await settings.put(conn, "kb_skip_generated", bool(fields["kb_skip_generated"]))
     fields.pop("kb_skip_generated", None)
+    if font is not None:
+        await settings.put(conn, "interface_font", font)
     if fields.get("kb_lookup") is not None:
         await settings.put(conn, kb_repo.LOOKUP, bool(fields["kb_lookup"]))
     fields.pop("kb_lookup", None)
