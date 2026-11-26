@@ -1,4 +1,4 @@
-import type { AnswerCheckBlock, Block, ChangesBlock, CheckResult, ColibriServer, FolderCheck, Goal, Helper, FindingRow, LlamaModel, LlamaServer, LocalModel, Message, Options, PermissionRequest, Policy, ProviderInfo, RunEvent, SourcesBlock, Step, SwarmMember, SystemStatus, WebSourcesBlock } from './types'
+import type { AnswerCheckBlock, Block, ChangesBlock, CheckResult, ColibriServer, FolderCheck, Goal, Helper, FindingRow, LlamaFind, LlamaFindModel, LlamaModel, LlamaServer, LocalModel, Message, Options, PermissionRequest, Policy, ProviderInfo, RunEvent, SourcesBlock, Step, SwarmMember, SystemStatus, WebSourcesBlock } from './types'
 
 export function messageText(m: Message): string {
   return m.blocks.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('\n')
@@ -653,10 +653,11 @@ const ROUTER_SHOWN = 6        // the models of a router that are named in its li
 
 /** What Settings says under the address of llama-server: what answers there, and a warning for what stands in the
  * way of a chat with it. A server that does not answer or still loads its model is said without alarm: it may be off
- * on purpose. The command to start it names the context that leaves room for a chat here. `keySet`: a key is stored. */
-export function llamaCppHint(server: LlamaServer | null, keySet: boolean): { lines: string[]; warn: string | null } {
+ * on purpose. The command to start it names the context that leaves room for a chat here; `command`: the whole
+ * command for this machine stands below, and the line points at it. `keySet`: a key is stored. */
+export function llamaCppHint(server: LlamaServer | null, keySet: boolean, command = false): { lines: string[]; warn: string | null } {
   if (!server || server.state === 'off') return { lines: [], warn: null }
-  if (server.state === 'down') return { lines: [`Nothing answers at ${server.url}. Start llama-server (llama-server -m your-model.gguf -c ${server.start_with}), then press Check.`], warn: null }
+  if (server.state === 'down') return { lines: [`Nothing answers at ${server.url}. Start llama-server ${command ? 'with the command below' : `(llama-server -m your-model.gguf -c ${server.start_with})`}, then press Check.`], warn: null }
   if (server.state === 'loading') return { lines: [`llama-server at ${server.url} is still loading its model. Press Check in a moment.`], warn: null }
   if (server.state === 'key') return { lines: [], warn: `llama-server at ${server.url} ${keySet ? 'did not accept the key that is set' : 'asks for a key'}: enter the one it was started with (--api-key) below.` }
   if (server.state !== 'ok') return { lines: [], warn: `llama.cpp: ${server.said}.` }
@@ -681,6 +682,58 @@ export function llamaCppHint(server: LlamaServer | null, keySet: boolean): { lin
   const broke = server.models.filter((m) => m.failed)
   if (broke.length) warns.push(`${broke.map((m) => m.id).join(', ')} did not load: llama-server says why in the terminal it runs in.`)
   return { lines, warn: warns.length ? warns.join(' ') : null }
+}
+
+/** What Settings shows to start a llama-server on this machine. lines: what was found. warn: what stands in the way.
+ * use: the address a button saves (null: no button). models: Ollama's, to choose one for the command. plain: the
+ * command for a GGUF file of the owner's own. after: what to do with the command. */
+export interface LlamaFindView { lines: string[]; warn: string | null; use: string | null; models: LlamaFindModel[]; plain: string | null; after: string[] }
+
+const NO_LLAMA_SERVER = "No llama-server was found on this machine: none in the llama.cpp folder of HunterAI's data folder, none on the PATH, "
+  + 'none where Unsloth Studio keeps its own, and none beside Ollama. It comes with llama.cpp (github.com/ggml-org/llama.cpp) and with a current '
+  + 'Ollama; the README says more ("llama-server on your graphics card"). HunterAI does not install it.'
+const NO_CARD = 'This llama-server sees no graphics card: its build has no part for one, or the driver is missing. A model started with it runs on '
+  + 'the processor, much slower than on a card. The README says where a build for your card comes from ("llama-server on your graphics card").'
+
+/** The block under the address of llama-server that says how to start one here: shown while no address is saved, and
+ * for a saved one at which nothing answers or what answers serves no model. `found`: what the machine has (null: not
+ * looked at). `server`: what the saved address said (null: not asked). `saved`: the saved address, '' for none.
+ * Null: nothing to show. A llama-server that already answers at the usual address is offered as it is. */
+export function llamaFindView(found: LlamaFind | null, server: LlamaServer | null, saved: string): LlamaFindView | null {
+  const at = found?.address
+  if (!found || !at) return null
+  const state = saved ? server?.state : found.answers?.state ?? 'down'
+  if (saved && (state === undefined || !['down', 'nomodel', 'odd'].includes(state))) return null
+  const nothing = { warn: null, models: [], plain: null, after: [] }
+  if (state === 'ok') return { ...nothing, lines: [`A llama-server answers at ${at} and serves ${found.answers!.serves.join(', ')}.`], use: at }
+  if (state === 'loading') return { ...nothing, lines: [`A llama-server answers at ${at} and is still loading its model.`], use: at }
+  if (state === 'key') return { ...nothing, lines: [`A llama-server answers at ${at} and asks for a key: save the address, then enter the key below.`], use: at }
+  const warns = [
+    ...(state === 'nomodel' ? [`A llama-server already runs at ${at} without a model to chat with, so the port is taken: stop it first (Ctrl+C in the terminal it runs in).`] : []),
+    ...(state === 'odd' ? [`Something that is not llama-server answers at ${at}, so that port is taken: change --port in the command, and save the address with the port you chose.`] : []),
+    ...(found.program && found.devices?.length === 0 ? [NO_CARD] : []),
+  ]
+  const warn = warns.length ? warns.join(' ') : null
+  if (!found.program) return { ...nothing, lines: [NO_LLAMA_SERVER], warn, use: null }
+  const cards = (found.devices ?? []).map((d) => `${d.name}: ${d.card}, ${whole(d.free_mb)} of ${whole(d.total_mb)} MiB free`)
+  const lines = [
+    `llama-server is at ${found.program}${found.from_ollama ? ', the one Ollama brings' : ''}.${cards.length ? ` It sees ${cards.join('; ')}.` : ''}`,
+    !found.ollama ? 'Ollama does not answer, so the models it has cannot be offered here.'
+      : found.models.length ? "Start it with a model Ollama has: llama-server reads Ollama's own file, nothing is copied."
+        : 'Ollama has no chat model to offer.',
+  ]
+  const after = [
+    ...(found.held.length ? [`Ollama holds ${found.held.join(', ')} in memory now, and both would share the card. Free it first: ${found.held.map((n) => `ollama stop ${n}`).join(' && ')}`] : []),
+    'Run the command in a terminal and leave it open: llama-server holds the model until you stop it there (Ctrl+C).',
+    saved ? 'When it says it is listening, press Check.' : `When it says it is listening, press "Use ${at}".`,
+  ]
+  return { lines, warn, use: saved ? null : at, models: found.models, plain: found.plain, after }
+}
+
+/** What stands under the command of the model of Ollama that is picked, or in its place when it has none. */
+export function llamaModelNote(m: LlamaFindModel): { lines: string[]; warn: string | null } {
+  if (!m.command) return { lines: [], warn: `${m.name} cannot be started this way: ${m.why_not}.` }
+  return { lines: [`In the model list of a chat it will be ${m.alias}, under llamacpp; it reads ${m.images ? 'pictures' : 'text only'}.`, ...(m.note ? [m.note] : [])], warn: null }
 }
 
 /** The providers that are a server of the owner's own: set up by its address in Settings, not by a key. */

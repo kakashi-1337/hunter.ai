@@ -349,6 +349,11 @@ class LlamaCppProvider(OpenAICompatProvider):
         except httpx.HTTPError as e:
             return Served("down", at, type(e).__name__)
 
+    async def look_at(self, at: str) -> Served:
+        """What answers at an address that is not the saved one, asked once. Nothing of it is kept: it is not what
+        this provider serves. For the page that looks for a llama-server the owner has not entered yet."""
+        return await self._look(at)
+
     async def served(self, fresh: bool = False) -> Served:
         """What the server says of itself. It is asked again when `fresh`, when the address changed, or when the last
         answer is older than KEEP seconds: the owner may have started it with another model or another context, and a

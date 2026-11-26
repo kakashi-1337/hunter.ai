@@ -807,7 +807,9 @@ tried: a real model, and a real picture.
 `llama-server` is the server of [llama.cpp](https://github.com/ggml-org/llama.cpp). It runs
 a GGUF model file on this machine and answers with an OpenAI-compatible API. You choose
 all of it yourself: the build, the model file, the context, how much of the model goes on
-the graphics card. HunterAI talks to that server; it does not install, start or stop it.
+the graphics card. HunterAI talks to that server, and helps you start it: it finds the
+program on this machine and writes the command. It does not install llama-server, and it
+does not start or stop it.
 
 ```sh
 llama-server -m ~/models/your-model.gguf -c 32768
@@ -818,6 +820,59 @@ from before October 2026. Enter it under **Settings → llama.cpp**. It is writt
 as `HUNTERAI_LLAMACPP_URL`. Without an address llama.cpp is not used, and nothing is asked
 anywhere. With one, the lines under the field say what answers there, and the model is in
 the model list of every chat, under `llamacpp`.
+
+#### The command that starts it
+
+While no model is served at the address (none is saved, or nothing answers at the saved
+one), **Settings → llama.cpp** looks at this machine and shows what it found:
+
+- **The program.** A `llama-server` is looked for in the `llama.cpp` folder of HunterAI's
+  data folder (`~/.hunterai/llama.cpp/llama-server`), on the `PATH`, where Unsloth Studio
+  keeps its own (`~/.unsloth/llama.cpp`), in a build in `~/llama.cpp/build/bin`, and beside
+  Ollama. A current Ollama brings a llama-server of its own: it stands in `lib/ollama` next
+  to the folder of the `ollama` program (`/usr/local/lib/ollama`), with a folder for each
+  kind of graphics card it has a part for (`cuda_v13`, `cuda_v12`, `vulkan`).
+- **The graphics cards it sees.** Each program is asked for its list of cards
+  (`llama-server --list-devices`, which loads no model), one after the other, and the
+  first that sees a card is taken. Where none does, the first program is named with a
+  warning: a model started with it runs on the processor.
+- **A command for each chat model of Ollama.** llama-server is given the very file Ollama
+  keeps for the model (nothing is copied), its projector when it has one, a context, a
+  short name (`--alias`, the name the model then has in the model list), the port, and the
+  sampling values the model has in Ollama. The context is the one that holds HunterAI's
+  rules and tools with room for a chat, not less than "Context window for local models",
+  and never more than the model was trained with. For Ollama's own llama-server the
+  command begins with the two variables Ollama itself starts it with (`LD_LIBRARY_PATH`
+  and `GGML_BACKEND_PATH`), so that it finds its part for the card.
+- **A command for a GGUF file of your own**, with `your-model.gguf` for you to replace.
+
+Copy the command, run it in a terminal and leave that terminal open: llama-server holds
+the model until you stop it there with Ctrl+C. When it says it is listening, **Use
+http://127.0.0.1:9931** saves the address (**Check**, when one is saved already). A model
+Ollama holds in memory at that moment is named with the `ollama stop` that frees the card
+first. A llama-server that already answers at the usual address is offered as it is.
+
+What the search does not do: it starts nothing and installs nothing, and it changes no
+file. A model whose file Ollama keeps elsewhere (an Ollama in a container, or on another
+machine) is listed with the reason and without a command. A model Ollama keeps in the form
+of its own engine is offered with a note, because llama-server may not load that file.
+
+#### llama-server on your graphics card
+
+A llama-server that was built for the processor alone runs every model there, whatever the
+machine has. `llama-server --list-devices` tells: it lists the cards the program can use,
+and `(none)` when it has no part for one. Settings says the same under the program it found.
+
+Seen on the owner's laptop (an RTX 5080 Laptop GPU, Ollama 0.40.18): the llama-server that
+Unsloth Studio had installed listed no card, and a 9B model wrote 3.6 tokens a second with
+it. The llama-server Ollama brings, started with its `cuda_v13` part, listed the card and
+held 7.6 GB of the model there. One run of the Bench then took 3.2 seconds on average with it
+and 3.0 seconds through Ollama, with the same model: it is the same engine, so llama-server
+by itself is not faster than Ollama. What it gives is the say over the context and the flags.
+
+A build of your own for your card (llama.cpp's page says how to get or build one) is found
+first when you put it into `~/.hunterai/llama.cpp/`: the program `llama-server` with its
+libraries beside it.
 
 What HunterAI takes from the server, and nothing else is assumed:
 
@@ -892,9 +947,16 @@ its tool calls (one, two in one answer, and one after thinking), a tool result, 
 answer bound to a JSON schema, a request that is too long, a wrong key, a model that is
 not loaded with and without `--no-models-autoload`, a server that sleeps (and that being
 asked for its list does not wake it), the memory it holds at three context sizes, and a
-server killed in the middle of an answer. `tests/llamacpp_wire.py` holds what it sent. Not tried:
-a graphics card, a model of the size you will use, a llama-server on another machine, and
-a folder of models that llama-server downloads itself.
+server killed in the middle of an answer. `tests/llamacpp_wire.py` holds what it sent. The
+search for the program and for Ollama's files was held against a real Ollama (built from its
+source at `42ac2c0`, 18 November 2026, with that llama-server as its own): the command it
+writes started llama-server with Ollama's own files, and a chat was answered by it;
+`tests/ollama_show_wire.py` holds what Ollama said of its models. A graphics card and a 9B
+model were tried by the owner on his laptop, with the llama-server Ollama 0.40.18 brings,
+started by hand with the two variables the command begins with; the command as the page
+writes it was not run on a graphics card. Not tried: a llama-server on another machine, a
+folder of models that llama-server downloads itself, a model with an adapter (that Ollama
+makes none any more), and a card other than one of NVIDIA.
 
 ### Answer check
 

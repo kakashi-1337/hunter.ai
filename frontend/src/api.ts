@@ -1,6 +1,6 @@
 import type { ProxyTest, Skill, SkillInspection } from './types'
 import type {
-  ActivitySummary, QueuedMessage, CaidoExchange, CaidoRow, CaidoStatus, Checkup, ColibriServer, FindingRow, LlamaServer, LocalModel, SystemStatus,
+  ActivitySummary, QueuedMessage, CaidoExchange, CaidoRow, CaidoStatus, Checkup, ColibriServer, FindingRow, LlamaFind, LlamaServer, LocalModel, SystemStatus,
   Memory, MemorySettings,
   Persona,
   McpCheck, McpInspection, McpReview, McpScan, McpServer,
@@ -233,6 +233,8 @@ export const systemLocal = () => request<LocalModel>('GET', '/api/system/local')
 export const systemColibri = () => request<ColibriServer>('GET', '/api/system/colibri')
 /** Asks the llama-server at the address in Settings what it serves. The server makes its list of models anew too. */
 export const systemLlamaCpp = () => request<LlamaServer>('GET', '/api/system/llamacpp')
+/** Asks what this machine has to start a llama-server with: the program, its graphics cards, Ollama's models. */
+export const systemLlamaCppFind = () => request<LlamaFind>('GET', '/api/system/llamacpp/find')
 /** The parts that do not run now are not announced again until they have run again. */
 export const hideStopped = () => request<{ stopped: { id: string; label: string }[] }>('POST', '/api/system/stopped/hide')
 /** The state of this install as text for a report: versions, what runs and what does not. No key, proxy address, target or message. */

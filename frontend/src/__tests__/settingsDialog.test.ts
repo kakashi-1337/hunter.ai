@@ -39,6 +39,7 @@ beforeEach(() => {
   vi.spyOn(api, 'listTools').mockResolvedValue([])
   vi.spyOn(api, 'mcpStatus').mockResolvedValue({ configured: [], servers: [], error: null })
   vi.spyOn(api, 'systemLocal').mockResolvedValue(LOCAL)
+  vi.spyOn(api, 'systemLlamaCppFind').mockRejectedValue(new Error('this test does not look at the machine'))
   put = vi.spyOn(api, 'putSettings').mockImplementation(async (patch) => {
     const sent = patch as { local_window?: number | null; local_window_max?: number | null }
     return { ...SETTINGS, ...patch, local_window: sent.local_window ?? 16384, local_window_max: sent.local_window_max ?? 131072 } as Settings
