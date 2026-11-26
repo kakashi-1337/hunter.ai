@@ -1826,6 +1826,34 @@ the model itself has:
 An effort the model does not have (xhigh or max where high is the top) is sent as its
 highest.
 
+### Sampling, for a local model
+
+For a model of Ollama or of your llama-server, Options has seven more settings under
+**Sampling**: how the next token is chosen. Each is sent to the server as it is, and what
+is not set stays the server's own default (the model's Modelfile in Ollama, the flags
+llama-server was started with).
+
+| Option | What it does | Unless set |
+| --- | --- | --- |
+| Top K | Only the K likeliest tokens are considered. | 40 |
+| Min P | Tokens less likely than this share of the likeliest one are left out. | 0.05 on llama-server, 0 on Ollama |
+| Repeat penalty | Above 1, tokens that already stand in the last N tokens are less likely. 1 is no penalty. | 1 |
+| Repeat last N | How many tokens back the three penalties look. | 64 |
+| Presence penalty | Above 0, a token that stands there at all is less likely. | 0 |
+| Frequency penalty | Above 0, a token is less likely the more often it stands there. | 0 |
+| Seed | The same seed gives the same answer to the same request. | by chance |
+
+Seen on a real llama-server (`074f1f3`): it took all seven in a chat request and its slot
+showed each one applied; the same seed twice gave the same words and another seed gave
+others; and it refuses a repeat penalty of 0 or less, and a negative look-back, in its own
+words. Ollama's source at `42ac2c0` (18 November 2026) hands the same seven on to the
+engine it runs. What an older Ollama does with them was not looked at. The fields in
+Options keep to what both servers take: Top K and the look-back from 1, a repeat penalty
+from 0.5 to 2, the two other penalties from -2 to 2, a seed from 0.
+
+They are not offered for a cloud model or a colibri model: each of those takes another
+subset under its own rules. Moving a chat to such a model drops what was set.
+
 ### Programs for the rea server
 
 The bundled `rea` server (reverse engineering) can use Ghidra, Hopper, JADX and other

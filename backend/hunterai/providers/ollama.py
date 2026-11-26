@@ -8,12 +8,14 @@ import json
 import httpx
 
 from .. import config
-from .base import (ModelInfo, Options, ProviderError, Stop, TextDelta, ThinkingDelta, ToolCall,
+from .base import (SAMPLING, ModelInfo, Options, ProviderError, Stop, TextDelta, ThinkingDelta, ToolCall,
                    ToolSpec, Usage, WireMessage, error_from_status, flatten_text,
                    parse_arguments, rounds, safe_call_id)
 
-OPTIONS = ["temperature", "top_p", "max_tokens", "context_window", "thinking", "effort"]
-_BASE = ["temperature", "top_p", "max_tokens", "context_window"]
+# The sampling options go to Ollama under the names they have here: it hands them on to the engine it runs
+# (llm/llama_server.go of Ollama at 42ac2c0, 18 November 2026).
+_BASE = ["temperature", "top_p", "max_tokens", "context_window", *SAMPLING]
+OPTIONS = [*_BASE, "thinking", "effort"]
 EFFORTS = ("low", "medium", "high", "max")           # the level names of Ollama that HunterAI's effort setting has
 _GPT_OSS = ("low", "medium", "high")                  # what gpt-oss takes, for an Ollama too old to report it
 
@@ -276,7 +278,8 @@ class OllamaProvider:
         o = options.only(OPTIONS)
         num_ctx = await self.window_for(model, o)
         opts = {k: v for k, v in (("num_ctx", num_ctx), ("num_predict", o.max_tokens),
-                                  ("temperature", o.temperature), ("top_p", o.top_p))
+                                  ("temperature", o.temperature), ("top_p", o.top_p),
+                                  *((name, getattr(o, name)) for name in SAMPLING))
                 if v is not None}
         # truncate, shift: left to itself, Ollama removes the oldest messages of a request that is larger than the
         # window, then tokens from its middle, and answers as if nothing had happened. Told not to, it refuses.

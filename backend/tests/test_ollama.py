@@ -6,7 +6,7 @@ import respx
 
 from hunterai import context
 from hunterai.providers import ollama
-from hunterai.providers.base import (Options, ProviderError, Stop, TextDelta, ThinkingDelta, ToolSpec,
+from hunterai.providers.base import (SAMPLING, Options, ProviderError, Stop, TextDelta, ThinkingDelta, ToolSpec,
                                      Usage, WireMessage)
 from hunterai.types import ImageBlock, TextBlock
 
@@ -101,7 +101,7 @@ async def test_models_filter_embedders():
         "capabilities": ["completion", "vision"] if b"llama3.1" in req.content else ["completion"]}))
     ms = await ollama.make().models()
     assert [m.id for m in ms] == ["qwen3:8b", "llama3.1:latest"]
-    assert ms[0].options == ["temperature", "top_p", "max_tokens", "context_window", "thinking"]
+    assert ms[0].options == ["temperature", "top_p", "max_tokens", "context_window", *SAMPLING, "thinking"]
     assert ms[0].supports_images is False and ms[1].supports_images is True
 
 
@@ -337,7 +337,7 @@ async def test_each_model_offers_the_thinking_controls_ollama_reports_for_it():
                b"deep": show({"values": [False, "low", "medium", "high", "max", "ultra"], "default": "high"}), b"older": show()}
     respx.post(HOST + "/api/show").mock(side_effect=lambda req: next(v for k, v in answers.items() if k in req.content))
     by = {m.id: m for m in await ollama.make().models()}
-    base = ["temperature", "top_p", "max_tokens", "context_window"]
+    base = ["temperature", "top_p", "max_tokens", "context_window", *SAMPLING]
     assert (by["gpt-oss:20b"].options, by["gpt-oss:20b"].efforts) == (base + ["effort"], ["low", "medium", "high"])
     assert (by["qwen3:8b"].options, by["qwen3:8b"].efforts) == (base + ["thinking"], [])
     assert (by["llama3.2:3b"].options, by["llama3.2:3b"].efforts) == (base, [])               # it does not think

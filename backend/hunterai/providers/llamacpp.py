@@ -20,6 +20,8 @@ its own tests, and Qwen3.5 0.8B; tests/llamacpp_wire.py holds what it sent.
 - Thinking is switched off with reasoning_effort "none" and on with chat_template_kwargs.enable_thinking. No other
   effort value is sent: a chat template takes its own values and refuses the rest with a 400.
 - It takes several pictures in one request, and a schema for the answer in the shape OpenAI has.
+- It takes the sampling options (base.SAMPLING) as fields of the request and applies them: its slot showed each one
+  after a request that carried it. It refuses a repeat_penalty of 0 or less and a negative repeat_last_n with a 400.
 """
 from __future__ import annotations
 
@@ -35,6 +37,7 @@ import httpx
 
 from .. import config
 from .base import (
+    SAMPLING,
     ModelInfo,
     Options,
     ProviderError,
@@ -47,7 +50,7 @@ from .openai_compat import OpenAICompatProvider
 NAME = "llamacpp"
 URL_ENV = "HUNTERAI_LLAMACPP_URL"
 KEY_ENV = "LLAMACPP_API_KEY"
-OPTIONS = ["temperature", "top_p", "max_tokens", "thinking"]
+OPTIONS = ["temperature", "top_p", "max_tokens", *SAMPLING, "thinking"]
 TIMEOUT = httpx.Timeout(900.0, connect=5.0)     # a router loads the model first, and a long request on a small card takes minutes
 ASK = httpx.Timeout(5.0, connect=2.0)   # for its list of models, which it answers at once even while it writes
 KEEP = 30.0                             # seconds its list of models is taken to still hold
@@ -388,7 +391,9 @@ class LlamaCppProvider(OpenAICompatProvider):
     def _payload(self, model: str, system: str, messages: list[WireMessage], options: Options,
                  tools: list[ToolSpec] | None = None) -> dict:
         body = super()._payload(model, system, messages, options, tools)
-        if options.only(self._info(model).options).thinking is True:
+        # Every model of a llama-server takes the same options (OPTIONS), so none has to be cleared for one of them.
+        body.update({name: value for name in SAMPLING if (value := getattr(options, name)) is not None})
+        if options.thinking is True:
             body["chat_template_kwargs"] = {"enable_thinking": True}
         return body
 

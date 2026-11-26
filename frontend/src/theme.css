@@ -173,7 +173,9 @@ details.thinking pre { white-space: pre-wrap; word-break: break-word; font: 12.5
 /* options + trajectory */
 .popover { position: relative; }
 .popover .sheet { position: absolute; top: calc(100% + 6px); right: 0; z-index: 20; width: 300px; background: var(--panel);
-  border: 1px solid var(--line); border-radius: 10px; padding: 12px; box-shadow: 0 12px 36px #000a; display: flex; flex-direction: column; gap: 10px; }
+  border: 1px solid var(--line); border-radius: 10px; padding: 12px; box-shadow: 0 12px 36px #000a; display: flex; flex-direction: column; gap: 10px;
+  max-height: calc(100vh - 100px); overflow-y: auto; }      /* with every option of a local model it is longer than a laptop screen: it ends above the bottom of the window and scrolls in itself */
+.popover .sheet > * { flex-shrink: 0; }                     /* its rows keep their height; the sheet scrolls */
 .range { display: flex; align-items: center; gap: 8px; }
 .range input[type=range] { flex: 1; padding: 0; accent-color: var(--accent); }
 .range output { width: 4ch; text-align: right; font-family: var(--mono); font-size: 12.5px; }

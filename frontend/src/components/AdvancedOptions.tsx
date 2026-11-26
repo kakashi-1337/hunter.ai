@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { effortChoices } from '../options'
+import { SAMPLING, effortChoices } from '../options'
 import { useChatView, useStore } from '../store'
 import { pruneOptions } from '../tree'
 import type { Options } from '../types'
@@ -7,12 +7,13 @@ import { useModelInfo } from './ModelPicker'
 
 const VERBOSITY = ['low', 'medium', 'high'] as const
 
-function Slider({ label, value, min, max, step, onChange }: { label: string; value: number | undefined; min: number; max: number; step: number; onChange: (v: number | undefined) => void }) {
+/** `rest`: where the slider stands while the option is not set: the value that changes nothing (the least one unless given). */
+function Slider({ label, value, min, max, step, rest = min, onChange }: { label: string; value: number | undefined; min: number; max: number; step: number; rest?: number; onChange: (v: number | undefined) => void }) {
   return (
     <label className="field">
       <span>{label}</span>
       <div className="range">
-        <input type="range" min={min} max={max} step={step} value={value ?? min} onChange={(e) => onChange(Number(e.target.value))} />
+        <input type="range" min={min} max={max} step={step} value={value ?? rest} onChange={(e) => onChange(Number(e.target.value))} />
         <output>{value ?? '—'}</output>
         <button className="icon" title="Use the model's default" disabled={value === undefined} onClick={(e) => { e.preventDefault(); onChange(undefined) }}>reset</button>
       </div>
@@ -20,12 +21,13 @@ function Slider({ label, value, min, max, step, onChange }: { label: string; val
   )
 }
 
-function NumberField({ label, value, placeholder, onChange }: { label: string; value: number | undefined; placeholder: string; onChange: (v: number | undefined) => void }) {
+/** A whole number of `least` or more (1 unless given); anything else leaves the option unset. */
+function NumberField({ label, value, placeholder, least = 1, onChange }: { label: string; value: number | undefined; placeholder: string; least?: number; onChange: (v: number | undefined) => void }) {
   return (
     <label className="field">
       <span>{label}</span>
-      <input type="number" min={1} step={1} value={value ?? ''} placeholder={placeholder}
-        onChange={(e) => { const n = Math.floor(Number(e.target.value)); onChange(e.target.value === '' || !Number.isFinite(n) || n < 1 ? undefined : n) }} />
+      <input type="number" min={least} step={1} value={value ?? ''} placeholder={placeholder}
+        onChange={(e) => { const n = Math.floor(Number(e.target.value)); onChange(e.target.value === '' || !Number.isFinite(n) || n < least ? undefined : n) }} />
     </label>
   )
 }
@@ -39,6 +41,7 @@ export function AdvancedOptions() {
   const root = useRef<HTMLDivElement>(null)
   const allowed = info?.options ?? []
   const has = (k: string) => allowed.includes(k)
+  const sampling = SAMPLING.some(has)
 
   useEffect(() => { if (open && chat) setDraft(chat.options) }, [open, chat])
   useEffect(() => {
@@ -93,6 +96,15 @@ export function AdvancedOptions() {
               </select>
             </label>
           )}
+          {sampling && <div className="section">Sampling</div>}
+          {has('top_k') && <NumberField label="Top K" value={draft.top_k} placeholder="model default" onChange={(v) => set({ top_k: v })} />}
+          {has('min_p') && <Slider label="Min P" value={draft.min_p} min={0} max={1} step={0.01} onChange={(v) => set({ min_p: v })} />}
+          {has('repeat_penalty') && <Slider label="Repeat penalty" value={draft.repeat_penalty} min={0.5} max={2} step={0.05} rest={1} onChange={(v) => set({ repeat_penalty: v })} />}
+          {has('repeat_last_n') && <NumberField label="Repeat last N (tokens)" value={draft.repeat_last_n} placeholder="model default" onChange={(v) => set({ repeat_last_n: v })} />}
+          {has('presence_penalty') && <Slider label="Presence penalty" value={draft.presence_penalty} min={-2} max={2} step={0.1} rest={0} onChange={(v) => set({ presence_penalty: v })} />}
+          {has('frequency_penalty') && <Slider label="Frequency penalty" value={draft.frequency_penalty} min={-2} max={2} step={0.1} rest={0} onChange={(v) => set({ frequency_penalty: v })} />}
+          {has('seed') && <NumberField label="Seed" value={draft.seed} placeholder="by chance" least={0} onChange={(v) => set({ seed: v })} />}
+          {sampling && <div className="hint">Sent to the model's server as they are; what is not set is the server's own default. Top K and Min P narrow the choice of the next token to the likeliest ones. The penalties make tokens that already stand in the last N tokens less likely: Repeat penalty above 1 (1 is none), Presence for a token that stands there at all, Frequency the more often it does. The same seed gives the same answer to the same request.</div>}
           <div className="hint">Only options this model accepts are shown. Saved for this chat.</div>
         </div>
       )}

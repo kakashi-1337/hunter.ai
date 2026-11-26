@@ -9,6 +9,7 @@ import respx
 from hunterai import context, upstream
 from hunterai.providers import llamacpp, registry
 from hunterai.providers.base import (
+    SAMPLING,
     Options,
     ProviderError,
     Stop,
@@ -118,7 +119,7 @@ async def test_the_server_says_which_model_it_serves_its_context_and_what_it_rea
     listed(wire.MODELS_QWEN)
     (model,) = await llamacpp.make().models()
     assert (model.id, model.label, model.context_window, model.supports_images) == (QWEN, QWEN, 8192, True)
-    assert model.options == ["temperature", "top_p", "max_tokens", "thinking"] and model.efforts == []
+    assert model.options == ["temperature", "top_p", "max_tokens", *SAMPLING, "thinking"] and model.efforts == []
     listed(wire.MODELS_STORY)
     (model,) = await llamacpp.make().models()
     assert (model.id, model.context_window, model.supports_images) == (STORY, 256, False)
