@@ -1,7 +1,8 @@
 import { useRef, useState } from 'react'
 import * as api from '../api'
 import { proxyTestText } from '../proxy'
-import { briefSummary, placeEntry, withBrief, type ScopeForm } from '../scope'
+import { briefSummary, placeEntry, scopeCheckKey, scopeOf, scopeProblemText, scopeTone, withBrief, type ScopeForm } from '../scope'
+import type { ScopeAnswer } from '../types'
 
 export const SCOPE_HINT = 'Scope is given to the model as context and checked on every tool call: a host on the out-of-scope list, '
   + 'or one that is not on the in-scope list, always asks you first. A host you list by name stays in scope where a wildcard '
@@ -44,6 +45,50 @@ function ProxyField({ value, kept, targetId, problem, onChange }: {
         <span className="hint grow" role="status">{found || 'For a program that asks you to come through its proxy, or to reach a target that is blocked from where you are. Chats on this target use it for web_fetch, web_download, the browser and commands, instead of the proxy in Settings.'}</span>
       </div>
     </>
+  )
+}
+
+const SCOPE_CHECK_HINT = 'Says which line of the two lists decides for it, as they stand here, saved or not. No name is looked up.'
+
+/** One host, address or URL against the two lists as they stand in the form. The server answers with the verdict the
+ * permission check gives and the line behind it. It only reads: the lists stay as they are and nothing is saved. */
+function ScopeCheck({ form }: { form: ScopeForm }) {
+  const [ask, setAsk] = useState('')
+  const [checking, setChecking] = useState(false)
+  const [got, setGot] = useState<{ key: string; answer?: ScopeAnswer; error?: string } | null>(null)
+  const key = scopeCheckKey(form, ask)
+  const check = async () => {
+    if (!ask.trim() || checking) return
+    setChecking(true)
+    try {
+      setGot({ key, answer: await api.checkScope(scopeOf(form), ask) })
+    } catch (e) {
+      setGot({ key, error: e instanceof Error ? e.message : String(e) })
+    } finally {
+      setChecking(false)
+    }
+  }
+  const now = got?.key === key ? got : null       // the lists or the host were changed since: that answer was about something else
+  return (
+    <div className="scope-check">
+      <label className="field"><span>Check a host against these lists</span>
+        <input className="mono" spellCheck={false} autoComplete="off" value={ask} aria-label="Host, address or URL to check"
+          placeholder="shop.example.com or https://shop.example.com/login" onChange={(e) => setAsk(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') void check() }} />
+      </label>
+      <div className="row">
+        <button className="btn" disabled={!ask.trim() || checking} onClick={() => void check()}>{checking ? 'Checking…' : 'Check'}</button>
+        <span className="hint grow" role="status">{now?.error || SCOPE_CHECK_HINT}</span>
+      </div>
+      {now?.answer && (
+        <div className={`scope-answer ${scopeTone(now.answer.verdict, now.answer.command?.verdict)}`} role="status">
+          <div className={`says ${scopeTone(now.answer.verdict)}`}>{now.answer.says}</div>
+          {now.answer.command && <div className={`says ${scopeTone(now.answer.command.verdict)}`}>{now.answer.command.says}</div>}
+          {now.answer.hints.map((hint) => <div className="hint" key={hint}>{hint}</div>)}
+          {now.answer.unreadable.length > 0 && <div className="warn-line scope-problem">{scopeProblemText(now.answer.unreadable)}</div>}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -134,6 +179,7 @@ export function TargetForm({ form, problem, proxy, proxyKept, targetId, onProxy,
         <div className="hint">No scope entry can say these; write the hosts they stand for by hand: <span className="mono">{form.unsupported.join(', ')}</span></div>
       )}
       <div className="hint">{SCOPE_HINT}</div>
+      <ScopeCheck form={form} />
       <ProxyField value={proxy} kept={proxyKept && Boolean(proxy.trim())} targetId={targetId} onChange={onProxy}
         problem={problem?.startsWith(PROXY_REFUSED) ? problem : undefined} />
     </>

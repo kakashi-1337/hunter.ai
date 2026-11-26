@@ -5,7 +5,7 @@ import asyncio
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, field_validator
 
-from .. import brief, upstream
+from .. import brief, scopecheck, upstream
 from ..repo import targets
 from ..tools import resolve
 from .deps import get_conn, not_found
@@ -106,6 +106,20 @@ async def read_brief(body: BriefIn):
     """What a pasted program brief says about scope. Reads only: the owner reviews it before saving."""
     try:
         return (await asyncio.to_thread(brief.read, body.text)).as_dict()
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from e
+
+
+class ScopeCheckIn(BaseModel):
+    scope: Scope = Scope()      # the two lists as the form holds them, saved or not
+    ask: str
+
+
+@router.post("/scope-check")
+async def check_scope(body: ScopeCheckIn):
+    """Which line of the two lists decides for one host, address or URL. Reads only: nothing is saved, no name is looked up."""
+    try:
+        return scopecheck.explain(body.scope.in_, body.scope.out, body.ask).as_dict()
     except ValueError as e:
         raise HTTPException(422, str(e)) from e
 

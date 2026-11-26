@@ -7,7 +7,7 @@ import type {
   KbChunk,
   ChatKb, Collection, Job, JobAction, KbDocument, KbHealth, KbHit, KbStatus, UploadResult,
   Chat, Finding, Goal, Grant, McpStatus, Message, Mode, Options, PermissionDecision, PermissionRequest, ProcessInfo, ProviderInfo,
-  BriefResult, RunDetail, RunSummary, SearchHit, Settings, StartedRun, Target, ToolInfo, Upload,
+  BriefResult, RunDetail, RunSummary, ScopeAnswer, SearchHit, Settings, StartedRun, Target, ToolInfo, Upload,
   BenchDetail, BenchListed, BenchResult, BenchRun, BenchSet, ModelRef,
 } from './types'
 
@@ -56,6 +56,9 @@ export const createTarget = (name: string, notes = '', scope?: Target['scope'], 
   request<Target>('POST', '/api/targets', { name, notes, ...(scope ? { scope } : {}), ...(proxy.trim() ? { proxy } : {}) })
 /** What a pasted program brief says about scope. Reads only: nothing is saved. */
 export const readBrief = (text: string) => request<BriefResult>('POST', '/api/targets/brief', { text })
+/** Which line of the two lists decides for one host, address or URL. The lists are the form's, saved or not. */
+export const checkScope = (scope: { in: string[]; out: string[] }, ask: string) =>
+  request<ScopeAnswer>('POST', '/api/targets/scope-check', { scope, ask })
 export const updateTarget = (id: string, patch: Partial<Pick<Target, 'name' | 'notes' | 'scope' | 'proxy'>>) =>
   request<Target>('PATCH', `/api/targets/${id}`, patch)
 export const deleteTarget = (id: string) => request<void>('DELETE', `/api/targets/${id}`)
