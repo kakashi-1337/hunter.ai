@@ -367,7 +367,10 @@ async def test_a_model_the_router_has_not_loaded_has_the_context_its_instance_wi
 
 
 def router_entry(args, **more) -> dict:
+    """A model of a router's folder, not loaded, with the command its instance will be started with. Trained with a
+    context larger than any a test starts it with, unless the test says otherwise."""
     entry = json.loads(json.dumps(entries(wire.ROUTER_NONE)[0]))
+    entry["context_length"] = 262144
     entry["status"]["args"] = ["/opt/llama.cpp/bin/llama-server", "--host", "127.0.0.1", "--port", "0", "--alias", "story-a", *args,
                                "--model", "/models/story-a.gguf"]
     entry["status"].update(more)
@@ -388,6 +391,24 @@ def router_entry(args, **more) -> dict:
 ])
 async def test_the_context_of_a_model_that_is_not_loaded_is_read_from_the_command_of_its_instance(at, args, window):
     listed(a_list(router_entry(args)))
+    (model,) = await llamacpp.make().models()
+    assert model.context_window == window
+
+
+@respx.mock
+@pytest.mark.parametrize("args, trained, window", [
+    (["--ctx-size", "8192"], 2048, 2048),                      # seen: -c 4096 on a model trained with 2,048 gives 2,048
+    (["--ctx-size", "8192", "--parallel", "2"], 2048, 2048),   # seen: -c 8192 -np 2 gives 2,048 each, not 4,096
+    (["--ctx-size", "1024"], 2048, 1024),
+    (["--ctx-size", "8192", "--parallel", "4"], 4096, 2048),
+    (["--ctx-size", "8192"], None, 8192), (["--ctx-size", "8192"], 0, 8192), (["--ctx-size", "8192"], "2048", 8192),
+])
+async def test_a_model_gets_no_more_context_than_it_was_trained_with(at, args, trained, window):
+    """llama-server holds a request to the length the model was trained with, however large -c is. The list says that
+    length for a model that is not loaded (context_length)."""
+    entry = router_entry(args)
+    entry["context_length"] = trained
+    listed(a_list(entry))
     (model,) = await llamacpp.make().models()
     assert model.context_window == window
 

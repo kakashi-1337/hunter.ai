@@ -173,7 +173,8 @@ def _after(args: list, flag: str) -> int | None:
 
 def _context(entry: dict) -> int | None:
     """The context one request to this model has. A loaded model says it. For one a router has not loaded, the command
-    of its instance says the context it will be started with, which explicit slots share."""
+    of its instance says the context it will be started with, which explicit slots share; llama-server then holds a
+    request to the length the model was trained with (context_length), however large that context is."""
     meta = entry.get("meta")
     held = _number(meta.get("n_ctx")) if isinstance(meta, dict) else None
     status = entry.get("status")
@@ -183,7 +184,8 @@ def _context(entry: dict) -> int | None:
     size, slots = _after(args, "--ctx-size"), _after(args, "--parallel")
     if not size or size < 0:
         return None
-    return size // slots if slots and slots > 1 else size
+    each = size // slots if slots and slots > 1 else size
+    return min(each, _number(entry.get("context_length")) or each)
 
 
 def _reads_pictures(entry: dict) -> bool | None:

@@ -836,7 +836,9 @@ What HunterAI takes from the server, and nothing else is assumed:
   power of two above what is needed can be some gigabytes that are never used. While
   nothing answers at the address, the line under the field shows the start command with
   that context. With `-np N` the context is divided among N requests at a time (`-c 32768
-  -np 2` leaves 16,384 for a chat): leave `-np` out.
+  -np 2` leaves 16,384 for a chat): leave `-np` out. And a model gets no more context
+  than it was trained with, however large `-c` is: started with `-c 4096`, a model trained
+  with 2,048 tokens holds 2,048, and HunterAI counts with that.
 - **One model, or a folder of them.** Started with `-m`, llama-server serves that model,
   and answers with it whatever name a request carries: a chat set to another name is told
   which model is served, and nothing is sent. Started with `--models-dir folder` and no
