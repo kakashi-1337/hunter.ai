@@ -14,6 +14,8 @@ LOG_BYTES = 2_000_000       # the file of faults is started anew at this size; t
 MESSAGE = 200               # characters of an exception's own text that are shown
 _PLACES = ("body", "query", "path", "header", "cookie")       # where FastAPI found the field: not part of its name
 COLIBRI = "colibri"         # the provider that is a server of the owner's with one model: other things can be done about its errors
+LLAMACPP = "llamacpp"       # the owner's llama-server: he starts it, with the model and the context he chooses
+_SPOKEN = {LLAMACPP: ("llama.cpp", "llama-server")}     # how a provider is named in words, where its name in the code is none
 
 
 def _one(error: dict) -> str:
@@ -57,6 +59,10 @@ def _advice(e, who: str | None) -> str:
         if who == COLIBRI:
             return ("No answer came in time. colibri works on one request at a time, so it may still be busy with another one "
                     "(its page, at the address under Settings, shows what it is doing): send the message again later.")
+        if who == LLAMACPP:
+            return ("No answer came in time. A model that has to be loaded first takes its time, and so does a long request "
+                    "on a small card: send the message again. If it goes on, the terminal llama-server runs in says what it "
+                    "is doing.")
         return "No answer came in time: send the message again. If it keeps happening, the provider is slow or down."
     if e.kind == "unavailable":
         if who == "ollama":
@@ -68,11 +74,19 @@ def _advice(e, who: str | None) -> str:
                         "says why.")
             return ("Start it (./start-here.sh in the colibri folder) and see that the address under Settings is the one it "
                     "listens on, then send the message again.")
+        if who == LLAMACPP:
+            if getattr(e, "status", None):          # it answered, with a failure of its own: it runs
+                return ("It failed on its side: send the message again. If it goes on, the terminal it runs in says why.")
+            return ("Start llama-server and see that the address under Settings is the one it listens on (it prints it when "
+                    "it starts), then send the message again.")
         return ("It could not be reached, or it failed on its side: check the internet connection (and the proxy for model "
                 "providers under Settings, if you set one), then send the message again.")
     if who == COLIBRI:                              # it serves one model: there is no other one to pick in the list
         return ("colibri did not accept the request as it was sent: its words say what the model it serves does not do. For "
                 "tools or pictures, have it serve another model (./start-here.sh --reconfigure in the colibri folder).")
+    if who == LLAMACPP:
+        return ("llama-server did not accept the request as it was sent: its words say what the model, or the chat template it "
+                "was started with, does not do.")
     return ("The provider did not accept the request as it was sent: if its words name the model, pick another one; if they "
             "name an option, change it under Options.")
 
@@ -84,8 +98,9 @@ def model_call(e) -> str:
     if getattr(e, "complete", False):
         return said
     who = getattr(e, "provider", None)
-    if who and who.lower() not in said.lower():
-        said = f"{who}: {said}"
+    names = _SPOKEN.get(who, (who,))
+    if who and not any(name.lower() in said.lower() for name in names):
+        said = f"{names[0]}: {said}"
     return f"{said.rstrip('.')}. {_advice(e, who)}"
 
 
@@ -159,6 +174,13 @@ def cut_off(reason: str | None, *, provider: str | None, max_tokens: int | None 
         return "cut_off", (f"The answer was cut off: colibri ended it at its limit. Its context window{size} holds the request and "
                            "the answer together and was full, or colibri was started with a limit for one answer (--ngen). Send "
                            f'"continue" to have the model go on{more}.')
+    if provider == LLAMACPP:        # the request and the answer share the context llama-server was started with
+        from .providers import llamacpp
+        size = f" ({window:,} tokens)" if window else ""
+        larger = f"-c {llamacpp.context_to_start(window, window)}" if window else "-c with a larger number"
+        return "cut_off", (f"The answer was cut off: llama-server ended it at its limit. Its context window{size} holds the request "
+                           'and the answer together and was full. Send "continue" to have the model go on; for more room start '
+                           f"llama-server with a larger context ({larger}; a larger context needs more memory).")
     return "cut_off", ('The answer was cut off at the limit the model has for one answer. Send "continue" to have it go on. If '
                        'the model takes "Max output tokens" under Options, a higher value there gives it more room.')
 

@@ -17,7 +17,7 @@ from . import providers as providers_api
 from . import settings as settings_api
 from .deps import get_conn
 from ..kb import embed
-from ..providers import colibri, ollama, registry
+from ..providers import colibri, llamacpp, ollama, registry
 from ..repo import settings as store
 from ..tools import caido_tools
 from ..tools import registry as tools
@@ -126,6 +126,43 @@ async def colibri_server(conn=Depends(get_conn)):
     return out
 
 
+@router.get("/system/llamacpp")
+async def llamacpp_server(conn=Depends(get_conn)):
+    """What the llama-server at the address in Settings says of itself, for the lines under that address: whether it
+    answers, whether it is a router, each model with its context (`enough`: the context to start it with when the one
+    it has does not hold HunterAI's rules and tools with room for a chat), and whether the chat template of a server
+    with one model has tool calls (`tools`; null when it does not say). `start_with` is the smallest context that
+    holds the rules and tools (`overhead`) with room for a chat: it is known without the server, for the command the
+    page shows to start it. The server is asked anew, and so is the next list of models for the page: the owner looks
+    here after he started or changed it."""
+    server = registry.get(llamacpp.NAME)
+    seen = await server.served(fresh=True)
+    providers_api.forget(llamacpp.NAME)
+    need = (await overhead(conn))["tokens"]
+    room = llamacpp.context_for(need + ROOM)
+    return {"url": seen.at, "state": seen.state, "said": "" if seen.state in ("ok", "off") else llamacpp.why(seen),
+            "router": seen.router, "tools": await server.has_tools(), "overhead": need, "start_with": room,
+            "models": [{"id": h.info.id, "context": h.info.context_window, "images": h.info.supports_images, "loaded": h.loaded,
+                        "failed": h.failed,
+                        "enough": room if h.info.context_window and h.info.context_window < need + ROOM else None}
+                       for h in seen.held]}        # a server that serves nothing holds none, and says nothing of its template
+
+
+async def _held_by_llamacpp() -> list[dict] | None:
+    """The models a llama-server holds in memory now: each is loaded in a process of its own, which Ollama knows
+    nothing of. None without an address, and when what is there serves no model to chat with; an empty list for a
+    router that has loaded none, and for a server that put its model out of memory for being idle
+    (--sleep-idle-seconds: its list names the model all the same). The provider keeps what the list said for half a
+    minute; whether it sleeps is asked each time, which neither wakes it nor keeps it awake."""
+    server = registry.get(llamacpp.NAME)
+    seen = await server.served()        # without an address nothing is asked
+    if seen.state != "ok":
+        return None
+    if await server.sleeping():
+        return []
+    return [{"model": h.info.id, "context": h.info.context_window} for h in seen.held if h.loaded]
+
+
 async def _held_by_colibri() -> dict | None:
     """The model a colibri server holds now: it is loaded in a process of its own, which Ollama knows nothing of.
     None without an address, and when what is there serves no model to chat with. The provider keeps what the
@@ -141,7 +178,8 @@ async def _held_by_colibri() -> dict | None:
 @router.get("/system/status")
 async def status(request: Request, conn=Depends(get_conn)):
     """Cheap enough to ask every few seconds. `local_models` is null when Ollama does not answer; `colibri` is the
-    model a colibri server holds, null when none does. `gpu_temp` is null on a machine whose card cannot be read,
+    model a colibri server holds, null when none does; `llamacpp` the models a llama-server holds, null when none is
+    set up or answers. `gpu_temp` is null on a machine whose card cannot be read,
     and while no local model is loaded. `stopped` names the services that answered before and do
     not now; they are looked at once a minute. `page` is the script the built interface starts with: a page that
     runs another one is older than this server."""
@@ -150,11 +188,11 @@ async def status(request: Request, conn=Depends(get_conn)):
     looked = getattr(request.app.state, "looked", None)
     if looked is None or time.time() - looked >= LOOK_EVERY:
         await checkup(request, conn)
-    held = await _held_by_colibri()
+    held, served = await _held_by_colibri(), await _held_by_llamacpp()
     # Asking the card starts a program, and wakes a card that a laptop has put to sleep: only while a model is in memory.
-    card = await thermal.gpu_temp() if models or held else None
+    card = await thermal.gpu_temp() if models or held or served else None
     return {"cpu_temp": thermal.cpu_temp(), "cpu_limit": thermal.limit(), "gpu_temp": card, "gpu_limit": thermal.gpu_limit(),
-            "local_models": models, "colibri": held,
+            "local_models": models, "colibri": held, "llamacpp": served,
             "restart_needed": stale.restart_needed(), "stopped": request.app.state.stopped, "page": page_script()}
 
 
@@ -241,13 +279,16 @@ async def checkup(request: Request, conn=Depends(get_conn)):
     keyed = []
     for p in registry.all():
         try:
-            if p.name not in (LOCAL, colibri.NAME) and p.configured():
+            if p.name not in (LOCAL, colibri.NAME, llamacpp.NAME) and p.configured():
                 keyed.append(p.name)
         except Exception:  # noqa: BLE001 - one broken provider must not hide the others
             pass
     # colibri has an address or it is not used at all; with one, it is a model to talk to only while it serves one.
     served = await registry.get(colibri.NAME).served() if colibri.address() else None
     serves = served.models[0].id if served and served.state == "ok" else None
+    # llama.cpp likewise: an address, and then a model to talk to while its server lists one.
+    llama = await registry.get(llamacpp.NAME).served() if llamacpp.address() else None
+    llamas = [h.info.id for h in llama.held] if llama else []        # one that serves nothing holds none
     embedder = embed.DEFAULT_EMBEDDER.partition(":")[2]
     have = []
     if keyed:
@@ -256,12 +297,14 @@ async def checkup(request: Request, conn=Depends(get_conn)):
         have.append("local: " + ", ".join(chat_models[:4]) + (f" and {len(chat_models) - 4} more" if len(chat_models) > 4 else ""))
     if serves:
         have.append(f"colibri: {serves}")
+    if llamas:
+        have.append("llama.cpp: " + ", ".join(llamas[:4]) + (f" and {len(llamas) - 4} more" if len(llamas) > 4 else ""))
     binary = caido.binary() if caido.available() and caido.managed() else None
     programs = toolbox.installed()
     rea_found = rea_tools.found()
     caido_off = (os.environ.get("HUNTERAI_CAIDO") or "").lower() == "off"
     items = [
-        _item("model", "A model to talk to", bool(keyed or chat_models or serves), "; ".join(have) or "no API key and no local model",
+        _item("model", "A model to talk to", bool(keyed or chat_models or serves or llamas), "; ".join(have) or "no API key and no local model",
               f"Open Settings and enter an API key (it is written to {config.env_file()}), or start Ollama and pull "
               "a chat model. Then press Check again.", required=True),
         _item("ollama", "Ollama (local models, the fallback, look_at_image)", tags is not None,
@@ -299,6 +342,13 @@ async def checkup(request: Request, conn=Depends(get_conn)):
                               f"serves {serves} at {served.at}" if serves else colibri.why(served),
                               "Start it (./start-here.sh in the colibri folder), or see its address and its key under "
                               "Settings, colibri."))
+    if llama is not None:
+        loaded = [h.info.id for h in llama.held if h.loaded]
+        detail = (llamacpp.why(llama) if not llamas else f"serves {llamas[0]} at {llama.at}" if not llama.router
+                  else f"has {len(llamas)} model{'s' if len(llamas) > 1 else ''} at {llama.at} and loads the one a chat asks for "
+                       f"({'loaded now: ' + ', '.join(loaded) if loaded else 'none loaded now'})")
+        items.insert(2 if served is None else 3, _item("llamacpp", "llama.cpp (your own llama-server)", bool(llamas), detail,
+                              "Start llama-server, or see its address and its key under Settings, llama.cpp."))
     mcp, dead = _mcp_item()
     items.append(mcp)
     await _mark_stopped(conn, items)

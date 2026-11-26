@@ -535,7 +535,7 @@ async def test_the_run_ends_with_a_count_and_fails_when_one_check_fails(conn, mo
     await in_use(conn, "qdrant")
     code, lines = await run(conn)
     assert code == 1
-    assert lines[-1] == "1 failed, 0 ok, 11 skipped or noted. Each FAIL line says what to do."
+    assert lines[-1] == "1 failed, 0 ok, 12 skipped or noted. Each FAIL line says what to do."
     assert [verdict for verdict, _ in said(lines, "Qdrant")] == ["FAIL"]
 
 
@@ -544,7 +544,7 @@ async def test_a_run_without_a_failure_ends_in_order(conn, monkeypatch):
     nothing_answers()
     providers(monkeypatch)
     code, lines = await run(conn)
-    assert code == 0 and lines[-1] == "Nothing failed: 0 ok, 12 skipped or noted."
+    assert code == 0 and lines[-1] == "Nothing failed: 0 ok, 13 skipped or noted."
     assert said(lines, "long chat") == [("skip", "only with --deep (the local model reads a long chat: minutes on a slow machine)")]
 
 
@@ -555,7 +555,7 @@ async def test_only_the_named_checks_are_made_and_an_unknown_name_is_refused(con
     with pytest.raises(smoke.Refused) as refused:
         await run(conn, "everything")
     assert str(refused.value) == ("There is no check called everything. The checks are: server, ollama, local, window, colibri, "
-                                  "embeddings, qdrant, searxng, proxy, providers, chat")
+                                  "llamacpp, embeddings, qdrant, searxng, proxy, providers, chat")
 
 
 def test_the_long_chat_is_only_made_when_asked_for():

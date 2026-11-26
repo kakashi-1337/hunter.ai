@@ -14,7 +14,7 @@ from collections.abc import Awaitable, Callable
 from urllib.parse import urlsplit
 
 from . import hub, thermal
-from .providers import colibri, ollama, registry
+from .providers import colibri, llamacpp, ollama, registry
 from .repo import runs
 
 WAIT = 180.0        # seconds a run waits for the machine to cool, then it stops
@@ -34,12 +34,14 @@ def _on_this_machine(address: str | None) -> bool:
 
 
 def here(provider_name: str, model: str) -> bool:
-    """Whether a call to this model heats this machine: a model of an Ollama or a colibri that listens on this
-    machine. Not one on another machine, and not one that Ollama runs in its own cloud (their tag ends in
+    """Whether a call to this model heats this machine: a model of an Ollama, a llama-server or a colibri that listens
+    on this machine. Not one on another machine, and not one that Ollama runs in its own cloud (their tag ends in
     "cloud": gpt-oss:120b-cloud, glm-4.6:cloud)."""
     if provider_name == ollama.OllamaProvider.name:
         tag = model.rpartition(":")[2].lower() if ":" in model else ""
         return _on_this_machine(ollama.host()) and not (tag == "cloud" or tag.endswith("-cloud"))
+    if provider_name == llamacpp.NAME:
+        return _on_this_machine(llamacpp.address())
     return provider_name == colibri.NAME and _on_this_machine(colibri.address())
 
 
@@ -49,9 +51,13 @@ class _InMemory(Exception):
 
 async def loads(provider_name: str, model: str) -> bool:
     """Whether a call to this model makes the machine load it. True when nobody says what is in memory: an Ollama
-    that does not answer the question, a colibri server that is not there."""
+    that does not answer the question, a colibri server or a llama-server that is not there."""
     if provider_name == colibri.NAME:       # a colibri server holds its model from its start to its end
         return (await registry.get(colibri.NAME).served()).state != "ok"
+    if provider_name == llamacpp.NAME:      # a router loads the model a call names; a server with one may have put it to sleep
+        server = registry.get(llamacpp.NAME)
+        held = (await server.served()).named(model)      # a server that serves nothing names no model
+        return held is None or not held.loaded or await server.sleeping()
     return await ollama.in_memory(model) is not True
 
 

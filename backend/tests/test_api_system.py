@@ -22,12 +22,12 @@ async def test_the_machine_state_names_the_temperature_and_the_loaded_local_mode
     assert (await client.get("/api/system/status")).json() == {
         "cpu_temp": 71.0, "cpu_limit": 90.0, "gpu_temp": None, "gpu_limit": 85.0,
         "local_models": [{"name": "mimo:9b", "vram_mb": 9216, "size_mb": 9216, "processor": "100% GPU", "context": None}], "colibri": None,
-        "restart_needed": False, "stopped": [], "page": None}
+        "llamacpp": None, "restart_needed": False, "stopped": [], "page": None}
     answers(monkeypatch, {})                      # Ollama does not answer: unknown, which is not "none loaded"
     monkeypatch.setattr(thermal, "cpu_temp", lambda: None)
     assert (await client.get("/api/system/status")).json() == {
         "cpu_temp": None, "cpu_limit": 90.0, "gpu_temp": None, "gpu_limit": 85.0, "local_models": None, "colibri": None,
-        "restart_needed": False, "stopped": [], "page": None}
+        "llamacpp": None, "restart_needed": False, "stopped": [], "page": None}
 
 
 async def test_the_graphics_card_is_asked_only_while_a_local_model_is_loaded(client, monkeypatch, tmp_path):

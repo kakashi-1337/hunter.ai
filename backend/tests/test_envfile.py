@@ -87,4 +87,5 @@ def test_allowed_names():
     assert envfile.ALLOWED == {"ABLIT_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY",
                                "XAI_API_KEY", "GEMINI_API_KEY", "ABLIT_MODEL", "DISCORD_WEBHOOK_URL",
                                "HUNTERAI_PROVIDER_PROXY", "HUNTERAI_OLLAMA_NUM_CTX", "HUNTERAI_OLLAMA_MAX_CTX",
-                               "HUNTERAI_COLIBRI_URL", "COLIBRI_API_KEY", "HUNTERAI_EMBED_ON_CPU"}
+                               "HUNTERAI_COLIBRI_URL", "COLIBRI_API_KEY", "HUNTERAI_LLAMACPP_URL", "LLAMACPP_API_KEY",
+                               "HUNTERAI_EMBED_ON_CPU"}
