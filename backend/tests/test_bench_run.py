@@ -20,7 +20,7 @@ from hunterai.providers.base import (
     parse_arguments,
 )
 from hunterai.repo import chats, goals, kb, messages, personas, queue, runs, settings
-from hunterai.tools import native, on_demand, runner
+from hunterai.tools import kb_tools, native, on_demand, runner
 from hunterai.tools import registry as tools
 from hunterai.types import TextBlock
 from tests.bench_model import Model, Wordy, calls, fails, says
@@ -438,11 +438,13 @@ async def test_the_knowledge_named_for_every_chat_is_not_offered_in_a_bench(conn
     notes = await kb.create_collection(conn, "notes", "fake", 8)
     await kb.set_new_chat_collections(conn, [notes.id])
     chat = await chats.create(conn, None, "pentesting", "scripted", "m", {})
-    assert "kb_search" in [t.name for t in await runner.offered_tools(conn, chat)]      # what a chat is offered now
+    theirs = {"kb_search", "kb_files", "kb_read"}
+    assert theirs <= {t.name for t in await runner.offered_tools(conn, chat)}            # what a chat is offered now
+    assert theirs == {t.name for t in kb_tools.tools()}                                 # and all the knowledge base brings
     model = use(says("ok"))
     ran = await go(conn)
     names = [spec.name for spec in model.seen[0]["tools"]]
-    assert "kb_search" not in names and "kb_search" not in model.seen[0]["system"]
+    assert not theirs & set(names) and not any(name in model.seen[0]["system"] for name in theirs)
     assert "knowledge base" not in model.seen[0]["system"]
     assert ran.tools_offered == len(names) > 20 and "Tools available now: " + ", ".join(names) + "." in model.seen[0]["system"]
 

@@ -30,7 +30,7 @@ from ..providers.base import (
     WireMessage,
     collect,
 )
-from ..tools import on_demand, runner
+from ..tools import kb_tools, on_demand, runner
 from ..tools import registry as tools
 from ..types import Block, Chat, Target, TextBlock, ToolResultBlock
 from . import score
@@ -63,11 +63,12 @@ class Ran:
     seconds: float = 0.0        # the model calls took together: how fast the model is. The wait for a hot machine is not in it
 
 
-# Tools that read the owner's own material. A chat nobody chose knowledge collections for reads the ones he named for
-# every chat: it is offered kb_search, and its system prompt tells the model to search there before it answers from
-# memory. A bench reads no collection and has no answer for that search, and a model that did as it was told would
-# be marked down for the call by every rule that counts calls. So the tool is not offered, and nothing is said of it.
-OWNERS_OWN = frozenset({"kb_search"})
+# Tools that read the owner's own material: those of the knowledge base (kb_search, kb_files, kb_read). A chat nobody
+# chose knowledge collections for reads the ones he named for every chat: it is offered them, and its system prompt
+# tells the model to search there before it answers from memory. A bench reads no collection and has no answer for
+# that search, and a model that did as it was told would be marked down for the call by every rule that counts calls.
+# So they are not offered, and nothing is said of them.
+OWNERS_OWN = frozenset(t.name for t in kb_tools.tools())
 
 
 async def request_for(conn, provider_name: str, model: str, case: Case) -> Request:

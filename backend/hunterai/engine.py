@@ -686,7 +686,8 @@ async def _execute(conn_factory, run_id: str, chat_id: str, user_message_id: str
         from .kb.search import QueryVectors
         embedded = QueryVectors()       # the message is embedded once for the two searches that are made with it
         system_out, wire_out, acc.sources = await retrieve.augment(conn, run_id, chat, system, wire,
-                                                                   can_search="kb_search" in acc.callable, vectors=embedded)
+                                                                   can_search="kb_search" in acc.callable,
+                                                                   can_read="kb_read" in acc.callable, vectors=embedded)
         # Notes from memory are searched with the user's own words, not with the reference block.
         system_out, wire_out = await memory.recall(conn, run_id, chat, system_out, wire_out,
                                                    query=flatten_text(wire[-1]) if wire else "", vectors=embedded)

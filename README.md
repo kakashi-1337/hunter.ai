@@ -228,6 +228,17 @@ when the collection is created.
   a question you may have notes on, and to search again with other words when the first
   passages do not answer. A model that got the passages of the lookup is told that this
   search was made already, so that it does not make it once more.
+- **From a passage to its document.** A passage is some 1,200 characters cut out of a
+  file, and a search brings the ones that fit a question. With `kb_read` the agent reads
+  what stands around one, or the whole document, part by part: it gives the path as the
+  passage shows it (the end of a path is enough when only one document ends so) and the
+  part or the line to start at, gets about 12,000 characters a call, and is told which
+  part comes next. `kb_files` lists the documents of the chat's collections by path, with
+  how many parts each has; words of a path narrow the list ("auth middleware"). Both read
+  only the collections of the chat and only documents that finished ingesting, and what
+  they return is marked as untrusted reference data, as a passage of a search is. The three
+  tools share one permission. A model that has `kb_read` is told, under the passages of a
+  search and after the sources of a lookup, that a passage is a piece it can read around.
 - **In every chat.** Tick "every chat" beside a collection in the same "+ Knowledge" list,
   and every chat reads it that has no collections of its own: the ones you start from then
   on, and the ones that exist. A chat has collections of its own once you attach or detach
@@ -237,8 +248,9 @@ when the collection is created.
   beside the name. (Before, the tick reached new chats only, and a chat that existed "kept
   what it had", which was nothing: on the install this was written for, 48 of 49 chats read
   no collection, and every search of the agent was answered "No knowledge collection is
-  attached to this chat".) A chat that reads none is not offered `kb_search` at all: the
-  tool could only fail there. A line above the message box says so, and how to attach one.
+  attached to this chat".) A chat that reads none is not offered `kb_search`, `kb_files`
+  or `kb_read` at all: they could only fail there. A line above the message box says so,
+  and how to attach one.
 - **What a lookup costs.** One request to the embedding model for each message, and up to
   6,000 characters more in the request. The recall of notes from memory is made with the
   same words and uses the same answer of the embedding model, so a chat with both asks it
@@ -310,8 +322,8 @@ Put a model and its fine-tuned version into one bench to see what the training c
   chat of that mode on that model, your MCP tools included. What a bench leaves out is
   what belongs to one chat or to you: a persona, a goal record, notes from Memory, the
   knowledge base, skills. That holds for the collections ticked for every chat too:
-  `kb_search` is not offered in a bench, and nothing is looked up before an answer, in
-  the knowledge base or on the web.
+  the tools of the knowledge base (`kb_search`, `kb_files`, `kb_read`) are not offered in
+  a bench, and nothing is looked up before an answer, in the knowledge base or on the web.
 - **No tool is run.** Every call a model makes is answered from the script of its test, so
   a test is the same for every model, and nothing touches a target, your files, or the
   network. A call a chat would refuse before it ran (a tool that is not offered, arguments
