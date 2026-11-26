@@ -172,6 +172,11 @@ describe('the line of the bench that is open', () => {
   it('counts one of a kind in the singular', () => {
     expect(benchLine(run({ models: [A], repeats: 1, tools_offered: 1 }), 1)).toBe('Finished · 1 model, 1 repeat, 1 tool offered')
   })
+  it('says so when the bench was asked without thinking', () => {
+    expect(benchLine(run({ thinking_off: true }), 9)).toBe('Finished · 2 models, 3 repeats, 37 tools offered, thinking off')
+    expect(benchLine(run({ status: 'running', tools_offered: 0, thinking_off: true }), 0)).toBe('Running · 2 models, 3 repeats, thinking off')
+    expect(benchLine(run({ thinking_off: false }), 9)).toBe('Finished · 2 models, 3 repeats, 37 tools offered')
+  })
 })
 
 // Two programs on one graphics card know nothing of each other: the one that loads second gets what is left of it.

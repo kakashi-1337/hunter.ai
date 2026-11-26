@@ -95,6 +95,21 @@ async def test_a_run_that_was_asked_again_with_thinking_off_says_so_under_its_ma
     assert total.reasons == ["the answer does not say '42'", "made 1 tool call, more than 0"]       # thinking is on again for the next run
 
 
+async def test_a_bench_started_without_thinking_asks_every_call_of_every_run_that_way(conn):
+    model = use(calls("cve", action="lookup", ids=["CVE-2026-109618"]), says("There is no record."), says("It is 42."))
+    started = await runner.start(db.connect, [A], "own:two", 1, thinking_off=True)
+    await ended(started.id)
+    assert started.thinking_off is True and (await store.get(conn, started.id)).thinking_off is True
+    assert len(model.seen) == 3 and {s["options"].thinking for s in model.seen} == {False}
+
+
+async def test_a_bench_asks_with_thinking_as_the_model_has_it_when_nothing_else_is_said(conn):
+    model = use(says("no record, 42"))
+    started = await runner.start(db.connect, [A], "own:two", 1)
+    await ended(started.id)
+    assert started.thinking_off is False and {s["options"].thinking for s in model.seen} == {None}
+
+
 async def test_the_time_a_run_took_is_stored(conn):
     class Thinks(Model):
         async def stream(self, model, system, messages, options, tools=None):

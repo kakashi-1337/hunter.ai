@@ -253,8 +253,9 @@ export const takeQueue = (chatId: string) => request<QueuedMessage[]>('POST', `/
 
 // ---- the bench
 export const benchSets = () => request<BenchSet[]>('GET', '/api/bench/sets')
-export const startBench = (models: ModelRef[], set_id: string, repeats: number) =>
-  request<BenchRun>('POST', '/api/bench/runs', { models, set_id, repeats })
+/** `thinkingOff`: every call of the bench is asked without thinking; else as each model has it. */
+export const startBench = (models: ModelRef[], set_id: string, repeats: number, thinkingOff = false) =>
+  request<BenchRun>('POST', '/api/bench/runs', { models, set_id, repeats, thinking_off: thinkingOff })
 export const benchRuns = () => request<BenchListed[]>('GET', '/api/bench/runs')
 export const benchRun = (id: string) => request<BenchDetail>('GET', `/api/bench/runs/${id}`)
 /** The runs of one case on one model, with their lines, calls and answers. */

@@ -156,12 +156,13 @@ async def _cool(model: str, tell: Tell | None) -> None:
 
 
 async def run_case(conn, provider_name: str, model: str, case: Case, tell: Tell | None = None,
-                   window: int | None = None) -> Ran:
+                   window: int | None = None, thinking_off: bool = False) -> Ran:
     """Runs the case once and returns what it left behind. A failure of the provider is the transcript's error.
     TooHot when this machine did not cool for a model that runs on it; a cancel passes through.
 
     `window`: the context window the case before this one ended with on this model. A window of another size is
-    another load of a local model, so during a bench it only grows."""
+    another load of a local model, so during a bench it only grows.
+    `thinking_off`: every call is asked without thinking, where it is else asked as the model has it."""
     try:
         provider = registry.get(provider_name)
     except KeyError:
@@ -176,7 +177,7 @@ async def run_case(conn, provider_name: str, model: str, case: Case, tell: Tell 
     t = Transcript(calls=[], answer="", turns=0, finished=False, limit=limit)
     answer_from = 0             # where in `blocks` the answer begins: after the last result of a tool that is no bookkeeping
     spent = 0.0                 # seconds the model calls took; the wait for a hot machine is not the model's time
-    quiet = False               # a turn of this run ended with thinking only: the rest of the run is asked with thinking off
+    quiet = thinking_off        # thinking is off: for the whole run when the bench says so, else from a turn of thinking only on
 
     async def ask(wire: list[WireMessage], options: Options) -> Reply | None:
         """One model call, read into `blocks`. None when the time of the run ended in it."""

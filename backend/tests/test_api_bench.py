@@ -339,3 +339,24 @@ async def test_a_run_whose_model_call_failed_has_no_mark_to_set_right(client):
     assert one["status"] == "error"
     r = await client.put(f"/api/bench/results/{one['id']}/mark", json={"status": "pass"})
     assert (r.status_code, r.json()) == (409, {"detail": "This run has no mark to set right: its model call failed, or it was skipped."})
+
+
+# ---- a bench without thinking
+
+async def test_a_bench_can_be_started_with_thinking_off(client):
+    model = use(says("no record, 42"))
+    run = await start(client, thinking_off=True)
+    assert run["thinking_off"] is True
+    await ended(run["id"])
+    assert {s["options"].thinking for s in model.seen} == {False}
+    assert (await client.get(f"/api/bench/runs/{run['id']}")).json()["run"]["thinking_off"] is True
+    assert [x["run"]["thinking_off"] for x in (await client.get("/api/bench/runs")).json()] == [True]
+
+
+async def test_a_bench_is_started_with_thinking_as_the_model_has_it_when_the_start_says_nothing(client):
+    model = use(says("no record, 42"))
+    run = await start(client)
+    assert run["thinking_off"] is False
+    await ended(run["id"])
+    assert {s["options"].thinking for s in model.seen} == {None}
+    assert (await client.post("/api/bench/runs", json={"models": [A], "set_id": "own:two", "thinking_off": "perhaps"})).status_code == 422

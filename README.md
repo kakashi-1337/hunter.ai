@@ -478,7 +478,11 @@ it, and a note it makes in the goal record after answering does not hide the ans
 that ended with thinking only is asked once more with thinking off, as a chat does it
 ("A turn that is thinking and nothing else"): the bench measures what a chat gets from the
 model. Such a run says so in a line under its mark, the second call is not counted as a
-turn, and its time and tokens are the run's.
+turn, and its time and tokens are the run's. Tick **Thinking off** before a start, and
+every call of that bench is asked without thinking: faster, and the same for every model.
+The line over its table then ends with "thinking off", and "Pick these again" ticks the
+box again. A model that does not think is asked the same way; Ollama takes that (it
+refuses only thinking switched *on* for such a model).
 Phrases are compared without regard to case, to marks for emphasis, and to the kind of
 quote, dash and space. A set that names a tool HunterAI does not have at the moment (a
 typo, an MCP server that is not connected) says so in the note of its bench.

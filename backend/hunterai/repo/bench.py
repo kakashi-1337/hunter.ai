@@ -17,6 +17,8 @@ PROBLEM_CHARS = 300      # of what a refused call was told
 CALLS_KEPT = 50          # calls of one run; how many were made is kept beside them
 REASONS_KEPT = 40        # lines of one mark
 INTERRUPTED = "HunterAI stopped while this bench was running."
+# A bench with what it was started with beside it, when that was more than its models, set and repeats
+RUNS = "select b.*, o.options_json from bench_runs b left join bench_options o on o.run_id = b.id"
 # A result with the mark its owner set by hand beside it, when he set one
 RESULTS = "select r.*, c.status as by_hand from bench_results r left join bench_corrections c on c.result_id = r.id"
 
@@ -46,6 +48,7 @@ class BenchRun(BaseModel):
     status: Literal["running", "done", "cancelled", "interrupted", "stopped"]
     note: str
     tools_offered: int
+    thinking_off: bool = False      # every call of it is asked without thinking; else as the model has it
     created_at: str
     ended_at: str | None
 
@@ -89,9 +92,11 @@ def _cut(text: str, most: int) -> str:
 
 
 def _run(r) -> BenchRun:
+    options = json.loads(r["options_json"] or "{}")
     return BenchRun(id=r["id"], set_id=r["set_id"], set_name=r["set_name"], repeats=r["repeats"],
                     models=json.loads(r["models_json"]), cases=json.loads(r["cases_json"]), status=r["status"],
-                    note=r["note"], tools_offered=r["tools_offered"], created_at=r["created_at"], ended_at=r["ended_at"])
+                    note=r["note"], tools_offered=r["tools_offered"], thinking_off=options.get("thinking_off") is True,
+                    created_at=r["created_at"], ended_at=r["ended_at"])
 
 
 def _result(r) -> BenchResult:
@@ -102,7 +107,8 @@ def _result(r) -> BenchResult:
                        created_at=r["created_at"])
 
 
-async def create(conn, set_: CaseSet, models: builtins.list[ModelRef], repeats: int, note: str = "") -> BenchRun:
+async def create(conn, set_: CaseSet, models: builtins.list[ModelRef], repeats: int, note: str = "",
+                 thinking_off: bool = False) -> BenchRun:
     """A bench that is running. The cases are kept as they are now: the set's file can change afterwards."""
     rid = new_id()
     await conn.execute(
@@ -110,6 +116,8 @@ async def create(conn, set_: CaseSet, models: builtins.list[ModelRef], repeats: 
         " values(?,?,?,?,?,?,?,?,?)",
         (rid, set_.id, set_.name, repeats, json.dumps([m.model_dump() for m in models]),
          json.dumps([c.model_dump() for c in briefs(set_)]), "running", note, now()))
+    if thinking_off:
+        await conn.execute("insert into bench_options(run_id,options_json) values(?,?)", (rid, json.dumps({"thinking_off": True})))
     await conn.commit()
     return await get(conn, rid)
 
@@ -171,7 +179,7 @@ async def finish(conn, run_id: str, status: str, note: str = "") -> BenchRun:
 
 
 async def get(conn, run_id: str) -> BenchRun | None:
-    r = await (await conn.execute("select * from bench_runs where id=?", (run_id,))).fetchone()
+    r = await (await conn.execute(f"{RUNS} where b.id=?", (run_id,))).fetchone()
     return _run(r) if r else None
 
 
@@ -200,7 +208,7 @@ async def cell(conn, run_id: str, ref: ModelRef, case_id: str) -> builtins.list[
 
 async def list(conn) -> builtins.list[BenchRun]:
     """Every bench, the newest first."""
-    rows = await (await conn.execute("select * from bench_runs order by created_at desc, rowid desc")).fetchall()
+    rows = await (await conn.execute(f"{RUNS} order by b.created_at desc, b.rowid desc")).fetchall()
     return [_run(r) for r in rows]
 
 
