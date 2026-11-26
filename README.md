@@ -178,8 +178,10 @@ when the collection is created.
   (docx, xlsx, pptx) and OpenDocument (odt, ods, odp), read directly; pictures and PDF
   pages without a text layer by OCR (`tesseract`, English; `HUNTERAI_OCR=off` turns it
   off), marked as OCR text because it can contain errors. Old doc, xls, ppt, and rtf
-  files are skipped unless `HUNTERAI_LEGACY_OFFICE=on` (that runs LibreOffice on them). zip, tar, tar.gz, tar.xz, gz, xz, and 7z are
-  unpacked, up to three levels deep. Everything else is listed in the history as skipped,
+  files are skipped unless `HUNTERAI_LEGACY_OFFICE=on` (that runs LibreOffice on them). zip, tar, tar.gz, tar.xz,
+  tar.bz2, tar.zst, gz, xz, bz2, zst, 7z, and rar are unpacked, up to three levels deep. 7z and rar are unpacked by
+  the `7z` program; the 7-Zip that Debian and Ubuntu package, and systems built on them, comes without its rar
+  decoder, which is the package `7zip-rar` (a rar it cannot unpack is listed as skipped, and says so). Everything else is listed in the history as skipped,
   with the reason; nothing is dropped silently. A file that did not change since the last
   ingest costs nothing.
 - **What is never read.** `.git`, `node_modules`, `__pycache__`, virtual environments,

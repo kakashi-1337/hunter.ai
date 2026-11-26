@@ -1,3 +1,4 @@
+import bz2
 import gzip
 import lzma
 import shutil
@@ -7,8 +8,27 @@ import tarfile
 import pytest
 
 from hunterai import config
-from hunterai.kb import archives, limits
-from tests.kb_samples import GROW_7Z, HANG, assert_dead, put, tar_bytes, zip_bytes
+from hunterai.kb import archives, limits, parsers
+from tests.kb_samples import (
+    GROW_7Z,
+    HANG,
+    NO_RAR_7Z,
+    assert_dead,
+    collect,
+    folder_payload,
+    put,
+    rar4_bytes,
+    rar5_bytes,
+    tar_bytes,
+    zip_bytes,
+)
+
+try:
+    from compression import zstd  # Python 3.14 and later
+except ImportError:
+    from backports import zstd
+
+needs_7z = pytest.mark.skipif(shutil.which("7z") is None, reason="7z not installed")
 
 LISTING = """Path = d
 Size = 0
@@ -50,6 +70,12 @@ def out(tmp_path):
 
 def files(root):
     return [f for f in root.rglob("*") if f.is_file()] if root.exists() else []
+
+
+def written(tmp_path, *given):
+    """Every file and every link under the test's folder but the ones the test put there itself."""
+    return sorted(str(f.relative_to(tmp_path)) for f in tmp_path.rglob("*")
+                  if (f.is_file() or f.is_symlink()) and f not in {*given, tmp_path / "test.env"})
 
 
 async def test_zip_with_nested_tar_gz(tmp_path, out):
@@ -214,3 +240,154 @@ async def test_7z_growth_is_capped(fake_bin, tmp_path, out, monkeypatch, patch, 
     assert found == [] and [(q.uri, q.status, q.reason) for q in problems] == [("g.7z", "skipped", reason)]
     assert not files(out)
     assert_dead(int((fd / "main.pid").read_text()))
+
+
+# ---- bz2, zst and rar
+
+@pytest.mark.parametrize("name", ["a.tar.bz2", "a.tbz2", "a.tbz", "notes.txt.bz2", "a.tar.zst", "a.tzst", "dump.sql.zst", "a.rar", "A.RAR",
+                                  "B.TAR.ZST"])
+def test_bz2_zst_and_rar_names_are_archives(name):
+    assert parsers.kind_for(name) == "archive"
+
+
+async def test_bz2_and_the_bzipped_tars(tmp_path, out):
+    cases = {"notes.txt.bz2": (bz2.compress(b"notes"), "notes.txt.bz2!/notes.txt", b"notes"),
+             "t.tar.bz2": (tar_bytes([(tarfile.TarInfo("d/a.txt"), b"one")], "w:bz2"), "t.tar.bz2!/d/a.txt", b"one"),
+             "t.tbz2": (tar_bytes([(tarfile.TarInfo("a.txt"), b"two")], "w:bz2"), "t.tbz2!/a.txt", b"two"),
+             "t.tbz": (tar_bytes([(tarfile.TarInfo("a.txt"), b"three")], "w:bz2"), "t.tbz!/a.txt", b"three")}
+    for name, (data, uri, content) in cases.items():
+        found, problems = await archives.unpack(put(tmp_path, name, data), name, out, limits.Budget())
+        assert [f.uri for f in found] == [uri] and problems == [] and found[0].path.read_bytes() == content
+
+
+async def test_zst_and_the_zstandard_tars(tmp_path, out):
+    tar = tar_bytes([(tarfile.TarInfo("d/a.txt"), b"in a tar"), (tarfile.TarInfo("b.md"), b"# b")])
+    cases = {"dump.sql.zst": (zstd.compress(b"select 1;"), ["dump.sql.zst!/dump.sql"], b"select 1;"),
+             "t.tar.zst": (zstd.compress(tar), ["t.tar.zst!/d/a.txt", "t.tar.zst!/b.md"], b"in a tar"),
+             "t.tzst": (zstd.compress(tar), ["t.tzst!/d/a.txt", "t.tzst!/b.md"], b"in a tar")}
+    for name, (data, uris, content) in cases.items():
+        found, problems = await archives.unpack(put(tmp_path, name, data), name, out, limits.Budget())
+        assert [f.uri for f in found] == uris and problems == [] and found[0].path.read_bytes() == content
+        assert all(f.path.resolve().is_relative_to(out.resolve()) for f in found)
+
+
+async def test_an_archive_inside_a_zst_is_unpacked_too(tmp_path, out):
+    inner = zip_bytes({"x.txt": b"x"})
+    found, problems = await archives.unpack(put(tmp_path, "a.zip.zst", zstd.compress(inner)), "a.zip.zst", out, limits.Budget())
+    assert [f.uri for f in found] == ["a.zip.zst!/a.zip!/x.txt"] and problems == [] and not list(out.rglob("a.zip"))
+
+
+@pytest.mark.parametrize("name,data,why", [
+    ("c.bz2", b"BZh9 this is no bzip2 stream", "OSError"),
+    ("c.tar.bz2", b"no tar and no bzip2 either", "ReadError"),
+    ("c.zst", b"\x28\xb5\x2f\xfd and then nothing a frame could be", "ZstdError"),
+    ("cut.zst", zstd.compress(bytes(range(256)) * 40)[:30], "EOFError"),
+    ("c.tar.zst", zstd.compress(b"zstandard, but no tar inside" * 40), "ReadError"),
+    ("c.tzst", b"neither", "ZstdError")])
+async def test_a_broken_bz2_or_zst_is_a_problem_not_an_exception(tmp_path, out, name, data, why):
+    budget = limits.Budget()
+    found, problems = await archives.unpack(put(tmp_path, name, data), name, out, budget)
+    assert found == [] and [(q.uri, q.status, q.reason) for q in problems] == [(name, "skipped", f"unreadable archive: {why}")]
+    assert budget.files == 0 and budget.stored_bytes == 0
+
+
+@pytest.mark.parametrize("name,pack", [("zeros.txt.bz2", bz2.compress), ("zeros.txt.zst", zstd.compress),
+                                       ("zeros.tar.zst", lambda data: zstd.compress(tar_bytes([(tarfile.TarInfo("zeros.txt"), data)])))])
+async def test_the_ratio_cap_stops_a_bz2_or_zst_bomb_and_frees_its_bytes(tmp_path, out, monkeypatch, name, pack):
+    monkeypatch.setattr(limits, "RATIO_FLOOR_BYTES", 1024 * 1024); monkeypatch.setattr(limits, "MAX_RATIO", 10)
+    budget = limits.Budget()
+    found, problems = await archives.unpack(put(tmp_path, name, pack(b"\0" * (8 * 1024 * 1024))), name, out, budget)
+    assert found == [] and [(q.uri, q.reason) for q in problems] == [(name, "compression ratio above 10:1 (possible archive bomb)")]
+    assert budget.stored_bytes == 0 and budget.files == 0 and not files(out)
+
+
+@pytest.mark.parametrize("name,pack", [("e.tar.bz2", bz2.compress), ("e.tar.zst", zstd.compress), ("e.tzst", zstd.compress)])
+async def test_a_path_that_leaves_and_a_link_in_a_bzipped_or_zstandard_tar_are_never_written(tmp_path, out, name, pack):
+    link = tarfile.TarInfo("ln"); link.type = tarfile.SYMTYPE; link.linkname = "/etc/passwd"
+    tar = tar_bytes([(tarfile.TarInfo("../escape.txt"), b"out"), (tarfile.TarInfo("/abs.txt"), b"abs"), (link, None),
+                     (tarfile.TarInfo("ok.txt"), b"in")])
+    p = put(tmp_path / "in", name, pack(tar))
+    found, problems = await archives.unpack(p, name, out, limits.Budget())
+    assert [f.uri for f in found] == [f"{name}!/ok.txt"]
+    assert sorted((q.uri, q.reason) for q in problems) == [(f"{name}!/../escape.txt", "unsafe path in archive"),
+                                                            (f"{name}!//abs.txt", "unsafe path in archive"),
+                                                            (f"{name}!/ln", "symlink in archive (not extracted)")]
+    assert written(tmp_path, p) == [str(found[0].path.relative_to(tmp_path))] and found[0].path.is_relative_to(out)
+
+
+async def test_a_folder_scan_unpacks_the_new_archives(tmp_path):
+    root = tmp_path / "src"
+    put(root, "logs.tar.zst", zstd.compress(tar_bytes([(tarfile.TarInfo("app.log"), b"started")])))
+    put(root, "old.tbz2", tar_bytes([(tarfile.TarInfo("notes.md"), b"# old")], "w:bz2"))
+    found, problems = await collect(folder_payload(root))
+    assert sorted(f.uri.removeprefix(str(root)) for f in found) == ["/logs.tar.zst!/app.log", "/old.tbz2!/notes.md"] and problems == []
+
+
+@needs_7z
+@pytest.mark.parametrize("rar", [rar4_bytes, rar5_bytes])
+async def test_a_rar_is_unpacked(tmp_path, out, rar):
+    p = put(tmp_path, "r.rar", rar(("notes/readme.md", b"# Notes"), ("a.txt", b"alpha")))
+    found, problems = await archives.unpack(p, "r.rar", out, limits.Budget())
+    assert [f.uri for f in found] == ["r.rar!/a.txt", "r.rar!/notes/readme.md"] and problems == []
+    assert [f.path.read_bytes() for f in found] == [b"alpha", b"# Notes"]
+
+
+@needs_7z
+@pytest.mark.parametrize("rar", [rar4_bytes, rar5_bytes])
+async def test_a_rar_with_a_path_that_leaves_is_not_extracted(tmp_path, out, rar):
+    p = put(tmp_path / "in", "e.rar", rar(("../escape.txt", b"out"), ("ok.txt", b"in")))
+    found, problems = await archives.unpack(p, "e.rar", out, limits.Budget())
+    assert found == [] and {(q.uri, q.status, q.reason) for q in problems} == {
+        ("e.rar!/../escape.txt", "skipped", "unsafe path in archive"),
+        ("e.rar", "skipped", "rar archive contains links or unsafe paths (not extracted)")}
+    assert written(tmp_path, p) == []
+
+
+@needs_7z
+async def test_a_rar_with_a_symbolic_link_is_not_extracted(tmp_path, out):
+    p = put(tmp_path / "in", "s.rar", rar5_bytes(("ln", "/etc/passwd", "link"), ("ok.txt", b"in")))
+    found, problems = await archives.unpack(p, "s.rar", out, limits.Budget())
+    assert found == [] and {(q.uri, q.status, q.reason) for q in problems} == {
+        ("s.rar!/ln", "skipped", "symlink in archive (not extracted)"),
+        ("s.rar", "skipped", "rar archive contains links or unsafe paths (not extracted)")}
+    assert written(tmp_path, p) == []
+
+
+@needs_7z
+async def test_a_link_in_an_old_rar_is_never_made_a_link(tmp_path, out):
+    """7-Zip does not say that a member of a RAR 4 archive is a link: it writes the target's name into a plain file."""
+    p = put(tmp_path / "in", "s4.rar", rar4_bytes(("ln", "/etc/passwd", "link"), ("ok.txt", b"in")))
+    found, problems = await archives.unpack(p, "s4.rar", out, limits.Budget())
+    assert sorted(f.uri for f in found) == ["s4.rar!/ln", "s4.rar!/ok.txt"] and problems == []
+    assert not [f for f in tmp_path.rglob("*") if f.is_symlink()] and len(written(tmp_path, p)) == 2
+    assert next(f for f in found if f.uri.endswith("/ln")).path.read_bytes() == b"/etc/passwd"
+
+
+@pytest.mark.parametrize("name", ["p.rar", "P.RAR"])
+async def test_a_rar_that_this_7z_cannot_unpack_says_what_is_missing(fake_bin, tmp_path, out, name):
+    fake_bin("7z", NO_RAR_7Z)
+    budget = limits.Budget()
+    found, problems = await archives.unpack(put(tmp_path / "in", name, b"Rar!\x1a\x07\x00"), name, out, budget)
+    assert found == [] and [(q.uri, q.status, q.reason) for q in problems] == [(name, "skipped", archives.NO_RAR_DECODER)]
+    assert "7zip-rar" in archives.NO_RAR_DECODER and not files(out) and budget.files == 0
+
+
+async def test_a_rar_that_fails_for_another_reason_keeps_the_words_of_7z(fake_bin, tmp_path, out, monkeypatch):
+    fake_bin("7z", NO_RAR_7Z); monkeypatch.setenv("FAKE_7Z_SAYS", "Data Error")
+    found, problems = await archives.unpack(put(tmp_path / "in", "d.rar", b"Rar!\x1a\x07\x00"), "d.rar", out, limits.Budget())
+    assert found == [] and [(q.uri, q.status, q.reason) for q in problems] == [("d.rar", "failed", "7z failed: ERROR: Data Error : big.txt\n")]
+    assert not files(out)
+
+
+async def test_a_7z_that_cannot_unpack_a_7z_keeps_its_own_words(fake_bin, tmp_path, out):
+    """The hint is about rar. Another archive that fails the same way says what 7z said."""
+    fake_bin("7z", NO_RAR_7Z)
+    found, problems = await archives.unpack(put(tmp_path / "in", "p.7z", b"7z\xbc\xaf\x27\x1c"), "p.7z", out, limits.Budget())
+    assert found == [] and [(q.uri, q.status) for q in problems] == [("p.7z", "failed")]
+    assert problems[0].reason.startswith("7z failed: ") and "Unsupported Method" in problems[0].reason
+
+
+async def test_a_rar_without_7z_is_recorded(tmp_path, out, monkeypatch):
+    monkeypatch.setenv("PATH", str(tmp_path))
+    found, problems = await archives.unpack(put(tmp_path, "x.rar", b"Rar!\x1a\x07\x00"), "x.rar", out, limits.Budget())
+    assert found == [] and [(q.status, q.reason) for q in problems] == [("skipped", "7z is not installed")]

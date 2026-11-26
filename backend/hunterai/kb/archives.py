@@ -4,6 +4,9 @@ and a bad archive is a recorded problem, never an exception."""
 from __future__ import annotations
 
 import asyncio
+import bz2
+import contextlib
+import functools
 import gzip
 import lzma
 import os
@@ -20,7 +23,18 @@ from ..db import new_id
 from . import limits, parsers, tools
 from .limits import Budget
 
+try:
+    from compression import zstd  # Python 3.14 and later
+except ImportError:  # before that, its backport (pyproject.toml)
+    from backports import zstd
+
 BLOCK = 1024 * 1024
+BY_7Z = (".7z", ".rar")                  # what the 7z program unpacks
+TARS = (".tar", ".tar.gz", ".tgz", ".tar.xz", ".txz", ".tar.bz2", ".tbz2", ".tbz")
+ZST_TARS = (".tar.zst", ".tzst")
+# Debian and Ubuntu package 7-Zip without its rar decoder: such a 7z lists a rar and cannot unpack what is in it.
+NO_RAR_DECODER = ("the 7z on this machine has no rar decoder: install the package 7zip-rar (p7zip-rar on an older system) "
+                  "and ingest the archive again")
 
 
 @dataclass
@@ -141,8 +155,19 @@ def _zip_members(archive: Path):
                     yield i.filename, "file", src
 
 
-def _tar_members(archive: Path):
-    with tarfile.open(archive, "r:*") as t:
+def _open_tar(archive: Path):
+    return tarfile.open(archive, "r:*")
+
+
+@contextlib.contextmanager
+def _open_zst_tar(archive: Path):
+    """tarfile reads zstandard by itself from Python 3.14 on. Until then the stream is opened for it."""
+    with zstd.open(archive, "rb") as raw, tarfile.open(fileobj=raw, mode="r:") as t:
+        yield t
+
+
+def _tar_members(archive: Path, opener=_open_tar):
+    with opener(archive) as t:
         members = t.getmembers()
         yield len(members)
         for m in members:
@@ -179,17 +204,23 @@ def _reader(archive: Path):
     name = archive.name.lower()
     if name.endswith(".zip"):
         return _zip_members
-    if name.endswith((".tar", ".tar.gz", ".tgz", ".tar.xz", ".txz")):
+    if name.endswith(TARS):
         return _tar_members
+    if name.endswith(ZST_TARS):
+        return functools.partial(_tar_members, opener=_open_zst_tar)
     if name.endswith(".gz"):
         return _single(gzip.open, 3)
     if name.endswith(".xz"):
         return _single(lzma.open, 3)
+    if name.endswith(".bz2"):
+        return _single(bz2.open, 4)
+    if name.endswith(".zst"):
+        return _single(zstd.open, 4)
     return None
 
 
 def _extract(archive: Path, uri: str, out: Path, budget: Budget) -> tuple[list[Found], list[Problem]]:
-    """Runs in a thread. Everything but .7z."""
+    """Runs in a thread. Everything but what the 7z program unpacks (BY_7Z)."""
     found: list[Found] = []
     problems: list[Problem] = []
     writer = _Writer(archive, out, budget)
@@ -219,7 +250,7 @@ def _extract(archive: Path, uri: str, out: Path, budget: Budget) -> tuple[list[F
     except _Bomb:
         writer.undo()
         return [], [Problem(uri, "skipped", bomb())]
-    except (zipfile.BadZipFile, tarfile.TarError, EOFError, lzma.LZMAError, OSError, RuntimeError,
+    except (zipfile.BadZipFile, tarfile.TarError, EOFError, lzma.LZMAError, zstd.ZstdError, OSError, RuntimeError,
             NotImplementedError, StopIteration) as e:
         problems.append(Problem(uri, "skipped", f"unreadable archive: {type(e).__name__}"))
     return found, problems
@@ -243,7 +274,9 @@ def parse_7z_listing(text: str) -> list[SevenZipEntry]:
 
 
 async def _unpack_7z(archive: Path, uri: str, out: Path, budget: Budget) -> tuple[list[Found], list[Problem]]:
+    """A .7z or a .rar, by the 7z program: listed first, and unpacked only when no entry of it is a link or leaves."""
     problems: list[Problem] = []
+    rar = archive.name.lower().endswith(".rar")
     try:
         listing = await tools.run_tool(["7z", "l", "-slt", "-ba", "-sccUTF-8", "--", str(archive)],
                                        timeout=limits.LIST_TIMEOUT, cwd=archive.parent)
@@ -272,7 +305,7 @@ async def _unpack_7z(archive: Path, uri: str, out: Path, budget: Budget) -> tupl
         else:
             wanted[rel] = e.size
     if refuse:   # 7-Zip extracts an archive as a whole: one hostile entry costs the rest
-        return [], [*problems, Problem(uri, "skipped", "7z archive contains links or unsafe paths (not extracted)")]
+        return [], [*problems, Problem(uri, "skipped", f"{'rar' if rar else '7z'} archive contains links or unsafe paths (not extracted)")]
     if budget.files + len(wanted) > limits.MAX_JOB_FILES:
         return [], [*problems, Problem(uri, "skipped", limits.file_cap())]
     allowed = limits.MAX_JOB_BYTES - budget.stored_bytes
@@ -298,6 +331,8 @@ async def _unpack_7z(archive: Path, uri: str, out: Path, budget: Budget) -> tupl
         return [], [*problems, Problem(uri, "skipped", "7z is not installed")]
     if res.returncode != 0:
         shutil.rmtree(out, ignore_errors=True)
+        if rar and b"Unsupported Method" in res.stderr:
+            return [], [*problems, Problem(uri, "skipped", NO_RAR_DECODER)]
         return [], [*problems, Problem(uri, "failed", "7z failed: " + res.stderr.decode("utf-8", "replace")[-200:])]
     found: list[Found] = []
     for dirpath, dirnames, names in os.walk(out):
@@ -327,7 +362,7 @@ async def unpack(archive: Path, uri: str, dest: Path, budget: Budget, depth: int
     except limits.NoSpace as e:
         return [], [Problem(uri, "skipped", str(e))]
     out = dest / new_id()
-    if archive.name.lower().endswith(".7z"):
+    if archive.name.lower().endswith(BY_7Z):
         found, problems = await _unpack_7z(archive, uri, out, budget)
     elif _reader(archive) is None:
         return [], [Problem(uri, "skipped", "unreadable archive: unknown format")]

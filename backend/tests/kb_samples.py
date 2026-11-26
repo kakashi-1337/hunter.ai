@@ -31,9 +31,11 @@ def make_pdf(pages: list[str]) -> bytes:
 
 import io  # noqa: E402
 import os  # noqa: E402
+import struct
 import tarfile  # noqa: E402
 import time  # noqa: E402
 import zipfile  # noqa: E402
+import zlib
 from pathlib import Path  # noqa: E402
 
 HANG = '#!/bin/sh\nsleep 60 &\necho $! > "$FAKE_OUT/child.pid"\necho $$ > "$FAKE_OUT/main.pid"\nwait\n'
@@ -47,6 +49,68 @@ fi
 for a in "$@"; do case "$a" in -o*) dir="${a#-o}";; esac; done
 while true; do head -c 200000 /dev/zero >> "$dir/a.txt"; sleep 0.05; done
 '''
+
+
+# Stands in for a 7z whose build has no rar decoder (Debian's and Ubuntu's 7zip without 7zip-rar): it lists a rar,
+# and unpacking a compressed member fails.
+NO_RAR_7Z = r"""#!/bin/sh
+if [ "$1" = "l" ]; then
+  printf 'Path = big.txt\nSize = 4096\nPacked Size = 32\nAttributes = \nEncrypted = -\nMethod = m3:16\n\n'
+  exit 0
+fi
+for a in "$@"; do case "$a" in -o*) dir="${a#-o}";; esac; done
+: > "$dir/big.txt"
+echo "ERROR: ${FAKE_7Z_SAYS:-Unsupported Method} : big.txt" >&2
+exit 2
+"""
+
+
+def _rar4_block(kind: int, flags: int, body: bytes, data: bytes = b"") -> bytes:
+    rest = struct.pack("<BHH", kind, flags, 7 + len(body)) + body
+    return struct.pack("<H", zlib.crc32(rest) & 0xFFFF) + rest + data
+
+
+def rar4_bytes(*members: tuple) -> bytes:
+    """A RAR 4 archive written out by hand, its members stored as they are: (name, data) or (name, target, "link").
+    No free program writes rar, and these few bytes are the whole format for a stored member."""
+    out = b"Rar!\x1a\x07\x00" + _rar4_block(0x73, 0, b"\0" * 6)
+    for name, data, *kind in members:
+        raw, attr = name.encode(), 0o120777 if kind else 0o100644
+        data = data.encode() if kind else data
+        body = struct.pack("<IIBIIBBHI", len(data), len(data), 3, zlib.crc32(data), 0x5A8E3C00, 20, 0x30, len(raw), attr) + raw
+        out += _rar4_block(0x74, 0x8000, body, data)
+    return out + _rar4_block(0x7B, 0x4000, b"")
+
+
+def _vint(n: int) -> bytes:
+    out = bytearray()
+    while True:
+        out.append((n & 0x7F) | (0x80 if n >> 7 else 0))
+        n >>= 7
+        if not n:
+            return bytes(out)
+
+
+def _rar5_block(kind: int, fields: bytes, extra: bytes = b"", data: bytes = b"") -> bytes:
+    head = (_vint(kind) + _vint((1 if extra else 0) | (2 if data else 0)) + (_vint(len(extra)) if extra else b"")
+            + (_vint(len(data)) if data else b"") + fields + extra)
+    sized = _vint(len(head)) + head
+    return struct.pack("<I", zlib.crc32(sized)) + sized + data
+
+
+def rar5_bytes(*members: tuple) -> bytes:
+    """The same in RAR 5, the format WinRAR has written since 2013. A link is a member with a redirection record."""
+    out = b"Rar!\x1a\x07\x01\x00" + _rar5_block(1, _vint(0))
+    for name, data, *kind in members:
+        raw, extra = name.encode(), b""
+        if kind:
+            target = data.encode()
+            record = _vint(5) + _vint(1) + _vint(0) + _vint(len(target)) + target
+            extra, data = _vint(len(record)) + record, b""
+        fields = (_vint(0x04) + _vint(len(data)) + _vint(0o120777 if kind else 0o100644) + struct.pack("<I", zlib.crc32(data))
+                  + _vint(0) + _vint(1) + _vint(len(raw)) + raw)
+        out += _rar5_block(2, fields, extra, data)
+    return out + _rar5_block(5, _vint(0))
 
 
 def zip_bytes(entries: dict[str, bytes]) -> bytes:
