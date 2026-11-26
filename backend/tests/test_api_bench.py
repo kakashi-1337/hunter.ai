@@ -360,3 +360,16 @@ async def test_a_bench_is_started_with_thinking_as_the_model_has_it_when_the_sta
     await ended(run["id"])
     assert {s["options"].thinking for s in model.seen} == {None}
     assert (await client.post("/api/bench/runs", json={"models": [A], "set_id": "own:two", "thinking_off": "perhaps"})).status_code == 422
+
+
+# ---- what the model thought last
+
+async def test_the_runs_of_a_cell_carry_what_the_model_thought_last(client):
+    from hunterai.providers.base import ThinkingDelta
+    use([ThinkingDelta("No record came back."), *says("There is no record.")], says("It is 42."))
+    run = await start(client)
+    await ended(run["id"])
+    assert [x["thinking"] for x in await cell(client, run, case_id="record")] == ["No record came back."]
+    assert [x["thinking"] for x in await cell(client, run)] == [""]
+    marks = (await client.get(f"/api/bench/runs/{run['id']}")).json()["marks"]
+    assert all("thinking" not in m for m in marks)       # the table needs none of it

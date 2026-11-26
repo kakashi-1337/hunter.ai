@@ -389,6 +389,11 @@ create table if not exists bench_options (
   run_id text primary key references bench_runs(id) on delete cascade,
   options_json text not null           -- {"thinking_off": true}
 );
+-- The end of what the model thought in the last call of a run. No rule reads it: the owner sees it beside the run.
+create table if not exists bench_thinking (
+  result_id text primary key references bench_results(id) on delete cascade,
+  text text not null
+);
 -- A mark the owner set right by hand. The rules of a set are lists of phrases, and a wording nobody thought of gets
 -- a wrong mark: the owner reads the answer and says what the run is. What the rules said stays in bench_results.
 create table if not exists bench_corrections (

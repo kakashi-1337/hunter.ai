@@ -58,6 +58,11 @@ function CellDetail({ run, model, name, caseId, made, onMarked }: {
             <li className="mono" key={i}>{visible(c.name)} {visible(c.arguments)}{c.problem ? ` (not run: ${visible(c.problem)})` : ''}</li>))}</ul>}
           {r.calls_made > r.calls.length && <div className="hint">{r.calls.length === 1 ? 'The first call' : `The first ${r.calls.length} calls`} of {r.calls_made} {r.calls.length === 1 ? 'is' : 'are'} shown.</div>}
           {r.status !== 'skipped' && (r.answer ? <pre>{visible(r.answer)}</pre> : <div className="hint">No answer.</div>)}
+          {r.thinking && (
+            <details className="bench-thinking" open={!r.answer}>
+              <summary>The end of what it thought last</summary>
+              <pre>{visible(r.thinking)}</pre>
+            </details>)}
         </div>
         )
       })}

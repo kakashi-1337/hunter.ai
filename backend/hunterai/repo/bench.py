@@ -12,6 +12,7 @@ from ..bench.score import Transcript
 from ..db import new_id, now
 
 ANSWER_CHARS = 8_000     # of an answer that are kept
+THINKING_CHARS = 4_000   # of the thinking of the last call of a run: its end, which is where the model was when it stopped
 ARGS_CHARS = 500         # of the arguments of one call, as JSON text
 PROBLEM_CHARS = 300      # of what a refused call was told
 CALLS_KEPT = 50          # calls of one run; how many were made is kept beside them
@@ -20,7 +21,8 @@ INTERRUPTED = "HunterAI stopped while this bench was running."
 # A bench with what it was started with beside it, when that was more than its models, set and repeats
 RUNS = "select b.*, o.options_json from bench_runs b left join bench_options o on o.run_id = b.id"
 # A result with the mark its owner set by hand beside it, when he set one
-RESULTS = "select r.*, c.status as by_hand from bench_results r left join bench_corrections c on c.result_id = r.id"
+RESULTS = ("select r.*, c.status as by_hand, k.text as thinking from bench_results r"
+           " left join bench_corrections c on c.result_id = r.id left join bench_thinking k on k.result_id = r.id")
 
 
 class NotJudged(Exception):
@@ -66,6 +68,7 @@ class BenchResult(BaseModel):
     calls: list[CallBrief]
     calls_made: int
     answer: str
+    thinking: str = ""              # the end of what the model thought in its last call, when it thought
     turns: int
     input_tokens: int
     output_tokens: int
@@ -102,7 +105,8 @@ def _run(r) -> BenchRun:
 def _result(r) -> BenchResult:
     return BenchResult(id=r["id"], run_id=r["run_id"], provider=r["provider"], model=r["model"], case_id=r["case_id"],
                        repeat=r["repeat"], status=r["status"], by_hand=r["by_hand"], reasons=json.loads(r["reasons_json"]),
-                       calls=json.loads(r["calls_json"]), calls_made=r["calls_made"], answer=r["answer"], turns=r["turns"],
+                       calls=json.loads(r["calls_json"]), calls_made=r["calls_made"], answer=r["answer"],
+                       thinking=r["thinking"] or "", turns=r["turns"],
                        input_tokens=r["input_tokens"], output_tokens=r["output_tokens"], duration_ms=r["duration_ms"],
                        created_at=r["created_at"])
 
@@ -139,6 +143,9 @@ async def add_result(conn, run_id: str, ref: ModelRef, case_id: str, repeat: int
         (rid, run_id, ref.provider, ref.model, case_id, repeat, status, json.dumps(lines), json.dumps(kept), len(calls),
          _cut(t.answer, ANSWER_CHARS) if t is not None else "", t.turns if t is not None else 0,
          t.input_tokens if t is not None else 0, t.output_tokens if t is not None else 0, duration_ms, now()))
+    if t is not None and t.thinking:
+        end = t.thinking if len(t.thinking) <= THINKING_CHARS else "…" + t.thinking[-THINKING_CHARS:]
+        await conn.execute("insert into bench_thinking(result_id,text) values(?,?)", (rid, end))
     await conn.commit()
     return await result(conn, rid)
 

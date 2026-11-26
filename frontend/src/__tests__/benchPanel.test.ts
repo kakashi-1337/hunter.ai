@@ -243,6 +243,27 @@ describe('the Bench panel', () => {
     expect($('.bench-opened')!.textContent).not.toContain('tools offered')
   })
 
+  it('shows the end of what the model thought in its last call: open for a run without an answer, closed beside an answer', async () => {
+    const base = { run_id: 'r1', calls_made: 0, calls: [], created_at: '' }
+    const results: BenchResult[] = [
+      { ...mark(QWEN, 'look-up', 1, 'pass'), ...base, id: 'a', reasons: [], answer: 'It is 7.42.1.', thinking: 'The page says 7.42.1.' },
+      { ...mark(QWEN, 'look-up', 2, 'fail'), ...base, id: 'b', reasons: ['gave no answer'], answer: '', thinking: '…1, 2, 3, 4, 5,' },
+      { ...mark(QWEN, 'look-up', 3, 'fail'), ...base, id: 'c', reasons: ['gave no answer'], answer: '', thinking: '' },
+      { ...mark(QWEN, 'look-up', 4, 'fail'), ...base, id: 'd', reasons: ['gave no answer'], answer: '' },      // a server from before it kept any
+    ]
+    vi.spyOn(api, 'benchRuns').mockResolvedValue([{ run: run(), progress: null }])
+    vi.spyOn(api, 'benchRun').mockResolvedValue(detail())
+    vi.spyOn(api, 'benchCell').mockResolvedValue(results)
+    await open()
+    await click($('.bench-table tbody tr:nth-child(2) .bench-cell'))
+    const thought = $$('.bench-detail .bench-run').map((r) => r.querySelector<HTMLDetailsElement>('details.bench-thinking'))
+    expect(thought.map((d) => (d ? [d.open, d.querySelector('summary')!.textContent, d.querySelector('pre')!.textContent] : null))).toEqual([
+      [false, 'The end of what it thought last', 'The page says 7.42.1.'],
+      [true, 'The end of what it thought last', '…1, 2, 3, 4, 5,'],
+      null, null])
+    expect($$('.bench-detail .bench-run')[1].textContent).toContain('No answer.')
+  })
+
   it('lets the owner set the mark of a run right by hand, counts it in the table, and takes it back', async () => {
     const base = { run_id: 'r1', calls_made: 0, calls: [], created_at: '' }
     const results: BenchResult[] = [

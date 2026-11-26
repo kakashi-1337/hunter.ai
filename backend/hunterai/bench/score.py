@@ -60,6 +60,8 @@ class Transcript:
     output_tokens: int = 0
     timed_out: bool = False   # it was the time limit that ended it, not the turn limit
     cut_off: bool = False     # a model call ended at a limit of length and not by itself: the run ended there
+    thinking: str = ""        # what the model thought in its last call. No rule reads it: it is kept for the owner, who
+    #                           sees beside a run without an answer what the model wrote instead
     limit: int | None = None  # the tokens one call of this run might write: the bench's own limit for a model on this machine
     asked_again: bool = False     # a turn ended with thinking only and was asked once more with thinking off (run.run_case)
 
