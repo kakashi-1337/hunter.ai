@@ -1743,10 +1743,22 @@ in every request. The setup check lists what the folders hold.
 To see what these programs send to a target, switch Caido's recording on: the model is
 then told how to send each of them through Caido (see [Caido](#caido)).
 
-### Your own font
+### Interface font
 
-The interface is set in the fonts of your system. To set it in OCR-A, put the font file at
-`frontend/public/fonts/OCRAStd.woff2` and start HunterAI again:
+The interface is set in the fonts of your system. Settings, "Interface", has the field
+"Interface font": the name of a font that is installed on your computer, like `Ubuntu Mono`.
+It is in use as soon as you leave the field, without a build or a restart, and an empty
+field brings the fonts of the system back. A font that is much wider than the usual one
+(OCR-A is) is set one pixel smaller. When the browser finds no font of that name on the
+computer, the field says so and the interface keeps the font it has. Code, commands and
+tool output keep their monospace font. The name is kept with HunterAI's settings, and in
+the browser so that a page starts in the font.
+
+### Your own font file
+
+A font that is not installed on the computer can be given as a file. To set the interface
+in OCR-A that way, put the font file at `frontend/public/fonts/OCRAStd.woff2` and start
+HunterAI again:
 
 ```bash
 mkdir -p frontend/public/fonts
@@ -1762,7 +1774,7 @@ have the system fonts back.
 
 The font is yours and not HunterAI's to hand out: git ignores `frontend/public/fonts/`, so
 a font you have a licence for is never committed. Reload a page that was open while you
-started again.
+started again. A font named in Settings goes before the file.
 
 ### Web search
 

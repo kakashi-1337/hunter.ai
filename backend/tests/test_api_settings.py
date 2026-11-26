@@ -185,6 +185,24 @@ async def test_leaving_out_what_nobody_wrote_is_on_by_default_and_can_be_switche
     assert (await client.put("/api/settings", json={"max_turns": 10})).json()["kb_skip_generated"] is False
 
 
+async def test_the_interface_font_is_the_systems_until_the_owner_names_one(client):
+    assert (await client.get("/api/settings")).json()["interface_font"] == ""
+    assert (await client.put("/api/settings", json={"interface_font": "  Ubuntu Mono "})).json()["interface_font"] == "Ubuntu Mono"
+    assert (await client.put("/api/settings", json={"max_turns": 10})).json()["interface_font"] == "Ubuntu Mono"     # another change leaves it
+    assert (await client.get("/api/settings")).json()["interface_font"] == "Ubuntu Mono"
+    assert (await client.put("/api/settings", json={"interface_font": ""})).json()["interface_font"] == ""          # the system's again
+    assert (await client.put("/api/settings", json={"interface_font": "Noto Sans 日本語"})).json()["interface_font"] == "Noto Sans 日本語"
+
+
+@pytest.mark.parametrize("name", ["x', serif; } body { display: none", "a" * 61, "'quoted'", "it's", 'say "so"', "url(http://x)",
+                                  "-leading", "semi;colon", "new\nline", "back\\slash", " . "])
+async def test_what_is_more_than_the_name_of_a_font_is_refused(client, name):
+    await client.put("/api/settings", json={"interface_font": "Ubuntu Mono"})
+    r = await client.put("/api/settings", json={"interface_font": name})
+    assert r.status_code == 400 and "font" in r.json()["detail"], r.text
+    assert (await client.get("/api/settings")).json()["interface_font"] == "Ubuntu Mono"      # what was set stays
+
+
 async def test_the_swarm_width_is_three_until_the_owner_sets_one_to_six(client):
     seen = (await client.get("/api/settings")).json()
     assert seen["swarm_width"] == 3 and seen["machine"]["cores"] >= 1

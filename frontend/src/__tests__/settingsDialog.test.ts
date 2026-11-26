@@ -17,7 +17,7 @@ const SETTINGS: Settings = {
   decision_engine: true, kb_redact: true, kb_skip_generated: true, vision_model: null, browser_via_caido: false, answer_check: false,
   mcp_on_demand: true, notify_findings: false, notify_min_severity: 'high', notify_webhook_set: false, caido_available: false,
   upstream_proxy: '', upstream_proxy_password: false, upstream_proxy_intercepts: false, upstream_proxy_kb: false,
-  provider_proxy: '', provider_proxy_password: false, colibri_url: '', colibri_key_set: false,
+  provider_proxy: '', provider_proxy_password: false, colibri_url: '', colibri_key_set: false, interface_font: '',
 }
 
 /** What the server says about the fallback model of this machine. */
@@ -72,6 +72,61 @@ describe('Settings', () => {
     expect(host.querySelector('[role="dialog"]')?.getAttribute('aria-label')).toBe('Settings')
     expect(host.querySelector('[role="alert"]')).toBeNull()
     expect(host.textContent).toContain('Fallback model (Ollama)')
+  })
+
+  describe('the interface font', () => {
+    const fontField = () => field(/^Interface font/).querySelector<HTMLInputElement>('input')!
+    const said = () => field(/^Interface font/).querySelector('[role="alert"]')?.textContent ?? null
+
+    it('is empty for the font of the system, and says what a name is', async () => {
+      await open()
+      expect(fontField().value).toBe('')
+      expect(field(/^Interface font/).textContent).toContain('a font that is installed on this computer, like Ubuntu Mono')
+      expect(said()).toBeNull()
+    })
+
+    it('names the font the owner chose', async () => {
+      useStore.setState({ settings: { ...SETTINGS, interface_font: 'Ubuntu Mono' } })
+      vi.spyOn(api, 'getSettings').mockResolvedValue({ ...SETTINGS, interface_font: 'Ubuntu Mono' })
+      await open()
+      expect(fontField().value).toBe('Ubuntu Mono')
+    })
+
+    it('offers the fonts of Ubuntu and takes any other name', async () => {
+      await open()
+      const offered = [...host.querySelectorAll(`datalist#${fontField().getAttribute('list')} option`)].map((o) => o.getAttribute('value'))
+      expect(offered.slice(0, 3)).toEqual(['Ubuntu Mono', 'Ubuntu Sans Mono', 'Ubuntu Sans'])
+    })
+
+    it('saves the name when the field is left, without the spaces around it', async () => {
+      await open()
+      await leaveWith(fontField(), '  Ubuntu Mono ')
+      expect(put).toHaveBeenCalledWith({ interface_font: 'Ubuntu Mono' })
+      expect(fontField().value).toBe('Ubuntu Mono')
+    })
+
+    it('goes back to the font of the system when the field is emptied', async () => {
+      useStore.setState({ settings: { ...SETTINGS, interface_font: 'Ubuntu Mono' } })
+      vi.spyOn(api, 'getSettings').mockResolvedValue({ ...SETTINGS, interface_font: 'Ubuntu Mono' })
+      await open()
+      await leaveWith(fontField(), '')
+      expect(put).toHaveBeenCalledWith({ interface_font: '' })
+    })
+
+    it('asks the server nothing when the name did not change', async () => {
+      useStore.setState({ settings: { ...SETTINGS, interface_font: 'Ubuntu Mono' } })
+      vi.spyOn(api, 'getSettings').mockResolvedValue({ ...SETTINGS, interface_font: 'Ubuntu Mono' })
+      await open()
+      await leaveWith(fontField(), 'Ubuntu Mono ')
+      expect(put).not.toHaveBeenCalled()
+    })
+
+    it('does not send what is more than a name, and says how a font is named', async () => {
+      await open()
+      await leaveWith(fontField(), "x', serif; } body { display: none")
+      expect(put).not.toHaveBeenCalled()
+      expect(said()).toBe('A font is named with letters, digits, spaces and . _ + - (60 characters at most), like Ubuntu Mono.')
+    })
   })
 
   describe('the context window for local models', () => {

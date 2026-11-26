@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import * as api from '../api'
+import { FONT_NAME, SUGGESTED_FONTS, fontIsHere } from '../font'
 import { proxyTestText } from '../proxy'
 import { useStore } from '../store'
 import { colibriHint, localWindowHint } from '../tree'
@@ -129,6 +130,31 @@ function LocalWindow({ value, most, save }: { value: number; most: number; save(
       <span className="hint">What a call to an Ollama model starts with, the fallback included. A chat can set its own, and a model never gets more than it takes. A chat that needs more room has its window raised by itself, up to the largest below. Past that it is shortened for the call to a summary of its early part and its latest messages, and a request that still does not fit is refused with the reason. A larger window keeps more of the chat and needs more memory. Empty: 16,384.</span>
       {lines.map((line) => <span key={line} className="hint">{line}</span>)}
       {warn && <span className="ask-warning" role="alert">{warn}</span>}
+    </label>
+  )
+}
+
+/** The font the interface is set in: the name of a font of this computer, or nothing for the fonts of the system.
+ * `save` answers with the name in use after the attempt. */
+function InterfaceFont({ value, save }: { value: string; save(name: string): Promise<string> }) {
+  const [text, setText] = useState(value)
+  const [refused, setRefused] = useState(false)
+  const typed = text.trim()
+  const here = typed && FONT_NAME.test(typed) ? fontIsHere(typed) : null
+  const leave = async () => {
+    if (typed === value) return
+    const more = typed !== '' && !FONT_NAME.test(typed)
+    setRefused(more)
+    if (!more) setText(await save(typed))
+  }
+  return (
+    <label className="field"><span>Interface font</span>
+      <input list="interface-fonts" value={text} placeholder="the font of your system" onChange={(e) => { setText(e.target.value); setRefused(false) }}
+        onBlur={() => void leave()} onKeyDown={(e) => e.key === 'Enter' && void leave()} />
+      <datalist id="interface-fonts">{SUGGESTED_FONTS.map((name) => <option key={name} value={name} />)}</datalist>
+      <span className="hint">The name of a font that is installed on this computer, like Ubuntu Mono. Empty: the font of your system. It is in use as soon as you leave the field. Code, commands and tool output keep their own monospace font.</span>
+      {refused && <span className="ask-warning" role="alert">A font is named with letters, digits, spaces and . _ + - (60 characters at most), like Ubuntu Mono.</span>}
+      {!refused && here === false && <span className="ask-warning" role="alert">This browser finds no font named "{typed}" on this computer, so the interface keeps the font it has.</span>}
     </label>
   )
 }
@@ -313,6 +339,9 @@ export function SettingsDialog({ onClose, onSetup }: { onClose: () => void; onSe
           <div className="row"><span className="hint grow">Memory: notes kept across chats, with their source. You can read, correct, and delete every one.</span>
             <button className="btn" onClick={() => setMemoryOpen(true)}>Manage memory</button></div>
           {memoryOpen && <MemoryManager onClose={() => setMemoryOpen(false)} onLeave={onClose} />}
+          <h3 className="section">Interface</h3>
+          <InterfaceFont key={`font-${settings.interface_font}`} value={settings.interface_font}
+            save={async (name) => { await update({ interface_font: name }); return useStore.getState().settings?.interface_font ?? settings.interface_font }} />
           <h3 className="section">Decisions</h3>
           <label className="check"><input type="checkbox" checked={settings.decision_engine} onChange={(e) => update({ decision_engine: e.target.checked })} />
             <span>Use the built-in decision engine: the decide_* tools and the risk gate. Switch it off if you have a JEV subscription and use the JEV MCP server instead (add it under "Manage MCP servers" with your own key); its tools then take the place of the built-in ones.</span>
