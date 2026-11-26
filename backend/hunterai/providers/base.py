@@ -71,6 +71,11 @@ OPTION_NAMES = ("temperature", "top_p", "max_tokens", "context_window", "effort"
                 "thinking_budget", "verbosity")
 
 
+# How the next token is chosen, as the servers for local models take it (Ollama under "options", llama-server as fields
+# of the request). A provider names these among a model's options only when its server was seen to take them.
+SAMPLING = ["top_k", "min_p", "repeat_penalty", "repeat_last_n", "presence_penalty", "frequency_penalty", "seed"]
+
+
 class Options(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -78,6 +83,13 @@ class Options(BaseModel):
     top_p: float | None = None
     max_tokens: int | None = None
     context_window: int | None = None
+    top_k: int | None = None                    # only the K likeliest tokens are considered; 0: all of them
+    min_p: float | None = None                  # tokens less likely than this share of the likeliest one are left out
+    repeat_penalty: float | None = None         # above 1: tokens that stand in the last tokens are less likely; 1: none
+    repeat_last_n: int | None = None            # how many tokens back the three penalties look
+    presence_penalty: float | None = None       # for a token that stands there at all
+    frequency_penalty: float | None = None      # the more often it stands there
+    seed: int | None = None                     # the same seed gives the same answer to the same request
     effort: Literal["none", "low", "medium", "high", "xhigh", "max"] | None = None
     thinking: bool | None = None
     thinking_budget: int | None = None
