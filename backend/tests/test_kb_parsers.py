@@ -5,7 +5,7 @@ from tests.kb_samples import make_pdf
 
 
 @pytest.mark.parametrize("name,kind", [("a.md", "markdown"), ("A.PY", "code"), ("x/Makefile", "code"), ("a.csv", "csv"), ("a.sql", "sql"), ("a.htm", "html"),
-    ("a.pdf", "pdf"), ("a.log", "text"), ("a.tar.gz", "archive"), ("a.txt.gz", "archive"), ("a.7z", "archive"), ("a.bin", None), ("noext", None), ("a.rar", None)])
+    ("a.pdf", "pdf"), ("a.log", "text"), ("a.tar.gz", "archive"), ("a.txt.gz", "archive"), ("a.7z", "archive"), ("a.bin", None), ("noext", None), ("a.rar", "archive"), ("a.tar.bz2", "archive"), ("a.sql.zst", "archive")])
 def test_kind_for(name, kind):
     assert parsers.kind_for(name) == kind
 

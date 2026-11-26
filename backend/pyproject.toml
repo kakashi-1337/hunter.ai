@@ -6,6 +6,7 @@ requires-python = ">=3.12"
 dependencies = [
     "aiosqlite>=0.22.1",
     "anthropic>=2.8.0",
+    "backports-zstd>=1.8 ; python_full_version < '3.14'",
     "camoufox>=0.5.9",
     "fastapi>=0.162.5",
     "google-genai>=3.3.0",

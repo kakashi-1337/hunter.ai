@@ -42,7 +42,8 @@ EXTENSIONS: dict[str, Kind] = {
 }
 FILENAMES: dict[str, Kind] = {n.lower(): "code" for n in
                               ("Dockerfile", "Makefile", "CMakeLists.txt", "Jenkinsfile", "Vagrantfile")}
-ARCHIVE_SUFFIXES = (".tar.gz", ".tar.xz", ".zip", ".tar", ".tgz", ".txz", ".gz", ".xz", ".7z")
+ARCHIVE_SUFFIXES = (".tar.gz", ".tar.xz", ".zip", ".tar", ".tgz", ".txz", ".tbz2", ".tbz", ".tzst", ".gz", ".xz", ".bz2", ".zst",
+                    ".7z", ".rar")
 
 MAX_MEMBER_BYTES = 32 * 1024**2      # one XML part of an Office file, unpacked
 MAX_OFFICE_BYTES = 96 * 1024**2      # all the parts read from one Office file

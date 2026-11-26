@@ -59,7 +59,7 @@ function Sources() {
             <button className="btn primary" disabled={!picked.length || uploading !== null} onClick={async () => { await uploadAll(picked); setPicked([]) }}>
               {uploading ? `${uploading.sent}/${uploading.total} files` : 'Ingest'}</button>
           </div>
-          <div className="hint">Up to 50 MB per file, 2 GB and 50,000 files per job. zip, tar, gz, xz, and 7z are unpacked. Text, Markdown, code, CSV, SQL, HTML, PDF, Office and OpenDocument files are read, and pictures and scanned pages by OCR; anything else is listed as skipped.</div>
+          <div className="hint">Up to 50 MB per file, 2 GB and 50,000 files per job. zip, tar, gz, xz, bz2, zst, 7z, and rar are unpacked. Text, Markdown, code, CSV, SQL, HTML, PDF, Office and OpenDocument files are read, and pictures and scanned pages by OCR; anything else is listed as skipped.</div>
         </div>
       ) : tab === 'web' ? (
         <div>
