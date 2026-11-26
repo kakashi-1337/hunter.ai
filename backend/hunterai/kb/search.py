@@ -136,6 +136,11 @@ class QueryVectors:
     def __init__(self):
         self._known: dict[tuple[str, str], list[float] | EmbedError] = {}
 
+    def have(self, spec: str, query: str) -> list[float] | None:
+        """The vector of these words when the run has it, and nothing else: no embedder is asked."""
+        said = self._known.get((spec, query))
+        return said if isinstance(said, list) else None
+
     async def of(self, spec: str, query: str, lock_timeout: float | None) -> list[float]:
         """What the embedder said for these words holds for the run, a refusal included: the search that comes
         next does not wait once more for an embedder that was busy a moment ago."""

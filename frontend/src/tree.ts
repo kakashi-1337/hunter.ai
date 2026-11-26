@@ -321,6 +321,11 @@ export function retrievalLine(name: string, detail: Record<string, unknown>): st
     const engines = Array.isArray(detail.engines) ? (detail.engines as string[]).join(', ') : ''
     return `${used} of ${Number(detail.results ?? 0)} results used${engines ? ` · ${engines}` : ''}`
   }
+  if (name === 'skills') {
+    const shown = Array.isArray(detail.shown) ? (detail.shown as { name: string }[]).map((s) => s.name) : []
+    const how = detail.by === 'meaning' ? 'meaning' : 'the words they share with the message'
+    return `${shown.length} of ${Number(detail.of ?? 0)} skills named, by ${how}${shown.length ? `: ${shown.join(', ')}` : ''}`
+  }
   const half = typeof detail.keywords_only === 'string' && detail.keywords_only ? ` · keyword index only (${detail.keywords_only})` : ''
   return `${used} of ${Number(detail.hits ?? 0)} ${name === 'memory' ? 'notes' : 'chunks'} used${half}`
 }

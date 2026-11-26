@@ -674,7 +674,7 @@ async def _execute(conn_factory, run_id: str, chat_id: str, user_message_id: str
         wire = await _context(conn, chat, user_message_id, load_bytes)
         acc.taken = {b.id for m in wire for b in m.blocks if b.type == "tool_call"}
         from . import skills
-        about_skills = await skills.system_block(conn, wire, [s.name for s in specs])
+        about_skills = await skills.started_block(conn, wire, [s.name for s in specs])
         if about_skills:
             system += "\n\n" + about_skills
         provider, model = chat.provider, chat.model
@@ -695,6 +695,8 @@ async def _execute(conn_factory, run_id: str, chat_id: str, user_message_id: str
         asked = "\n".join(b.text for b in wire[-1].blocks if b.type == "text" and b.text) if wire else ""
         system_out, wire_out, acc.web = await weblookup.augment(conn, run_id, chat, system_out, wire_out,
                                                                 query_from=asked, can_fetch="web_fetch" in acc.callable)
+        # Last, the skills this message is likely to need: ranked with the vector the lookups made of it, when they did.
+        system_out = await _name_skills(conn, run_id, system_out, asked, embedded, acc.callable)
         provider, model, fallback_from = await _generate(conn, run_id, mid, chat, system_out,
                                                          wire_out, acc, specs)
         await _tool_loop(conn, run_id, mid, chat, provider, model, system_out, wire_out, acc, specs)
@@ -724,6 +726,29 @@ async def _execute(conn_factory, run_id: str, chat_id: str, user_message_id: str
         _finalizing.add(run_id)
         await asyncio.shield(_finalize(conn_factory, conn, run_id, mid, acc, status, error,
                                        provider, model, fallback_from))
+
+
+async def _name_skills(conn, run_id: str, system: str, asked: str, embedded, callable_tools: list[str]) -> str:
+    """The instructions with the list of skills the model may load. With many installed, that is the few that fit
+    the message, and the run has a step that says which and how they were told apart. Never fails a run."""
+    if "skill" not in callable_tools:
+        return system
+    from . import skillmatch, skills
+    try:
+        fit = await skillmatch.fitting(conn, asked, embedded)
+        if fit.by != "all":
+            detail = {"query": asked.strip()[:200], "by": fit.by, "of": fit.of,
+                      "shown": [{"name": s.name, "score": round(score, 4)} for s, score in fit.shown]}
+            step = await runs.add_step(conn, run_id, "retrieval", "skills", {"query": detail["query"]})
+            await hub.publish(run_id, {"type": "step_started", "step": step.model_dump()})
+            step = await runs.finish_step(conn, step.id, "done", 0, 0, detail)
+            await hub.publish(run_id, {"type": "step_finished", "step": step.model_dump()})
+        block = skills.list_block(fit, callable_tools)
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 - a list that could not be made is no reason to lose the answer
+        return system
+    return system + "\n\n" + block if block else system
 
 
 async def _ending(chat, provider_name: str, model: str, acc: _Attempt) -> NoticeBlock | None:

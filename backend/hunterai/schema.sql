@@ -303,6 +303,14 @@ create table if not exists skills (
   updated_at text not null
 );
 
+-- The vector of each skill's name and description, for naming the skills that fit a message (skillmatch.py).
+create table if not exists skill_vectors (
+  skill_id text primary key references skills(id) on delete cascade,
+  spec text not null,                         -- the embedder it was made with
+  stamp text not null,                        -- the skill's updated_at when it was made: older than the skill, it is stale
+  vec blob not null
+);
+
 -- Phase 5: memory
 create table if not exists memories (
   id text primary key,
