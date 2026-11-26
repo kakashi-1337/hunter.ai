@@ -5,6 +5,7 @@ import json
 import os
 import re
 import signal
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -124,6 +125,55 @@ async def test_a_server_that_ended_while_nobody_called_it_is_started_before_the_
     was = pid_of(m)
     os.kill(was, signal.SIGKILL)
     await eventually(lambda: not alive(was))
+    assert (await m.call_tool("fake", "echo", {"text": "hi"})).text == "hi"   # the call is not lost to it
+    assert m.status()[0].restarts == 1 and pid_of(m) != was
+
+
+def test_alive_tells_a_running_process_from_one_that_ended(tmp_path):
+    pidfile = tmp_path / "p.pid"
+    pidfile.write_text(f"{os.getpid()}\n")
+    assert mcp_manager._alive(pidfile)                                       # this very process runs
+    child = subprocess.Popen([sys.executable, "-c", "pass"])
+    pidfile.write_text(str(child.pid))
+    try:
+        until = time.monotonic() + 5
+        while alive(child.pid) and time.monotonic() < until:
+            time.sleep(0.002)
+        assert Path(f"/proc/{child.pid}").exists()                           # ended, and nobody has taken note yet
+        assert not mcp_manager._alive(pidfile)
+    finally:
+        child.wait()
+    assert not mcp_manager._alive(pidfile)                                   # and when it is out of the table too
+
+
+def test_alive_says_yes_when_it_cannot_tell(tmp_path, monkeypatch):
+    assert mcp_manager._alive(tmp_path / "none.pid")                         # no file to read the process from
+    (tmp_path / "bad.pid").write_text("not a number")
+    assert mcp_manager._alive(tmp_path / "bad.pid")
+    pidfile = tmp_path / "p.pid"
+    pidfile.write_text(str(os.getpid()))
+    read = Path.read_text
+
+    def no_proc(self, *args, **kwargs):                                       # a system without /proc
+        if str(self).startswith("/proc/"):
+            raise FileNotFoundError(str(self))
+        return read(self, *args, **kwargs)
+    monkeypatch.setattr(Path, "read_text", no_proc)
+    assert mcp_manager._alive(pidfile)                                       # the answer of the signal stands
+
+
+async def test_a_server_that_ended_and_is_still_in_the_process_table_is_started_before_the_next_call(fake, monkeypatch):
+    """A process that was killed stays in the process table until its parent takes note of the end, and a signal can
+    still be sent to it. A call that came in that moment took the server for running and was lost to it. Here the
+    moment is held open: nothing between the kill and the call lets the event loop take note."""
+    monkeypatch.setattr(mcp_manager, "ALIVE_EVERY", 60)                      # nothing but the call notices
+    m = await fake()
+    was = pid_of(m)
+    os.kill(was, signal.SIGKILL)
+    until = time.monotonic() + 5
+    while alive(was) and time.monotonic() < until:                           # no await: the loop stands still
+        time.sleep(0.002)  # noqa: ASYNC251
+    assert not alive(was) and Path(f"/proc/{was}").exists()                  # ended, and still in the table
     assert (await m.call_tool("fake", "echo", {"text": "hi"})).text == "hi"   # the call is not lost to it
     assert m.status()[0].restarts == 1 and pid_of(m) != was
 

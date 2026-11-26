@@ -322,14 +322,23 @@ def _kill_group(pidfile: Path) -> None:
 
 
 def _alive(pidfile: Path) -> bool:
-    """Whether the process a stdio server was started as is still there. True when that cannot be told."""
+    """Whether the process a stdio server was started as still runs. True when that cannot be told.
+
+    A process that has ended stays in the process table until its parent takes note of the end, and until then a
+    signal can still be sent to it. Asking only that took a server that had just been killed for running: a call
+    that came in that moment went to it and was lost. Linux says in /proc that such a process is over."""
     try:
-        os.kill(int(pidfile.read_text().strip()), 0)
+        pid = int(pidfile.read_text().strip())
+        os.kill(pid, 0)
     except ProcessLookupError:
         return False
     except (OSError, ValueError):
         return True
-    return True
+    try:
+        state = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[0]
+    except (OSError, IndexError):
+        return True                 # no /proc here, or the process went this instant: the signal's answer stands
+    return state != "Z"
 
 
 class _Gone(Exception):
