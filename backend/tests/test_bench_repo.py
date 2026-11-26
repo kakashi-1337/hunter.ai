@@ -81,7 +81,7 @@ async def test_the_marks_of_a_bench_are_its_results_without_answers_and_calls(co
     await bench.add_result(conn, made.id, MIMO, "c0", 1, "skipped", ["skipped"])
     first, second = await bench.marks(conn, made.id)
     assert first.model_dump() == {"provider": "ollama", "model": "qwen:9b", "case_id": "c0", "repeat": 1, "status": "pass",
-                                  "turns": 2, "input_tokens": 120, "output_tokens": 30, "duration_ms": 1500}
+                                  "by_hand": None, "turns": 2, "input_tokens": 120, "output_tokens": 30, "duration_ms": 1500}
     assert (second.model, second.status, second.duration_ms) == ("mimo:9b", "skipped", 0)
     other = await bench.create(conn, a_set(), [QWEN], 1)
     assert await bench.marks(conn, other.id) == []
@@ -216,3 +216,82 @@ async def test_the_states_a_bench_and_a_result_can_have(conn):
         assert (await bench.finish(conn, made.id, status)).status == status
     for status in ("pass", "fail", "error", "skipped"):
         assert (await bench.add_result(conn, made.id, QWEN, "c0", 1, status, [], ran(), 1)).status == status
+
+
+# ---- a mark the owner set right by hand
+
+async def stored(conn, status="fail", reasons=("the answer has none of: 'x'",)):
+    made = await bench.create(conn, a_set(), [QWEN], 1)
+    return made, await bench.add_result(conn, made.id, QWEN, "c0", 1, status, list(reasons), ran(), 10)
+
+
+async def corrections(conn) -> int:
+    return (await (await conn.execute("select count(*) from bench_corrections")).fetchone())[0]
+
+
+async def test_a_result_has_no_mark_of_the_owner_until_he_sets_one(conn):
+    made, got = await stored(conn)
+    assert got.by_hand is None
+    assert [m.by_hand for m in await bench.marks(conn, made.id)] == [None]
+
+
+async def test_the_owners_mark_is_kept_beside_the_one_the_rules_gave(conn):
+    """The rules are lists of phrases, and a wording nobody thought of gets a wrong mark (seen on the owner's laptop
+    on 27 November 2026). He reads the answer; what he says the run is counts, and what the rules said stays."""
+    made, got = await stored(conn)
+    marked = await bench.set_mark(conn, got.id, "pass")
+    assert (marked.id, marked.status, marked.by_hand, marked.reasons) == (got.id, "fail", "pass", ["the answer has none of: 'x'"])
+    assert [(r.status, r.by_hand) for r in await bench.results(conn, made.id)] == [("fail", "pass")]
+    assert [(r.status, r.by_hand) for r in await bench.cell(conn, made.id, QWEN, "c0")] == [("fail", "pass")]
+    assert [(m.status, m.by_hand) for m in await bench.marks(conn, made.id)] == [("fail", "pass")]
+
+
+@pytest.mark.parametrize("rules, owner", [("fail", "pass"), ("pass", "fail")])
+async def test_a_mark_can_be_set_right_in_both_directions_and_taken_back(conn, rules, owner):
+    _, got = await stored(conn, rules, [] if rules == "pass" else ["x"])
+    assert (await bench.set_mark(conn, got.id, owner)).by_hand == owner
+    assert (await bench.set_mark(conn, got.id, None)).by_hand is None
+    assert await corrections(conn) == 0
+
+
+async def test_the_mark_the_rules_gave_is_no_correction(conn):
+    _, got = await stored(conn, "fail")
+    await bench.set_mark(conn, got.id, "pass")
+    assert (await bench.set_mark(conn, got.id, "fail")).by_hand is None     # back to what the rules said: nothing is kept
+    assert await corrections(conn) == 0
+
+
+async def test_setting_the_same_mark_twice_keeps_one(conn):
+    _, got = await stored(conn)
+    await bench.set_mark(conn, got.id, "pass")
+    assert (await bench.set_mark(conn, got.id, "pass")).by_hand == "pass"
+    assert await corrections(conn) == 1
+
+
+@pytest.mark.parametrize("status", ["error", "skipped"])
+async def test_a_run_the_rules_did_not_mark_has_nothing_to_set_right(conn, status):
+    made, got = await stored(conn, status, ["the model call failed: x"])
+    with pytest.raises(bench.NotJudged):
+        await bench.set_mark(conn, got.id, "pass")
+    assert (await bench.results(conn, made.id))[0].by_hand is None and await corrections(conn) == 0
+
+
+async def test_a_result_that_is_not_there_gets_no_mark(conn):
+    assert await bench.set_mark(conn, "nothing", "pass") is None
+    assert await corrections(conn) == 0
+
+
+async def test_the_marks_of_a_bench_go_with_it(conn):
+    made, got = await stored(conn)
+    await bench.set_mark(conn, got.id, "pass")
+    assert await corrections(conn) == 1
+    await bench.delete(conn, made.id)
+    assert await corrections(conn) == 0
+
+
+async def test_a_mark_of_one_run_is_not_that_of_another(conn):
+    made = await bench.create(conn, a_set(), [QWEN], 2)
+    one = await bench.add_result(conn, made.id, QWEN, "c0", 1, "fail", ["x"], ran(), 10)
+    await bench.add_result(conn, made.id, QWEN, "c0", 2, "fail", ["x"], ran(), 10)
+    await bench.set_mark(conn, one.id, "pass")
+    assert [(m.repeat, m.by_hand) for m in await bench.marks(conn, made.id)] == [(1, "pass"), (2, None)]

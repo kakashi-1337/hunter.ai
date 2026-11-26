@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
@@ -16,6 +17,7 @@ from .deps import get_conn, not_found
 router = APIRouter(prefix="/api/bench")
 BUSY = "A bench is running. Wait for it or cancel it."
 RUNNING = "This bench is running. Cancel it first."
+NOT_JUDGED = "This run has no mark to set right: its model call failed, or it was skipped."
 
 
 class ModelIn(BaseModel):
@@ -27,6 +29,10 @@ class StartIn(BaseModel):
     models: list[ModelIn]                  # how many: the runner says (runner.MODELS_MAX)
     set_id: str = Field(max_length=200)
     repeats: int = 3
+
+
+class MarkIn(BaseModel):
+    status: Literal["pass", "fail"] | None      # the owner's mark; null takes it away again. It has to be sent
 
 
 def _seen(run: BenchRun) -> BenchRun:
@@ -80,6 +86,18 @@ async def get_cell(rid: str, provider: str, model: str, case_id: str, conn=Depen
     """The runs of one case on one model, with their lines, calls and answers."""
     await _bench(conn, rid)
     return await store.cell(conn, rid, ModelRef(provider=provider, model=model), case_id)
+
+
+@router.put("/results/{result_id}/mark")
+async def set_mark(result_id: str, body: MarkIn, conn=Depends(get_conn)):
+    """The owner's own mark for one run, where the rules of the set misread its answer. The mark of the rules stays."""
+    try:
+        result = await store.set_mark(conn, result_id, body.status)
+    except store.NotJudged:
+        raise HTTPException(409, NOT_JUDGED) from None
+    if result is None:
+        raise not_found("result")
+    return result
 
 
 @router.post("/runs/{rid}/cancel", status_code=204)

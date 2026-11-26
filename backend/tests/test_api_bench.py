@@ -11,7 +11,7 @@ from hunterai.bench import cases, runner
 from hunterai.providers import registry
 from hunterai.repo import bench as store
 from hunterai.repo.bench import ModelRef
-from tests.bench_model import TWO, Held, Model, calls, says
+from tests.bench_model import TWO, Held, Model, calls, fails, says
 
 BASE = "http://127.0.0.1:8787"
 A = {"provider": "scripted", "model": "a"}
@@ -86,7 +86,7 @@ async def test_a_bench_is_started_and_its_table_can_be_read(client):
     assert (body["run"]["status"], body["run"]["id"]) == ("done", run["id"]) and body["run"]["tools_offered"] > 20
     assert [(m["provider"], m["model"], m["case_id"], m["repeat"], m["status"]) for m in body["marks"]] == \
         [("scripted", "a", "record", 1, "pass"), ("scripted", "a", "sum", 1, "fail")]
-    assert set(body["marks"][0]) == {"provider", "model", "case_id", "repeat", "status", "turns", "input_tokens",
+    assert set(body["marks"][0]) == {"provider", "model", "case_id", "repeat", "status", "by_hand", "turns", "input_tokens",
                                      "output_tokens", "duration_ms"}        # the table needs no answers and no calls
     assert (body["marks"][0]["turns"], body["marks"][0]["output_tokens"]) == (2, 10)
     listed = (await client.get("/api/bench/runs")).json()
@@ -289,3 +289,53 @@ async def test_a_bench_whose_end_was_never_written_is_not_shown_as_running(clien
     assert (body["run"]["status"], body["progress"]) == ("interrupted", None)
     assert [x["run"]["status"] for x in (await client.get("/api/bench/runs")).json()] == ["interrupted"]
     assert (await client.delete(f"/api/bench/runs/{stuck.id}")).status_code == 204
+
+
+# ---- a mark the owner sets right by hand
+
+SUM = {"provider": "scripted", "model": "a", "case_id": "sum"}
+
+
+async def cell(client, run, **which):
+    r = await client.get(f"/api/bench/runs/{run['id']}/results", params={**SUM, **which})
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+async def test_the_owner_sets_a_mark_right_and_the_table_carries_it(client):
+    use(calls("cve", action="lookup", ids=["CVE-2026-109618"]), says("There is no record."), says("It is 41."))
+    run = await start(client)
+    await ended(run["id"])
+    [was] = await cell(client, run)
+    assert (was["status"], was["by_hand"]) == ("fail", None)
+    r = await client.put(f"/api/bench/results/{was['id']}/mark", json={"status": "pass"})
+    assert r.status_code == 200, r.text
+    assert (r.json()["id"], r.json()["status"], r.json()["by_hand"], r.json()["reasons"]) == (was["id"], "fail", "pass", was["reasons"])
+    marks = (await client.get(f"/api/bench/runs/{run['id']}")).json()["marks"]
+    assert [(m["case_id"], m["status"], m["by_hand"]) for m in marks] == [("record", "pass", None), ("sum", "fail", "pass")]
+    assert [(x["status"], x["by_hand"]) for x in await cell(client, run)] == [("fail", "pass")]
+    back = await client.put(f"/api/bench/results/{was['id']}/mark", json={"status": None})
+    assert (back.status_code, back.json()["by_hand"]) == (200, None)
+    assert [x["by_hand"] for x in await cell(client, run)] == [None]
+
+
+async def test_a_mark_for_no_result_or_of_no_kind_is_refused(client):
+    use(says("no record, 42"))
+    run = await start(client)
+    await ended(run["id"])
+    [one] = await cell(client, run)
+    missing = await client.put("/api/bench/results/nothing/mark", json={"status": "pass"})
+    assert (missing.status_code, missing.json()) == (404, {"detail": "result not found"})
+    for body in ({"status": "error"}, {"status": "skipped"}, {"status": "maybe"}, {}):
+        assert (await client.put(f"/api/bench/results/{one['id']}/mark", json=body)).status_code == 422, body
+    assert [x["by_hand"] for x in await cell(client, run)] == [None]
+
+
+async def test_a_run_whose_model_call_failed_has_no_mark_to_set_right(client):
+    use(fails("unavailable", "the server is down"))
+    run = await start(client)
+    await ended(run["id"])
+    [one] = await cell(client, run, case_id="record")
+    assert one["status"] == "error"
+    r = await client.put(f"/api/bench/results/{one['id']}/mark", json={"status": "pass"})
+    assert (r.status_code, r.json()) == (409, {"detail": "This run has no mark to set right: its model call failed, or it was skipped."})

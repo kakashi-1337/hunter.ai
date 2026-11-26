@@ -170,6 +170,72 @@ describe('the Bench panel', () => {
     expect(second.textContent).toContain('No answer.')
   })
 
+  it('lets the owner set the mark of a run right by hand, counts it in the table, and takes it back', async () => {
+    const base = { run_id: 'r1', calls_made: 0, calls: [], created_at: '' }
+    const results: BenchResult[] = [
+      { ...mark(QWEN, 'look-up', 1, 'pass'), ...base, id: 'a', reasons: [], answer: 'It is 7.42.1.' },
+      { ...mark(QWEN, 'look-up', 2, 'fail'), ...base, id: 'b', reasons: ["the answer does not say '7.42.1'"], answer: 'The newest one is 7 . 42 . 1' },
+      { ...mark(QWEN, 'look-up', 3, 'error'), ...base, id: 'c', reasons: ['the model call failed: Ollama timed out'], answer: '' },
+    ]
+    const marksWith = (byHand: 'pass' | null) => MARKS.map((m) => (m.model === QWEN.model && m.case_id === 'look-up' && m.repeat === 2 ? { ...m, by_hand: byHand } : m))
+    vi.spyOn(api, 'benchRuns').mockResolvedValue([{ run: run(), progress: null }])
+    const table = vi.spyOn(api, 'benchRun').mockResolvedValue(detail())
+    vi.spyOn(api, 'benchCell').mockResolvedValue(results)
+    const set = vi.spyOn(api, 'setBenchMark').mockImplementation(async (id, status) => ({ ...results.find((r) => r.id === id)!, by_hand: status }))
+    await open()
+    await click($('.bench-table tbody tr:nth-child(2) .bench-cell'))
+    const runs = () => $$('.bench-detail .bench-run')
+    const hand = (i: number) => runs()[i].querySelector<HTMLButtonElement>('button.bench-by-hand')
+    expect([0, 1, 2].map((i) => hand(i)?.textContent ?? null)).toEqual(['Count as fail', 'Count as pass', null])     // an error has no answer to judge
+    expect($('.bench-table tbody tr:nth-child(2) .bench-cell')!.textContent).toBe('1/2')
+
+    table.mockResolvedValue(detail({ marks: marksWith('pass') }))
+    await click(hand(1))
+    expect(set).toHaveBeenCalledWith('b', 'pass')
+    expect(runs().map((r) => r.querySelector('.bench-verdict')!.textContent))        // his mark is of that run, and of no other
+      .toEqual(['Repeat 1: Pass', 'Repeat 2: Pass · set by hand (the rules said Fail)', 'Repeat 3: Error'])
+    expect([...runs()[1].querySelectorAll('.bench-reasons li')].map((li) => li.textContent)).toEqual(["the answer does not say '7.42.1'"])   // what the rules found stays
+    expect(hand(1)!.textContent).toBe('Undo')
+    expect(table).toHaveBeenCalledTimes(2)       // the table was asked for again: it counts his mark
+    expect($$('.bench-table tbody tr').slice(0, 2).map((tr) => tr.children[1].textContent)).toEqual(['2/2 · 1 by hand', '2/2 · 1 by hand'])
+    expect($('.bench-table tbody tr.bench-all')!.children[1].textContent).toBe('4/4 · 1 by hand')
+
+    table.mockResolvedValue(detail({ marks: marksWith(null) }))
+    await click(hand(1))
+    expect(set).toHaveBeenLastCalledWith('b', null)
+    expect(runs()[1].querySelector('.bench-verdict')!.textContent).toBe('Repeat 2: Fail')
+    expect(hand(1)!.textContent).toBe('Count as pass')
+    expect($('.bench-table tbody tr:nth-child(2) .bench-cell')!.textContent).toBe('1/2')
+  })
+
+  it('sends his mark to the result it is for, and null to take it back', async () => {
+    const result: BenchResult = { ...mark(QWEN, 'look-up', 2, 'fail'), by_hand: 'pass', id: 'b', run_id: 'r1', reasons: [], calls: [], calls_made: 0,
+      answer: '', created_at: '' }
+    const fetched = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response(JSON.stringify(result), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    expect(await api.setBenchMark('b', 'pass')).toEqual(result)
+    expect(fetched).toHaveBeenLastCalledWith('/api/bench/results/b/mark', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'pass' }) })
+    await api.setBenchMark('b', null)
+    expect(fetched).toHaveBeenLastCalledWith('/api/bench/results/b/mark', {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: null }) })
+  })
+
+  it('says so in the run when the server does not take the mark, and leaves the run as it was', async () => {
+    const results: BenchResult[] = [{ ...mark(QWEN, 'look-up', 2, 'fail'), run_id: 'r1', calls_made: 0, calls: [], created_at: '', id: 'b',
+      reasons: ['x'], answer: 'y' }]
+    vi.spyOn(api, 'benchRuns').mockResolvedValue([{ run: run(), progress: null }])
+    vi.spyOn(api, 'benchRun').mockResolvedValue(detail())
+    vi.spyOn(api, 'benchCell').mockResolvedValue(results)
+    vi.spyOn(api, 'setBenchMark').mockRejectedValue(new Error('result not found'))
+    await open()
+    await click($('.bench-table tbody tr:nth-child(2) .bench-cell'))
+    await click($('.bench-detail button.bench-by-hand'))
+    expect($('.bench-detail .bench-error')!.textContent).toBe('result not found')
+    expect($('.bench-detail .bench-verdict')!.textContent).toBe('Repeat 2: Fail')
+    expect($('.bench-detail button.bench-by-hand')!.textContent).toBe('Count as pass')
+  })
+
   it('shows how far a running bench is, asks again every two seconds, and stops asking when it has ended', async () => {
     vi.useFakeTimers()
     const live = run({ status: 'running', ended_at: null })

@@ -841,7 +841,10 @@ export interface BenchMark {
   model: string
   case_id: string
   repeat: number
+  /** The mark the rules of the set gave. */
   status: BenchMarkStatus
+  /** What the owner says the run is, where he set its mark right by hand. The table counts with it. */
+  by_hand?: 'pass' | 'fail' | null
   turns: number
   input_tokens: number
   output_tokens: number
