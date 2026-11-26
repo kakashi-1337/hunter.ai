@@ -453,7 +453,11 @@ prompt = "what is CVE-2026-109618 and CVE-2026-109619? what does these 2 CVE exp
 | `max_turns` (on the case; 8 when left out, 12 at most) | the model answered within this many model calls |
 
 The answer is what the model said after its last tool result; its thinking is not part of
-it, and a note it makes in the goal record after answering does not hide the answer.
+it, and a note it makes in the goal record after answering does not hide the answer. A turn
+that ended with thinking only is asked once more with thinking off, as a chat does it
+("A turn that is thinking and nothing else"): the bench measures what a chat gets from the
+model. Such a run says so in a line under its mark, the second call is not counted as a
+turn, and its time and tokens are the run's.
 Phrases are compared without regard to case, to marks for emphasis, and to the kind of
 quote, dash and space. A set that names a tool HunterAI does not have at the moment (a
 typo, an MCP server that is not connected) says so in the note of its bench.
@@ -848,7 +852,9 @@ tried: a real model, and a real picture.
 `llama-server` is the server of [llama.cpp](https://github.com/ggml-org/llama.cpp). It runs
 a GGUF model file on this machine and answers with an OpenAI-compatible API. You choose
 all of it yourself: the build, the model file, the context, how much of the model goes on
-the graphics card. HunterAI talks to that server; it does not install, start or stop it.
+the graphics card. HunterAI talks to that server, and helps you start it: it finds the
+program on this machine and writes the command. It does not install llama-server, and it
+does not start or stop it.
 
 ```sh
 llama-server -m ~/models/your-model.gguf -c 32768
@@ -859,6 +865,59 @@ from before October 2026. Enter it under **Settings → llama.cpp**. It is writt
 as `HUNTERAI_LLAMACPP_URL`. Without an address llama.cpp is not used, and nothing is asked
 anywhere. With one, the lines under the field say what answers there, and the model is in
 the model list of every chat, under `llamacpp`.
+
+#### The command that starts it
+
+While no model is served at the address (none is saved, or nothing answers at the saved
+one), **Settings → llama.cpp** looks at this machine and shows what it found:
+
+- **The program.** A `llama-server` is looked for in the `llama.cpp` folder of HunterAI's
+  data folder (`~/.hunterai/llama.cpp/llama-server`), on the `PATH`, where Unsloth Studio
+  keeps its own (`~/.unsloth/llama.cpp`), in a build in `~/llama.cpp/build/bin`, and beside
+  Ollama. A current Ollama brings a llama-server of its own: it stands in `lib/ollama` next
+  to the folder of the `ollama` program (`/usr/local/lib/ollama`), with a folder for each
+  kind of graphics card it has a part for (`cuda_v13`, `cuda_v12`, `vulkan`).
+- **The graphics cards it sees.** Each program is asked for its list of cards
+  (`llama-server --list-devices`, which loads no model), one after the other, and the
+  first that sees a card is taken. Where none does, the first program is named with a
+  warning: a model started with it runs on the processor.
+- **A command for each chat model of Ollama.** llama-server is given the very file Ollama
+  keeps for the model (nothing is copied), its projector when it has one, a context, a
+  short name (`--alias`, the name the model then has in the model list), the port, and the
+  sampling values the model has in Ollama. The context is the one that holds HunterAI's
+  rules and tools with room for a chat, not less than "Context window for local models",
+  and never more than the model was trained with. For Ollama's own llama-server the
+  command begins with the two variables Ollama itself starts it with (`LD_LIBRARY_PATH`
+  and `GGML_BACKEND_PATH`), so that it finds its part for the card.
+- **A command for a GGUF file of your own**, with `your-model.gguf` for you to replace.
+
+Copy the command, run it in a terminal and leave that terminal open: llama-server holds
+the model until you stop it there with Ctrl+C. When it says it is listening, **Use
+http://127.0.0.1:9931** saves the address (**Check**, when one is saved already). A model
+Ollama holds in memory at that moment is named with the `ollama stop` that frees the card
+first. A llama-server that already answers at the usual address is offered as it is.
+
+What the search does not do: it starts nothing and installs nothing, and it changes no
+file. A model whose file Ollama keeps elsewhere (an Ollama in a container, or on another
+machine) is listed with the reason and without a command. A model Ollama keeps in the form
+of its own engine is offered with a note, because llama-server may not load that file.
+
+#### llama-server on your graphics card
+
+A llama-server that was built for the processor alone runs every model there, whatever the
+machine has. `llama-server --list-devices` tells: it lists the cards the program can use,
+and `(none)` when it has no part for one. Settings says the same under the program it found.
+
+Seen on the owner's laptop (an RTX 5080 Laptop GPU, Ollama 0.40.18): the llama-server that
+Unsloth Studio had installed listed no card, and a 9B model wrote 3.6 tokens a second with
+it. The llama-server Ollama brings, started with its `cuda_v13` part, listed the card and
+held 7.6 GB of the model there. One run of the Bench then took 3.2 seconds on average with it
+and 3.0 seconds through Ollama, with the same model: it is the same engine, so llama-server
+by itself is not faster than Ollama. What it gives is the say over the context and the flags.
+
+A build of your own for your card (llama.cpp's page says how to get or build one) is found
+first when you put it into `~/.hunterai/llama.cpp/`: the program `llama-server` with its
+libraries beside it.
 
 What HunterAI takes from the server, and nothing else is assumed:
 
@@ -933,9 +992,16 @@ its tool calls (one, two in one answer, and one after thinking), a tool result, 
 answer bound to a JSON schema, a request that is too long, a wrong key, a model that is
 not loaded with and without `--no-models-autoload`, a server that sleeps (and that being
 asked for its list does not wake it), the memory it holds at three context sizes, and a
-server killed in the middle of an answer. `tests/llamacpp_wire.py` holds what it sent. Not tried:
-a graphics card, a model of the size you will use, a llama-server on another machine, and
-a folder of models that llama-server downloads itself.
+server killed in the middle of an answer. `tests/llamacpp_wire.py` holds what it sent. The
+search for the program and for Ollama's files was held against a real Ollama (built from its
+source at `42ac2c0`, 18 November 2026, with that llama-server as its own): the command it
+writes started llama-server with Ollama's own files, and a chat was answered by it;
+`tests/ollama_show_wire.py` holds what Ollama said of its models. A graphics card and a 9B
+model were tried by the owner on his laptop, with the llama-server Ollama 0.40.18 brings,
+started by hand with the two variables the command begins with; the command as the page
+writes it was not run on a graphics card. Not tried: a llama-server on another machine, a
+folder of models that llama-server downloads itself, a model with an adapter (that Ollama
+makes none any more), and a card other than one of NVIDIA.
 
 ### Answer check
 
@@ -1868,6 +1934,40 @@ the model itself has:
 
 An effort the model does not have (xhigh or max where high is the top) is sent as its
 highest.
+
+#### A turn that is thinking and nothing else
+
+Some models end a turn with thinking only: no answer and no tool call. The chat then shows
+a turn that says nothing. Seen on the owner's laptop on 26 November 2026 with
+Huihui-Qwen3.5-9B-abliterated and thinking on, through Ollama and through llama-server
+alike: its turn after a tool result was thinking only, and with thinking off the same model
+answered.
+
+HunterAI asks such a turn once more by itself, with the same question and thinking off:
+
+- What the model thought stays above the answer it then writes.
+- Thinking stays off for the rest of that run, so a run of many turns does not ask each of
+  them twice. The next run starts as the chat is set.
+- The chat's own options are not changed. A line under the answer says what happened and
+  where the switch is: **Options → Thinking: off** makes it so from the start and saves the
+  second call.
+- It happens once in a run, and not in a chat whose Thinking is off already. When the
+  second call gives no answer either, or the model's server refuses it, the turn stays as
+  it was with a line that says so; the run does not fail for it.
+- A turn that was cut off at a limit, or ended by a provider's filter, is not asked again:
+  those have their own line. Neither is thinking that a provider sealed (Claude's, for one),
+  which has to go back to it as it came.
+
+A subagent does the same, and so does the Bench (see there). The trajectory shows a step of
+the kind "thinking" between the two model calls: "ended with thinking only: asked again
+with thinking off".
+
+Held against real programs on 26 November 2026, with Qwen3.5 0.8B: an Ollama built from its
+source answered a request with `think: false` with text and no thinking, and llama-server
+did the same for `reasoning_effort: "none"`; asked as they are, both spent every token they
+were given on thinking. That small model does not end a turn with thinking only by itself
+(it thinks until it is cut off), so the second call as a whole was tried against a stand-in
+server, and not yet with the 9B model it was built for.
 
 ### Sampling, for a local model
 

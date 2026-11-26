@@ -230,6 +230,7 @@ beforeEach(() => {
   vi.spyOn(api, 'listTools').mockResolvedValue([])
   vi.spyOn(api, 'mcpStatus').mockResolvedValue({ configured: [], servers: [], error: null })
   vi.spyOn(api, 'systemLocal').mockResolvedValue(LOCAL)
+  vi.spyOn(api, 'systemLlamaCppFind').mockRejectedValue(new Error('this test does not look at the machine'))
   colibri = vi.spyOn(api, 'systemColibri').mockResolvedValue(COLIBRI_OFF)
   listed = vi.spyOn(api, 'listProviders').mockResolvedValue([{ name: 'llamacpp', configured: true, models: [MODEL] }])
   put = vi.spyOn(api, 'putSettings').mockImplementation(async (patch) => ({ ...SETTINGS, ...patch, llamacpp_url: AT }) as Settings)

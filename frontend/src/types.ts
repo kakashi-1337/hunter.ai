@@ -210,7 +210,7 @@ export interface Step {
   id: string
   run_id: string
   seq: number
-  kind: 'model_call' | 'tool_call' | 'subagent' | 'permission' | 'fallback' | 'decision' | 'retrieval' | 'user_note' | 'context' | 'check' | 'cooling'
+  kind: 'model_call' | 'tool_call' | 'subagent' | 'permission' | 'fallback' | 'decision' | 'retrieval' | 'user_note' | 'context' | 'check' | 'cooling' | 'thinking'
   parent_step_id?: string | null
   name: string
   status: string
@@ -721,6 +721,29 @@ export interface LlamaServer {
   tools: boolean | null        // the chat template of a server with one model has tool calls; null: it does not say
   overhead: number             // what a new chat sends before the conversation, in tokens
   start_with: number           // the smallest context (-c) that holds that with room for a chat
+}
+
+/** A graphics card a llama-server says it can put a model on, with its memory in MiB. */
+export interface LlamaDevice { name: string; card: string; total_mb: number; free_mb: number }
+
+/** A chat model of Ollama as Settings offers it for llama-server. command: what starts llama-server with its files;
+ * null when there is none, and `why_not` then says why. images: llama-server will read pictures with it. */
+export interface LlamaFindModel { name: string; alias: string; images: boolean; command: string | null; why_not: string; note: string }
+
+/** What this machine has to start a llama-server with (GET /api/system/llamacpp/find). */
+export interface LlamaFind {
+  /** Where a llama-server started here answers; null: the saved address is not one to start a server at here. */
+  address: string | null
+  program: string | null       // the llama-server that was found; null: none
+  from_ollama: boolean         // it is the one Ollama brings
+  devices: LlamaDevice[] | null        // the cards it sees; null: it does not say
+  /** What answers at `address` now, looked at while no address is saved; null: nothing, or an address is saved. */
+  answers: { state: 'ok' | 'loading' | 'key' | 'nomodel' | 'odd'; serves: string[]; said: string } | null
+  context: number
+  ollama: boolean              // Ollama answers
+  held: string[]               // the chat models Ollama holds in memory now
+  plain: string | null         // the command for a GGUF file of the owner's own
+  models: LlamaFindModel[]
 }
 
 export interface CheckupItem {

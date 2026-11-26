@@ -6,8 +6,14 @@ import pytest
 
 from hunterai import db, engine, hub, permissions, subagents
 from hunterai.providers import registry
-from hunterai.providers.base import TextDelta, ToolCall
-from hunterai.repo import goals, messages, runs, settings
+from hunterai.providers.base import (
+    ProviderError,
+    Stop,
+    TextDelta,
+    ThinkingDelta,
+    ToolCall,
+)
+from hunterai.repo import chats, goals, messages, runs, settings
 from hunterai.tools import registry as tools
 from hunterai.tools.base import Tool, ToolResult
 from tests.test_decision_engine import Json
@@ -101,6 +107,73 @@ async def test_a_subagents_call_to_an_out_of_scope_host_is_not_run_either(conn, 
     read = [b.content for b in p.calls[2]["messages"][-1].blocks if b.type == "tool_result"]
     assert len(read) == 1 and read[0].startswith("Not run: payments.shop.example is on this target's out-of-scope list")
     assert not [s for s in run.steps if s.kind == "permission" and s.name == "t_send"]
+
+
+async def test_a_subagents_turn_of_thinking_only_is_asked_once_more_with_thinking_off(conn, world):
+    """As a chat's own turn is (engine._call): the 9B model on the owner's laptop ended its turn after a tool result
+    with thinking and nothing else, and a subagent on it would hand back an empty answer."""
+    p = Turns("abliteration", [ToolCall("d1", "delegate", BRIEF)],
+              [ToolCall("e1", "t_echo", {"q": 1})], [ThinkingDelta("It answered 200 with B's invoice, so it is readable.")],
+              [TextDelta("Invoice 1338 is readable: HTTP 200.")], [TextDelta("The subagent confirmed it.")])
+    use(abliteration=p)
+    world.decide_with(WORTH, ACCEPT)
+    run, msg = await go(conn, *await world.setup())
+    assert run.status == "done", run.error
+    got = result_of(msg)
+    assert (got["status"], got["answer"], got["calls"]) == ("done", "Invoice 1338 is readable: HTTP 200.", 1)
+    assert [c["options"].thinking for c in p.calls] == [None, None, None, False, None]      # the chat's own calls stay as they are
+    assert p.calls[3]["messages"] == p.calls[2]["messages"]
+    assert world.ran == [{"q": 1}]
+    sub = [(s.kind, s.name) for s in run.steps if s.parent_step_id]
+    assert sub.count(("thinking", "ended with thinking only: asked again with thinking off")) == 1
+
+
+async def test_a_subagents_thinking_that_was_cut_off_at_a_limit_is_not_asked_again(conn, world):
+    p = Turns("abliteration", [ToolCall("d1", "delegate", BRIEF)],
+              [TextDelta("I look."), ToolCall("e1", "t_echo", {"q": 1})], [ThinkingDelta("hm"), Stop("length")], [TextDelta("It said little.")])
+    use(abliteration=p)
+    world.decide_with(WORTH, ACCEPT)
+    run, msg = await go(conn, *await world.setup())
+    assert run.status == "done", run.error
+    assert (result_of(msg)["answer"], len(p.calls)) == ("I look.", 4)
+
+
+async def test_a_subagent_of_a_chat_with_thinking_off_is_not_asked_again(conn, world):
+    p = Turns("abliteration", [ToolCall("d1", "delegate", BRIEF)],
+              [TextDelta("I look."), ToolCall("e1", "t_echo", {"q": 1})], [ThinkingDelta("hm")], [TextDelta("It said little.")])
+    use(abliteration=p)
+    world.decide_with(WORTH, ACCEPT)
+    chat, user = await world.setup()
+    await chats.update(conn, chat.id, options={"thinking": False})
+    run, msg = await go(conn, chat, user)
+    assert run.status == "done", run.error
+    assert (result_of(msg)["answer"], len(p.calls)) == ("I look.", 4)
+    assert not [s for s in run.steps if s.kind == "thinking"]
+
+
+async def test_a_second_asking_that_breaks_after_it_began_to_answer_is_the_subagents_error(conn, world):
+    p = Turns("abliteration", [ToolCall("d1", "delegate", BRIEF)],
+              [ToolCall("e1", "t_echo", {"q": 1})], [ThinkingDelta("hm")],
+              [TextDelta("Invoice 1338"), ProviderError("unavailable", "the model was unloaded")], [TextDelta("It broke.")])
+    use(abliteration=p)
+    world.decide_with(WORTH, ACCEPT)
+    run, msg = await go(conn, *await world.setup())
+    assert run.status == "done", run.error
+    got = result_of(msg)
+    assert got["status"] == "error" and "the model was unloaded" in json.dumps(got)
+
+
+async def test_a_second_asking_that_fails_leaves_the_subagent_with_what_it_had(conn, world):
+    p = Turns("abliteration", [ToolCall("d1", "delegate", BRIEF)],
+              [TextDelta("I look."), ToolCall("e1", "t_echo", {"q": 1})], [ThinkingDelta("hm")],
+              ProviderError("bad_request", "think value false is not supported for this model"), [TextDelta("It said little.")])
+    use(abliteration=p)
+    world.decide_with(WORTH, ACCEPT)
+    run, msg = await go(conn, *await world.setup())
+    assert run.status == "done", run.error
+    got = result_of(msg)
+    assert (got["status"], got["answer"]) == ("done", "I look.")
+    assert len(p.calls) == 5
 
 
 @pytest.mark.parametrize("verdict,want", [

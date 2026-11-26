@@ -8,6 +8,7 @@ from hunterai.providers.base import (
     ProviderError,
     Stop,
     TextDelta,
+    ThinkingDelta,
     ToolCall,
     Usage,
 )
@@ -16,6 +17,11 @@ from hunterai.providers.base import (
 def says(text: str) -> list:
     """A model call that answers."""
     return [TextDelta(text), Usage(10, 5), Stop("end")]
+
+
+def thinks(text: str = "It has no record, so there is none.") -> list:
+    """A model call that ends with thinking and nothing else."""
+    return [ThinkingDelta(text), Usage(10, 5), Stop("end")]
 
 
 def calls(name: str, **arguments) -> list:

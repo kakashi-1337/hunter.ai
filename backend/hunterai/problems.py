@@ -140,6 +140,36 @@ def at_limit(reason: str | None) -> bool:
     return (reason or "").lower() in _AT_LIMIT
 
 
+def only_thought(blocks, stop: str | None) -> bool:
+    """What a model call wrote (`blocks`) is thinking and nothing after it: neither text nor a tool call, and the call
+    ended by itself. Seen with Huihui-Qwen3.5-9B on the owner's laptop, whose turn after a tool result was that with
+    thinking on. Not a call that was cut off or ended by a filter, which has its own word, and not thinking its
+    provider sealed: that goes back to the provider as it came, with what follows it."""
+    why = (stop or "").lower()
+    thought = [b for b in blocks if b.type == "thinking"]
+    return (why not in _AT_LIMIT | _WINDOW_FULL | _FILTERED and any(b.text.strip() for b in thought)
+            and not any(b.opaque for b in thought)
+            and not any(b.type == "tool_call" or (b.type == "text" and b.text.strip()) for b in blocks))
+
+
+ASKED_AGAIN = ("The model ended a turn with thinking only and no answer, so HunterAI asked it once more with thinking switched off. "
+               "Thinking stays off for the rest of this run. To have it off from the start, switch Thinking off for this chat under "
+               "Options.")
+
+
+def no_answer(asked: bool, refused: str | None = None) -> str:
+    """The word under a turn that stayed thinking only. `asked`: it was asked once more with thinking off; `refused`:
+    what that second call failed with."""
+    then = "What it thought stands above. Send the message again, or pick another model for this chat."
+    if refused:
+        return ("The model ended its turn with thinking only and gave no answer. HunterAI asked it once more with thinking switched "
+                f"off, and that call failed ({refused[:300]}). {then}")
+    if asked:
+        return ("The model ended its turn with thinking only and gave no answer, also when it was asked once more with thinking "
+                f"switched off. {then}")
+    return f"The model ended its turn with thinking only and gave no answer. {then}"
+
+
 def cut_off(reason: str | None, *, provider: str | None, max_tokens: int | None = None, output_tokens: int = 0,
             window: int | None = None, circles: bool = False) -> tuple[str, str] | None:
     """What to say under an answer that did not end by itself: (kind, text), or None when it did. `max_tokens` is

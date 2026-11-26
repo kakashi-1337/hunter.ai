@@ -69,6 +69,10 @@ class _Attempt:
         self.grew: NoticeBlock | None = None      # that the window was raised, and from what, for the owner
         self.stuck: NoticeBlock | None = None     # that the window could not be raised: the model did not answer with it
         self.circles = False              # the last model call filled its window by saying one thing over and over
+        self.last = 0                     # where in `items` the last model call of the run began to write
+        self.quiet = False                # a turn of this run ended with thinking only: its calls are made with thinking off
+        self.refused: str | None = None   # what the call that was made once more with thinking off failed with
+        self.rethought: NoticeBlock | None = None     # that a turn was asked once more with thinking off, for the owner
         self.goal: NoticeBlock | None = None      # the answer says complete while items of the goal record are open
         self.changes: ChangesBlock | None = None  # what the run changed in the work folder (coding mode)
 
@@ -80,8 +84,8 @@ class _Attempt:
         """What is stored: the run's blocks, then the word about how the answer ended and about the open items of
         the goal record, what the run changed in the work folder, the knowledge-base sources, the results of the
         web search and the answer check, when there are any."""
-        return [*self.items, *(b for b in (self.grew, self.stuck, self.notice, self.goal, self.changes, self.sources,
-                                           self.web, self.check) if b is not None)]
+        return [*self.items, *(b for b in (self.grew, self.stuck, self.rethought, self.notice, self.goal, self.changes,
+                                           self.sources, self.web, self.check) if b is not None)]
 
     def wire_blocks(self) -> list[Block]:
         """What goes back to the model: never a block that is only the owner's to read."""
@@ -398,6 +402,36 @@ async def _restart(run_id: str, acc: _Attempt, mark: int, blocks: list[Block]) -
 async def _call(conn, run_id: str, mid: str, provider_name: str, model: str, system: str,
                 wire: list[WireMessage], options: Options, acc: _Attempt,
                 specs: list[ToolSpec] | None = None) -> None:
+    """One model call of the run (_sized). A call that ended with thinking only, without an answer and without a tool
+    call, is made once more with thinking off: the same question, and what the model thought stays above what it then
+    writes. Thinking stays off for the rest of the run, so that a run of many turns does not ask each of them twice.
+    The chat's own options are not changed.
+
+    Once in a run. A second call that fails without having written anything leaves the turn as it was: the run does
+    not fail for a call the model did not ask for."""
+    if acc.quiet:
+        options = options.model_copy(update={"thinking": False})
+    mark = acc.last = len(acc.items)
+    args = (conn, run_id, mid, provider_name, model, system, wire)
+    await _sized(*args, options, acc, specs)
+    if options.thinking is False or not problems.only_thought(acc.items[mark:], acc.stop):     # off already: also when quiet
+        return
+    acc.quiet = True
+    await _mark(conn, run_id, "thinking", "ended with thinking only: asked again with thinking off", {})
+    try:
+        await _sized(*args, options.model_copy(update={"thinking": False}), acc, specs)
+    except ProviderError as e:
+        if acc.output:
+            raise
+        acc.refused = e.message
+        return
+    if not problems.only_thought(acc.items[mark:], acc.stop):
+        acc.rethought = NoticeBlock(kind="thinking", text=problems.ASKED_AGAIN)
+
+
+async def _sized(conn, run_id: str, mid: str, provider_name: str, model: str, system: str,
+                 wire: list[WireMessage], options: Options, acc: _Attempt,
+                 specs: list[ToolSpec] | None = None) -> None:
     """One model call of the run (_attempt), with the context window of a local model made larger when the call
     needs it. A chat that does not fit the window gets the next size that holds it before anything of it is left
     out (context.roomier). An answer that filled the window is taken back and written again in the next size, once:
@@ -756,7 +790,8 @@ async def _name_skills(conn, run_id: str, system: str, asked: str, embedded, cal
 
 async def _ending(chat, provider_name: str, model: str, acc: _Attempt) -> NoticeBlock | None:
     """The word for the owner when the last model call did not end by itself: cut off at a limit, or ended by the
-    provider's filter. The answer looks finished otherwise, and stops in the middle of a sentence."""
+    provider's filter. The answer looks finished otherwise, and stops in the middle of a sentence. And when it ended
+    with thinking only: there is no answer then, and the page would show a turn that says nothing."""
     try:
         options = Options(**(chat.options or {}))
         if acc.window:              # the run raised it: that is the window the answer was written in
@@ -767,7 +802,11 @@ async def _ending(chat, provider_name: str, model: str, acc: _Attempt) -> Notice
             window = await window_for(model, options)
         said = problems.cut_off(acc.stop, provider=provider_name, max_tokens=options.max_tokens,
                                 output_tokens=acc.produced, window=window, circles=acc.circles)
-        return NoticeBlock(kind=said[0], text=said[1]) if said else None
+        if said:
+            return NoticeBlock(kind=said[0], text=said[1])
+        if problems.only_thought(acc.items[acc.last:], acc.stop):
+            return NoticeBlock(kind="no_answer", text=problems.no_answer(acc.quiet, acc.refused))
+        return None
     except Exception:  # noqa: BLE001 - the run is done; a word that cannot be made is left out
         return None
 

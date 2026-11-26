@@ -12,7 +12,7 @@ import time
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from .. import activity, caido, config, diagnostics, engine, mcp_manager, rea_tools, stale, thermal, toolbox
+from .. import activity, caido, config, diagnostics, engine, llamafind, mcp_manager, rea_tools, stale, thermal, toolbox
 from . import providers as providers_api
 from . import settings as settings_api
 from .deps import get_conn
@@ -146,6 +146,50 @@ async def llamacpp_server(conn=Depends(get_conn)):
                         "failed": h.failed,
                         "enough": room if h.info.context_window and h.info.context_window < need + ROOM else None}
                        for h in seen.held]}        # a server that serves nothing holds none, and says nothing of its template
+
+
+@router.get("/system/llamacpp/find")
+async def llamacpp_find(conn=Depends(get_conn)):
+    """What this machine has to start a llama-server with, for the page that gives the command: where a server started
+    here answers (`address`; null when the saved address is one on another machine, and then nothing was looked for),
+    the program (`program`; `from_ollama`: it is the one Ollama brings) and the graphics cards it says it sees
+    (`devices`; empty for none, null when it does not say), what answers at that address now while none is saved
+    (`answers`), the context to start it with, the command for a file of the owner's own (`plain`), whether Ollama
+    answers, the chat models it holds in memory (`held`), and for each chat model it has the command that starts
+    llama-server with its files, the local model in use first. Of several programs the first that sees a graphics card
+    is taken. Nothing is started: the one program that is run is a llama-server that was found, asked for its cards."""
+    saved = llamacpp.address()
+    at = llamafind.start_at(saved)
+    need = (await overhead(conn))["tokens"]
+    context = llamacpp.context_for(max(need + ROOM, ollama.default_num_ctx()))
+    out = {"address": at, "program": None, "from_ollama": False, "devices": None, "answers": None, "context": context,
+           "ollama": False, "held": [], "plain": None, "models": []}
+    if at is None:
+        return out
+    if saved is None:
+        seen = await registry.get(llamacpp.NAME).look_at(at)
+        if seen.state != "down":
+            out["answers"] = {"state": seen.state, "serves": [h.info.id for h in seen.held],
+                              "said": llamacpp.why(seen) if seen.state in ("nomodel", "odd") else ""}
+    way, cards = await llamafind.choose(llamafind.ways())
+    if way is None:
+        return out
+    out.update(program=way.program, from_ollama=way.ollamas, devices=cards,
+               plain=llamafind.command(way, at, context, "your-model.gguf"))
+    tags, ps = await asyncio.gather(_fetch(ollama.host() + "/api/tags"), _fetch(ollama.host() + "/api/ps"))
+    if tags is None:
+        return out
+
+    def chat_models(listed: dict | None) -> list[str]:
+        entries = (listed or {}).get("models")
+        names = [str(m["name"]) for m in entries if isinstance(m, dict) and m.get("name")] if isinstance(entries, list) else []
+        return [n for n in names if not ollama._is_embedder(n)]
+    using = await store.get(conn, "fallback_model", engine.DEFAULT_FALLBACK_MODEL)
+    names = sorted(chat_models(tags), key=lambda n: not ollama.same_model(n, using))
+    made_of = await asyncio.gather(*map(llamafind.shown, names))
+    out.update(ollama=True, held=chat_models(ps),
+               models=[llamafind.offered(n, said, way, at, context) for n, said in zip(names, made_of) if said is not None])
+    return out
 
 
 async def _held_by_llamacpp() -> list[dict] | None:
