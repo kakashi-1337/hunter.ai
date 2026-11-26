@@ -3,8 +3,9 @@ import * as api from '../api'
 import { FONT_NAME, SUGGESTED_FONTS, fontIsHere } from '../font'
 import { proxyTestText } from '../proxy'
 import { useStore } from '../store'
-import { colibriHint, llamaCppHint, localWindowHint } from '../tree'
-import type { LocalModel, McpStatus, Settings, ToolInfo } from '../types'
+import { colibriHint, llamaCppHint, llamaFindView, localWindowHint } from '../tree'
+import type { LlamaFind, LlamaServer, LocalModel, McpStatus, Settings, ToolInfo } from '../types'
+import { LlamaStart } from './LlamaStart'
 import { McpManager } from './McpManager'
 import { MemoryManager } from './MemoryManager'
 import { PersonaManager } from './PersonaManager'
@@ -210,11 +211,13 @@ function KeyRow({ name, isSet, onSaved }: { name: string; isSet: boolean; onSave
  * stored). `kind` names the section in the page, `title` the field and `field` the field for a screen reader.
  * `ask` asks the server at the saved address what it serves, and `hint` puts the answer in words. `save` answers with
  * the address as the server keeps it and rejects with the server's reason; `keySaved` reloads the settings after a
- * key was stored. The children are what the section says about the server whatever answers. */
-function OwnServer<S>({ kind, title, field, placeholder, keyName, saved, keySet, save, keySaved, ask, hint, children }: {
+ * key was stored. `seen` is told what the server said each time it was asked, and `extra` stands under what the
+ * section says of the saved address. The children are what the section says about the server whatever answers. */
+function OwnServer<S>({ kind, title, field, placeholder, keyName, saved, keySet, save, keySaved, ask, hint, seen, extra, children }: {
   kind: string; title: string; field: string; placeholder: string; keyName: string; saved: string; keySet: boolean
   save(address: string): Promise<string>; keySaved(): Promise<void>; ask(): Promise<S>
-  hint(server: S | null, keySet: boolean): { lines: string[]; warn: string | null }; children: ReactNode
+  hint(server: S | null, keySet: boolean): { lines: string[]; warn: string | null }; seen?(server: S): void; extra?: ReactNode
+  children: ReactNode
 }) {
   const [value, setValue] = useState(saved)
   const [server, setServer] = useState<S | null>(null)
@@ -222,14 +225,18 @@ function OwnServer<S>({ kind, title, field, placeholder, keyName, saved, keySet,
   const [busy, setBusy] = useState<'' | 'save' | 'check'>('')
   const refreshProviders = useStore((s) => s.refreshProviders)
   const changed = value.trim() !== saved
+  const said = (found: S) => {
+    setServer(found)
+    seen?.(found)
+  }
   const look = async () => {
-    setServer(await ask())
+    said(await ask())
     await refreshProviders()            // the model list of the chats follows what answers there now
   }
   useEffect(() => {                     // asked when Settings opens with an address, and after one was saved (the key of this component is the address)
     if (!saved) return
     let gone = false
-    ask().then((found) => { if (!gone) { setServer(found); void refreshProviders().catch(() => {}) } }).catch(() => {})
+    ask().then((found) => { if (!gone) { said(found); void refreshProviders().catch(() => {}) } }).catch(() => {})
     return () => { gone = true }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
   const run = async (what: 'save' | 'check') => {
@@ -261,9 +268,38 @@ function OwnServer<S>({ kind, title, field, placeholder, keyName, saved, keySet,
       {error && <div className="ask-warning" role="alert">{error}</div>}
       {!changed && lines.map((line) => <div key={line} className="hint" role="status">{line}</div>)}
       {!changed && warn && <div className="ask-warning" role="alert">{warn}</div>}
+      {!changed && extra}
       <KeyRow name={keyName} isSet={keySet} onSaved={async () => { await keySaved(); await look().catch(() => {}) }} />
       <div className="hint">{children}</div>
     </div>
+  )
+}
+
+/** The llama.cpp part of Settings: the address of the owner's llama-server and, while no model is served at it, what
+ * this machine has to start one with. The machine is looked at when Settings opens without an address, and each time
+ * the saved address was asked and nothing to chat with answered there. `saved`: the address in use, "" for none (the
+ * key of this component, so another address starts it anew). */
+function LlamaCpp({ saved, keySet, save, keySaved }: {
+  saved: string; keySet: boolean; save(address: string): Promise<string>; keySaved(): Promise<void>
+}) {
+  const [server, setServer] = useState<LlamaServer | null>(null)
+  const [asked, setAsked] = useState(0)
+  const [found, setFound] = useState<LlamaFind | null>(null)
+  const looks = !saved || (server !== null && ['down', 'nomodel', 'odd'].includes(server.state))
+  useEffect(() => {
+    if (!looks) return
+    let gone = false
+    api.systemLlamaCppFind().then((f) => { if (!gone) setFound(f) }).catch(() => {})     // a server from before it could look: no block
+    return () => { gone = true }
+  }, [looks, asked])
+  const view = llamaFindView(found, server, saved)       // null where there is nothing to look for: the same rule as `looks`
+  return (
+    <OwnServer kind="llamacpp" title="Address of your llama-server" field="llama.cpp address" placeholder="http://127.0.0.1:9931"
+      keyName="LLAMACPP_API_KEY" saved={saved} keySet={keySet} save={save} keySaved={keySaved} ask={api.systemLlamaCpp}
+      hint={(s, k) => llamaCppHint(s, k, !!view?.plain)} seen={(s) => { setServer(s); setAsked((n) => n + 1) }}
+      extra={view && <LlamaStart view={view} onUse={save} />}>
+      llama-server is the server of llama.cpp (github.com/ggml-org/llama.cpp): it runs a GGUF model on this machine without Ollama in between. You start it yourself, with the model and the context you choose, and enter the address it prints when it starts (port 9931, or 8080 with a build from before October 2026). While no model is served at the address, this section looks for the program on this machine (a current Ollama brings one) and gives the command that starts it with a model Ollama has; nothing is started or installed for you. The context (-c) is settled when llama-server starts and does not grow, and all of its memory is taken at the start. Its model is then in the model list of every chat, under llamacpp. Started with a folder of models and none named (--models-dir), it lists every model of the folder and loads the one a chat asks for. HunterAI asks it directly, never through a proxy. Empty: llama.cpp is not used. Written to .env as HUNTERAI_LLAMACPP_URL.
+    </OwnServer>
   )
 }
 
@@ -396,11 +432,8 @@ export function SettingsDialog({ onClose, onSetup }: { onClose: () => void; onSe
           <h3 className="section">llama.cpp</h3>
           {settings.llamacpp_url === undefined
             ? <div className="llamacpp hint">The HunterAI server that answers is from before it knew llama.cpp. Start it again (press Ctrl+C where it runs, then scripts/start.sh), reload this page, and the address of your llama-server is set here.</div>
-            : <OwnServer key={settings.llamacpp_url} kind="llamacpp" title="Address of your llama-server" field="llama.cpp address" placeholder="http://127.0.0.1:9931"
-                keyName="LLAMACPP_API_KEY" saved={settings.llamacpp_url} keySet={settings.llamacpp_key_set === true}
-                save={address('llamacpp_url')} keySaved={reload} ask={api.systemLlamaCpp} hint={llamaCppHint}>
-                llama-server is the server of llama.cpp (github.com/ggml-org/llama.cpp): it runs a GGUF model on this machine without Ollama in between. You install and start it yourself, with the model and the context you choose, and enter the address it prints when it starts (port 9931, or 8080 with a build from before October 2026). With an address saved, this section says which context (-c) leaves room for a chat here; the context is settled when llama-server starts and does not grow, and all of its memory is taken at the start. Its model is then in the model list of every chat, under llamacpp. Started with a folder of models and none named (--models-dir), it lists every model of the folder and loads the one a chat asks for. HunterAI asks it directly, never through a proxy. Empty: llama.cpp is not used. Written to .env as HUNTERAI_LLAMACPP_URL.
-              </OwnServer>}
+            : <LlamaCpp key={settings.llamacpp_url} saved={settings.llamacpp_url} keySet={settings.llamacpp_key_set === true}
+                save={address('llamacpp_url')} keySaved={reload} />}
           <h3 className="section">Images</h3>
           <label className="field"><span>Local model that reads images for the look_at_image tool (an Ollama model name; empty: the first installed one that can)</span>
             <input className="mono" defaultValue={settings.vision_model ?? ''} placeholder="automatic" onBlur={(e) => { if (e.target.value.trim() !== (settings.vision_model ?? '')) update({ vision_model: e.target.value.trim() }) }} /></label>
