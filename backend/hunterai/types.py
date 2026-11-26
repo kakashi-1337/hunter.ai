@@ -127,7 +127,7 @@ class NoticeBlock(BaseModel):
     limit, the provider's filter ended it, or it says the work is complete while items of the goal record are not
     shown as done. Shown under the answer; never sent to a model."""
     type: Literal["notice"] = "notice"
-    kind: str                    # "cut_off" | "filtered" | "goal"
+    kind: str                    # "cut_off" | "filtered" | "goal" | "window" | "thinking" | "no_answer"
     text: str
 
 
@@ -221,7 +221,7 @@ class Step(BaseModel):
     run_id: str
     seq: int
     kind: Literal["model_call", "tool_call", "subagent", "permission", "fallback", "decision", "retrieval", "user_note", "context",
-                  "check", "cooling"]
+                  "check", "cooling", "thinking"]
     name: str
     status: str
     started_at: str

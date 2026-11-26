@@ -23,7 +23,7 @@ from hunterai.repo import chats, goals, kb, messages, personas, queue, runs, set
 from hunterai.tools import kb_tools, native, on_demand, runner
 from hunterai.tools import registry as tools
 from hunterai.types import TextBlock
-from tests.bench_model import Model, Wordy, calls, fails, says
+from tests.bench_model import Model, Wordy, calls, fails, says, thinks
 from tests.toolkit import fake_tool
 
 NO_RECORD = Scripted(name=["cve", "web_search", "web_fetch"], result="No record was found.")
@@ -67,6 +67,81 @@ async def test_a_call_then_an_answer_is_the_transcript(conn):
     assert (t.input_tokens, t.output_tokens) == (20, 10)
     assert len(model.seen) == 2
     assert score.score(case(calls_any=["cve"], answer_any=["no record"]), t).status == "pass"
+
+
+# ---- a turn that ended with thinking only is asked once more with thinking off, as a chat does it
+
+async def test_a_turn_of_thinking_only_is_asked_once_more_with_thinking_off(conn):
+    model = use(LOOKUP, thinks(), says("There is no record of it."))
+    t = (await go(conn)).transcript
+    assert (t.answer, t.finished, t.error, t.asked_again) == ("There is no record of it.", True, None, True)
+    assert t.turns == 2                                             # the second asking is no turn of the model's own
+    assert (t.input_tokens, t.output_tokens) == (30, 15)            # its tokens are the run's all the same
+    assert [seen["options"].thinking for seen in model.seen] == [None, None, False]
+    assert model.seen[2]["messages"] == model.seen[1]["messages"]   # the same question: what was thought is not sent along
+    assert score.score(case(calls_any=["cve"], answer_any=["no record"]), t).status == "pass"
+
+
+async def test_thinking_stays_off_for_the_rest_of_that_run_and_not_for_the_next(conn):
+    model = use(thinks(), LOOKUP, says("There is no record of it."), says("Again none."))
+    t = (await go(conn)).transcript
+    assert (t.answer, t.turns, t.asked_again) == ("There is no record of it.", 2, True)
+    assert [seen["options"].thinking for seen in model.seen] == [None, False, False]
+    again = (await go(conn)).transcript
+    assert (again.answer, again.asked_again) == ("Again none.", False)
+    assert model.seen[3]["options"].thinking is None
+
+
+async def test_a_run_that_stays_thinking_only_has_no_answer(conn):
+    model = use(thinks())
+    t = (await go(conn)).transcript
+    assert (t.answer, t.turns, t.finished, t.error, t.asked_again) == ("", 1, True, None, True)
+    assert len(model.seen) == 2                                     # asked again once, not for as long as it takes
+    assert score.score(case(), t).reasons == ["gave no answer"]
+
+
+async def test_a_second_asking_that_fails_leaves_the_run_without_an_answer_and_is_no_error_of_the_run(conn):
+    use(thinks(), fails("bad_request", "think value false is not supported for this model"))
+    t = (await go(conn)).transcript
+    assert (t.answer, t.turns, t.finished, t.error, t.asked_again) == ("", 1, True, None, True)
+    assert score.score(case(), t).status == "fail"
+
+
+async def test_a_turn_is_asked_again_once_in_a_run(conn):
+    model = use(thinks(), LOOKUP, thinks("Still nothing to say."))
+    t = (await go(conn)).transcript
+    assert (t.answer, t.turns, t.finished, t.asked_again) == ("", 2, True, True)
+    assert [seen["options"].thinking for seen in model.seen] == [None, False, False]
+
+
+async def test_a_second_asking_that_breaks_after_it_began_to_answer_is_the_error_of_the_run(conn):
+    use(thinks(), [TextDelta("There is"), ProviderError("unavailable", "the model was unloaded")])
+    t = (await go(conn)).transcript
+    assert (t.error, t.finished) == ("the model was unloaded", False)
+
+
+async def test_a_local_model_is_given_time_to_cool_before_the_second_asking_too(conn, monkeypatch):
+    waited = []
+
+    async def cool(model, tell):
+        waited.append(model)
+    monkeypatch.setattr(run, "_cool", cool)
+    monkeypatch.setattr(cooling, "here", lambda provider, model: True)
+    use(thinks(), says("There is no record of it."))
+    assert (await go(conn)).transcript.answer == "There is no record of it."
+    assert waited == ["m", "m"]
+
+
+async def test_thinking_that_was_cut_off_at_a_limit_is_not_asked_again(conn):
+    model = use([ThinkingDelta("It has no"), Usage(10, 5), Stop("length")], says("There is no record of it."))
+    t = (await go(conn)).transcript
+    assert (t.answer, t.asked_again, len(model.seen)) == ("", False, 1)
+
+
+async def test_an_answer_that_came_is_not_asked_for_again(conn):
+    model = use([*thinks()[:1], *says("There is no record of it.")])
+    t = (await go(conn)).transcript
+    assert (t.answer, t.asked_again, len(model.seen)) == ("There is no record of it.", False, 1)
 
 
 async def test_an_answer_at_once_is_one_turn_without_calls(conn):

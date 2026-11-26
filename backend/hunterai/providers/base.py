@@ -230,6 +230,12 @@ class Reply:
     stop: str | None = None
 
 
+def written(blocks: list[Block]) -> int:
+    """How much stands in `blocks`. It is more after a model call that wrote anything at all, also one that failed
+    after it: `collect` adds to the last block where it can, so the number of blocks alone does not tell."""
+    return len(blocks) + sum(len(getattr(b, "text", "") or "") for b in blocks)
+
+
 async def collect(stream: AsyncIterator[Event], blocks: list[Block], taken: set[str], reply: Reply | None = None) -> Reply:
     """Reads one model call into `blocks`: text and thinking in pieces become one block each, a seal closes the
     thinking before it, and every tool call gets an id that is not in `taken` (and is added to it). For a loop

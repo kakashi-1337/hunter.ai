@@ -28,6 +28,15 @@ describe('the word under an answer that did not end by itself', () => {
       .toEqual([{ kind: 'text', text: 'done' }, { kind: 'notice', text: grew, level: '' }, { kind: 'notice', text: CUT, level: 'warn' }])
   })
 
+  it('is no warning when a turn was asked once more with thinking off and then answered, and is one when no answer came', () => {
+    const again = 'The model ended a turn with thinking only and no answer, so HunterAI asked it once more with thinking switched off.'
+    const none = 'The model ended its turn with thinking only and gave no answer. What it thought stands above.'
+    expect(renderItems(message([{ type: 'thinking', text: 'hm' }, { type: 'text', text: 'done' }, { type: 'notice', kind: 'thinking', text: again }])))
+      .toEqual([{ kind: 'thinking', text: 'hm' }, { kind: 'text', text: 'done' }, { kind: 'notice', text: again, level: '' }])
+    expect(renderItems(message([{ type: 'thinking', text: 'hm' }, { type: 'notice', kind: 'no_answer', text: none }])))
+      .toEqual([{ kind: 'thinking', text: 'hm' }, { kind: 'notice', text: none, level: 'warn' }])
+  })
+
   it('is left out when it says nothing', () => {
     expect(renderItems(message([{ type: 'text', text: 'done' }, { type: 'notice', kind: 'cut_off', text: '' }]))).toEqual([{ kind: 'text', text: 'done' }])
   })

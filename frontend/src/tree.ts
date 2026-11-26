@@ -140,6 +140,9 @@ export type RenderItem =
   | { kind: 'note'; text: string }
   | { kind: 'notice'; text: string; level: '' | 'warn' }
 
+/** The kinds of notice that tell of something HunterAI did by itself and that went well: drawn without the warning. */
+const QUIET_NOTICES = ['window', 'thinking']
+
 /** The message's blocks in order, each tool result folded into its call's card. */
 export function renderItems(m: Message): RenderItem[] {
   const results = new Map<string, ToolResultBlock>()
@@ -150,8 +153,9 @@ export function renderItems(m: Message): RenderItem[] {
     else if (b.type === 'thinking') { if (b.text) out.push({ kind: 'thinking', text: b.text }) }
     else if (b.type === 'tool_call') out.push({ kind: 'tool', card: { call: b, result: results.get(b.id) ?? null } })
     else if (b.type === 'owner_note') { if (b.text) out.push({ kind: 'note', text: b.text }) }
-    // A context window that was raised is something to know, not something that went wrong.
-    else if (b.type === 'notice') { if (b.text) out.push({ kind: 'notice', text: b.text, level: b.kind === 'window' ? '' : 'warn' }) }
+    // A context window that was raised, or a turn that was asked again and then answered, is something to know, not
+    // something that went wrong.
+    else if (b.type === 'notice') { if (b.text) out.push({ kind: 'notice', text: b.text, level: QUIET_NOTICES.includes(b.kind) ? '' : 'warn' }) }
   }
   return out
 }
