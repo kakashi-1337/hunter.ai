@@ -14,7 +14,7 @@ const SETTINGS: Settings = {
   default_provider: 'abliteration', default_model: 'big', fallback_model: 'qwen3:8b', local_window: 16384, local_window_max: 131072,
   keys: { ABLIT_API_KEY: true }, permissions: {}, max_turns: 60, swarm_width: 3, swarm_width_max: 6,
   machine: { cores: 8, memory_gb: 32 }, presets: {}, decision_provider: null, decision_model: null, decision_gate: false,
-  decision_engine: true, kb_redact: true, kb_skip_generated: true, vision_model: null, browser_via_caido: false, answer_check: false,
+  decision_engine: true, kb_redact: true, kb_skip_generated: true, vision_model: null, browser_via_caido: false, answer_check: false, scope_refusal: true,
   mcp_on_demand: true, notify_findings: false, notify_min_severity: 'high', notify_webhook_set: false, caido_available: false,
   upstream_proxy: '', upstream_proxy_password: false, upstream_proxy_intercepts: false, upstream_proxy_kb: false,
   provider_proxy: '', provider_proxy_password: false, colibri_url: '', colibri_key_set: false, interface_font: '',
@@ -73,6 +73,35 @@ describe('Settings', () => {
     expect(host.querySelector('[role="dialog"]')?.getAttribute('aria-label')).toBe('Settings')
     expect(host.querySelector('[role="alert"]')).toBeNull()
     expect(host.textContent).toContain('Fallback model (Ollama)')
+  })
+
+  describe('calls to out-of-scope hosts', () => {
+    const box = () => [...host.querySelectorAll('label.check')].find((l) => /^Refuse calls to out-of-scope hosts/.test(l.textContent ?? ''))!.querySelector<HTMLInputElement>('input')!
+
+    it('are refused unless the owner switches that off, and the line says what happens either way', async () => {
+      await open()
+      expect(box().checked).toBe(true)
+      expect(box().closest('label')!.textContent).toBe("Refuse calls to out-of-scope hosts: a call that names a host on its target's out-of-scope list is not run, "
+        + 'and the model is told so. Nobody is asked. Switched off, such a call asks you first with a warning, as it did before.')
+      await act(async () => { box().click() })
+      expect(put).toHaveBeenCalledWith({ scope_refusal: false })
+    })
+
+    it('shows the box unticked when it is switched off', async () => {
+      useStore.setState({ settings: { ...SETTINGS, scope_refusal: false } })
+      vi.spyOn(api, 'getSettings').mockResolvedValue({ ...SETTINGS, scope_refusal: false })
+      await open()
+      expect(box().checked).toBe(false)
+    })
+
+    it('is not offered by a server from before the setting, which would not save it', async () => {
+      const old = { ...SETTINGS } as Partial<Settings>
+      delete old.scope_refusal
+      useStore.setState({ settings: old as Settings })
+      vi.spyOn(api, 'getSettings').mockResolvedValue(old as Settings)
+      await open()
+      expect([...host.querySelectorAll('label.check')].some((l) => /^Refuse calls to out-of-scope hosts/.test(l.textContent ?? ''))).toBe(false)
+    })
   })
 
   describe('the interface font', () => {

@@ -89,6 +89,26 @@ async def test_delegate_runs_a_scoped_subagent_and_verifies_its_answer(conn, wor
     assert types.count("tool_finished") == 1 and types.count("text_delta") == 1
 
 
+async def test_a_subagents_call_to_an_out_of_scope_host_is_not_run_either(conn, world):
+    """The guard of a chat's own loop (tools/scopeguard.py) stands in a subagent's loop too."""
+    from hunterai.repo import targets
+    from hunterai.tools.base import HostUse, Prepared
+    send, sent = fake_tool("t_send", risk="network", prepared=Prepared(hosts=(HostUse("payments.shop.example", 443),)))
+    tools.register(send)
+    p = Turns("abliteration", [ToolCall("d1", "delegate", {**BRIEF, "tools": ["t_send"]})],
+              [ToolCall("s1", "t_send", {"path": "/v1/charges"})], [TextDelta("That host is out of scope, so nothing was sent.")],
+              [TextDelta("The subagent left it alone.")])
+    use(abliteration=p)
+    world.decide_with(WORTH, ACCEPT)
+    target = await targets.create(conn, "shop", "", {"in": ["*.shop.example"], "out": ["payments.shop.example"]})
+    run, msg = await asyncio.wait_for(go(conn, *await world.setup(target_id=target.id)), 20)     # without the guard the call asks
+    assert run.status == "done", run.error
+    assert sent == [] and result_of(msg)["answer"] == "That host is out of scope, so nothing was sent."
+    read = [b.content for b in p.calls[2]["messages"][-1].blocks if b.type == "tool_result"]
+    assert len(read) == 1 and read[0].startswith("Not run: payments.shop.example is on this target's out-of-scope list")
+    assert not [s for s in run.steps if s.kind == "permission" and s.name == "t_send"]
+
+
 async def test_a_subagents_turn_of_thinking_only_is_asked_once_more_with_thinking_off(conn, world):
     """As a chat's own turn is (engine._call): the 9B model on the owner's laptop ended its turn after a tool result
     with thinking and nothing else, and a subagent on it would hand back an empty answer."""

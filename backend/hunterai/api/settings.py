@@ -15,7 +15,7 @@ from ..providers import colibri, llamacpp, ollama, registry
 from . import providers as providers_api
 from ..repo import kb as kb_repo
 from ..repo import settings
-from ..tools import runner
+from ..tools import runner, scopeguard
 from .deps import default_provider_model, get_conn
 from .. import upstream
 
@@ -47,6 +47,7 @@ class SettingsIn(BaseModel):
     decision_model: str | None = None
     decision_gate: bool | None = None
     answer_check: bool | None = None        # hold each final answer against the run's tool results
+    scope_refusal: bool | None = None       # a call that names a host of the target's out-of-scope list is not run
     mcp_on_demand: bool | None = None       # keep the tools of large MCP servers out of the tool list (mcp_find, mcp_call)
     notify_findings: bool | None = None     # announce positive findings to the Discord webhook
     notify_min_severity: Literal["info", "low", "medium", "high", "critical"] | None = None
@@ -108,6 +109,7 @@ async def _view(conn) -> dict:
         "decision_model": await settings.get(conn, "decision_model") or None,
         "decision_gate": bool(await settings.get(conn, "decision_gate", runner.GATE_DEFAULT)),
         "answer_check": bool(await settings.get(conn, "answer_check", answer_check.DEFAULT)),
+        "scope_refusal": bool(await settings.get(conn, scopeguard.SETTING, scopeguard.DEFAULT)),
         "mcp_on_demand": bool(await settings.get(conn, "mcp_on_demand", on_demand.DEFAULT)),
         "notify_findings": bool(await settings.get(conn, "notify_findings", notify.DEFAULT_ON)),
         "notify_min_severity": await settings.get(conn, "notify_min_severity", notify.DEFAULT_MIN),
@@ -256,6 +258,9 @@ async def put_settings(body: SettingsIn, conn=Depends(get_conn)):
     if fields.get("answer_check") is not None:
         await settings.put(conn, "answer_check", bool(fields["answer_check"]))
     fields.pop("answer_check", None)
+    if fields.get("scope_refusal") is not None:
+        await settings.put(conn, scopeguard.SETTING, bool(fields["scope_refusal"]))
+    fields.pop("scope_refusal", None)
     if fields.get("decision_gate") is not None:
         await settings.put(conn, "decision_gate", bool(fields["decision_gate"]))
     fields.pop("decision_gate", None)

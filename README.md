@@ -150,17 +150,58 @@ lean one way:
 
 ### Which list wins
 
-A host on the out-of-scope list always asks first, with one exception: a host the
+A host on the out-of-scope list is out, with one exception: a host the
 in-scope list names itself (`shop.example.com`, or a single address) stays in scope
 where only a wildcard or a range on the out-of-scope list covers it. A program that
 excludes `*.example.com` and lists `shop.example.com` means the shop. A wildcard or a
 range on the in-scope list lifts nothing, and a host named on both lists is out. The
 model is told the same rule.
 
+### A call to an out-of-scope host is not run
+
+A call that names a host on the target's out-of-scope list is refused: nothing is sent,
+its name is not looked up, and you are not asked. The model reads why in place of the
+call's result ("Not run: payments.shop.example is on this target's out-of-scope list
+...") and goes on with what is in scope, or says so in its answer. In the trajectory it
+is a tool call that ended with that line.
+
+Until 26 November 2026 such a call asked you each time, with a warning, also under
+auto-approve. That holds a call back, and it leaves the answer to a prompt. On the owner's
+laptop a 9B model named an out-of-scope host in all 15 runs of the bench's scope tests;
+in a chat each of those would have been a prompt to deny. A program's out-of-scope list
+is not a thing to decide call by call.
+
+What is refused is what is out of scope for certain:
+
+- A host that a line without a path excludes (`payments.shop.example`,
+  `*.internal.shop.example`, an address, a network): every call that names it, whatever
+  the tool. A command is read for the hosts it names, as it is for the permission prompt.
+- An address under a line with a path (`www.shop.example/blog`): a call that says which
+  address it asks for, which `web_fetch`, `web_download`, the browser, Caido's send and
+  an MCP tool with one URL do. The model is told that this address is out, and not the
+  host.
+- **Not** a command that names a host which only a line with a path excludes. A command
+  hands the check no path, so it cannot be told whether it goes under that path: it asks
+  you, with the warning, as before.
+- **Not** a name whose address is on the list while the name is not. No name is looked up
+  to find that out (a lookup tells the name to a name server before anything was
+  allowed); the call asks you once its address is known, as before.
+- **Not** a host that is on neither list. It asks you, as before.
+
+A model that answers three refusals in a row with one more call to an out-of-scope host
+is stopped, with a line for you that names the host. A subagent's calls are held to the
+same.
+
+**Settings → Tools and permissions → Refuse calls to out-of-scope hosts** switches it
+off; such a call then asks you first, as it did. The guard reads the two lists of the
+target and changes neither. The bench runs no tool, so its scope tests still tell whether
+the model itself keeps to the scope; this is what stands between such a model and the
+host in a chat.
+
 ### Checking one host
 
 A call is asked about with "… is not in this target's in-scope list" or "… is on this
-target's out-of-scope list", and the prompt does not say which line did that. The target
+target's out-of-scope list", or refused with the latter, and neither says which line did that. The target
 form does. Open the target (the pencil in the sidebar), type the host, an address or a
 full URL into **Check a host against these lists** and press Enter. The answer is the
 verdict of the same check that runs on tool calls, the line that decides as you wrote
@@ -1324,9 +1365,11 @@ Whatever the setting, these always apply:
 - The project `.env` is never read or written by a tool. The database, `mcp.json`, and
   the folder of the bundled MCP servers are never written.
 - A call that carries one of HunterAI's API key values is denied.
-- A host on the target's out-of-scope list, a host not on its in-scope list, an address
-  on this machine or the local network, a path that usually holds credentials, and
-  arguments with invisible characters each force an ask with a warning.
+- A call that names a host on the target's out-of-scope list is not run ("A call to an
+  out-of-scope host is not run"; with that switched off it asks, with a warning).
+- A host not on the target's in-scope list, an address on this machine or the local
+  network, a path that usually holds credentials, and arguments with invisible characters
+  each force an ask with a warning.
 - A tool can never call HunterAI's own API. A shell command that names it always asks.
 - A `write` or `edit` that takes away a large part of a file asks first: 30 lines or more,
   or half or more of a file of 10 lines or more, or a file that is not text written over

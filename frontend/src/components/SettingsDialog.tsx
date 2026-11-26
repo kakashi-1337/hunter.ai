@@ -470,6 +470,11 @@ export function SettingsDialog({ onClose, onSetup }: { onClose: () => void; onSe
           <PolicyEditor policy={settings.permissions ?? {}} tools={tools}
             inherit={(risk) => `Mode default (${settings.presets?.pentesting?.[risk] ?? 'ask'} in pentesting)`}
             onChange={(permissions) => update({ permissions })} />
+          {settings.scope_refusal !== undefined && (
+            <label className="check"><input type="checkbox" checked={settings.scope_refusal} onChange={(e) => update({ scope_refusal: e.target.checked })} />
+              <span>Refuse calls to out-of-scope hosts: a call that names a host on its target's out-of-scope list is not run, and the model is told so. Nobody is asked. Switched off, such a call asks you first with a warning, as it did before.</span>
+            </label>
+          )}
           <label className="field"><span>Max model turns per run (1 to 200)</span>
             <input type="number" min={1} max={200} defaultValue={settings.max_turns}
               onBlur={(e) => { const n = Number(e.target.value); if (n !== settings.max_turns) void update({ max_turns: n }) }} />

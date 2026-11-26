@@ -18,7 +18,7 @@ from .providers import registry
 from .providers.base import (Options, ProviderError, Stop, TextDelta, ThinkingDelta,
                              ThinkingSeal, ToolCall, ToolSpec, Usage, WireMessage, safe_call_id)
 from .repo import chats, goals, messages, runs, settings, targets
-from .tools import loopguard, runner
+from .tools import loopguard, runner, scopeguard
 from .types import (NOT_FOR_MODELS, Block, ChangesBlock, ImageBlock, NoticeBlock, OwnerNoteBlock, TextBlock, ThinkingBlock,
                     ToolCallBlock, ToolResultBlock)
 
@@ -592,7 +592,8 @@ async def _tool_loop(conn, run_id: str, mid: str, chat, provider: str, model: st
         acc.last_flush = time.monotonic()
 
     turn, bad = 1, 0
-    guard = loopguard.Guard()          # this run's memory of calls that keep failing
+    # This run's memory of calls that keep failing, and around it the guard that refuses a call to an out-of-scope host.
+    guard = scopeguard.Guard(loopguard.Guard())
     while acc.calls:
         calls = list(acc.calls)
         if turn >= max_turns:
@@ -609,6 +610,7 @@ async def _tool_loop(conn, run_id: str, mid: str, chat, provider: str, model: st
                     content=f"Not run: more than {MAX_CALLS_PER_TURN} tool calls in one turn. "
                             "Send the remaining calls in your next turn."))
                 continue
+            await guard.judge(conn, chat.id, run_id, tc, names)
             outcome = await runner.call(conn, chat_id=chat.id, run_id=run_id, tc=tc,
                                         offered=names, publish=publish, guard=guard)
             await record(outcome.block)
