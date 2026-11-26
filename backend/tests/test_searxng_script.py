@@ -1,5 +1,9 @@
 """scripts/searxng.sh start, run for real against a stand-in for Docker: a container that cannot be reached is
-made again, and one that will not stay up says why. Before, both ended in one line of Docker's own."""
+made again, and one that will not stay up says why. Before, both ended in one line of Docker's own.
+
+A container can also be made right and still be out of reach: Docker 29 was seen running one that was attached to
+no network (`ports={} nets=`), with no published port, no address and no name lookups, and a restart kept it so.
+The script looks at what is published now, not only at how the container was made."""
 import os
 import shutil
 import subprocess
@@ -30,17 +34,29 @@ case "$1" in
     case "$args" in *"-p 127.0.0.1:8888:8080"*) echo "127.0.0.1:8888" > "$S/binding" ;; *) : > "$S/binding" ;; esac
     echo "${@: -1}" > "$S/image"
     [ -f "$S/dies" ] || touch "$S/running"
+    [ ! -f "$S/stuck" ] || touch "$S/detached"                   # this Docker attaches no container to a network
     echo 0123456789ab ;;
-  rm) rm -f "$S/exists" "$S/running" "$S/binding" "$S/image"; echo hunterai-searxng ;;
-  port)
-    if [ -f "$S/running" ] && [ -s "$S/binding" ]; then cat "$S/binding"; else echo "no public port '8080/tcp' published for $2" >&2; exit 1; fi ;;
+  rm) rm -f "$S/exists" "$S/running" "$S/binding" "$S/image" "$S/detached"; echo hunterai-searxng ;;
+  port)                                                          # what is published now, not how it was made
+    if [ -f "$S/running" ] && [ -s "$S/binding" ] && [ ! -f "$S/detached" ]; then cat "$S/binding"
+    else echo "no public port '8080/tcp' published for $2" >&2; exit 1; fi ;;
   logs) echo "settings.yml: line 3: mapping values are not allowed here" ;;
   stop) rm -f "$S/running" ;;
 esac
 '''
 CURL = r'''#!/usr/bin/env bash
-# Answers when the container runs and publishes 127.0.0.1:8888.
-[ -f "$FAKE/running" ] && [ "$(cat "$FAKE/binding" 2>/dev/null)" = "127.0.0.1:8888" ]
+# Answers when the container runs, publishes 127.0.0.1:8888 and is attached to its network. $FAKE/curl_says: what
+# it prints, failing, in place of an answer.
+echo "curl $*" >> "$FAKE/curl_calls"
+if [ -f "$FAKE/curl_says" ]; then cat "$FAKE/curl_says" >&2; exit 22; fi
+[ -f "$FAKE/running" ] && [ ! -f "$FAKE/detached" ] && [ "$(cat "$FAKE/binding" 2>/dev/null)" = "127.0.0.1:8888" ]
+'''
+
+
+CLOCK = r'''#!/usr/bin/env bash
+# The clock, which a test moves: every look at it is $FAKE/clock_step seconds later than the one before.
+now=$(( $(cat "$FAKE/clock" 2>/dev/null || echo 1000) + $(cat "$FAKE/clock_step" 2>/dev/null || echo 0) ))
+echo "$now" > "$FAKE/clock"; echo "$now"
 '''
 
 
@@ -50,11 +66,12 @@ def machine(tmp_path):
     tools, state, home = tmp_path / "tools", tmp_path / "state", tmp_path / "home"
     for d in (tools, state, home):
         d.mkdir()
-    for name, text in (("docker", DOCKER), ("curl", CURL), ("sleep", "#!/usr/bin/env bash\n")):
+    for name, text in (("docker", DOCKER), ("curl", CURL), ("date", CLOCK), ("sleep", "#!/usr/bin/env bash\n")):
         (tools / name).write_text(text)
         (tools / name).chmod(0o755)
 
-    def have(binding: str = "127.0.0.1:8888", image: str = IMAGE, running: bool = False, dies: bool = False):
+    def have(binding: str = "127.0.0.1:8888", image: str = IMAGE, running: bool = False, dies: bool = False,
+             detached: bool = False):
         (state / "exists").touch()
         (state / "binding").write_text(binding + "\n" if binding else "")
         (state / "image").write_text(image + "\n")
@@ -62,6 +79,8 @@ def machine(tmp_path):
             (state / "running").touch()
         if dies:
             (state / "dies").touch()
+        if detached:                        # made right, and attached to no network: no port of it is published
+            (state / "detached").touch()
 
     def run(*args):
         env = {**os.environ, "PATH": f"{tools}:{os.environ['PATH']}", "FAKE": str(state), "HUNTERAI_HOME": str(home)}
@@ -121,6 +140,69 @@ def test_a_container_that_does_not_stay_up_says_why(machine):
     assert code == 1
     assert said.splitlines() == ["searxng: the container hunterai-searxng stopped right after it was started. Its last lines:",
                                  "settings.yml: line 3: mapping values are not allowed here"]
+
+
+def test_a_container_that_runs_without_its_published_port_is_made_again(machine):
+    """It was made with the port, so how it was made says nothing is wrong. It is attached to no network."""
+    machine.have(running=True, detached=True)
+    code, said, calls = machine.run("start")
+    assert code == 0, said
+    made_again = ("searxng: the container hunterai-searxng runs, and Docker publishes no port for it: it is attached to no "
+                  "network, so nothing can reach it and it can look up no name. It is made again; its settings are kept in "
+                  f"{machine.home}/searxng.")
+    assert said.splitlines() == [made_again, "searxng: ready on http://127.0.0.1:8888"]
+    assert calls.count("docker rm -f hunterai-searxng") == 1 and len([c for c in calls if c.startswith("docker run ")]) == 1
+    assert calls.index("docker rm -f hunterai-searxng") > calls.index("docker start hunterai-searxng")
+
+
+def test_when_a_new_container_gets_no_port_either_the_script_says_what_to_do_and_stops(machine):
+    machine.have(running=True, detached=True)
+    (machine.state / "stuck").touch()
+    code, said, calls = machine.run("start")
+    assert code == 1
+    what_to_do = ("searxng: Docker publishes no port for the new container either. Restart Docker (sudo systemctl restart "
+                  "docker) and start HunterAI again.")
+    assert said.splitlines()[1:] == [what_to_do]
+    assert len([c for c in calls if c.startswith("docker run ")]) == 1          # made again once, not for ever
+    assert not (machine.state / "curl_calls").exists()                          # nothing is asked of a search nobody can reach
+
+
+def test_a_new_container_is_looked_at_too(machine):
+    """The first container of a machine whose Docker attaches none: the same sentence, and no second try."""
+    (machine.state / "stuck").touch()
+    code, said, calls = machine.run("start")
+    assert code == 1 and len([c for c in calls if c.startswith("docker run ")]) == 2 and "docker rm -f hunterai-searxng" in calls
+    assert said.splitlines()[-1].startswith("searxng: Docker publishes no port for the new container either.")
+
+
+def test_a_search_that_does_not_answer_says_what_the_last_try_got(machine):
+    machine.have()
+    (machine.state / "curl_says").write_text("curl: (22) The requested URL returned error: 403\n")
+    code, said, _ = machine.run("start")
+    assert code == 1
+    assert said.splitlines() == [
+        "searxng: not answering after 60 s. The last try: curl: (22) The requested URL returned error: 403",
+        "settings.yml: line 3: mapping values are not allowed here"]
+
+
+def test_every_try_has_a_time_limit(machine):
+    machine.have()
+    (machine.state / "curl_says").write_text("curl: (28) Operation timed out\n")
+    machine.run("start")
+    tries = (machine.state / "curl_calls").read_text().splitlines()
+    assert len(tries) == 60 and all(" -m 15 " in t for t in tries)
+    assert machine.run("status")[:2] == (1, "searxng: not running")
+    assert " -m 15 " in (machine.state / "curl_calls").read_text().splitlines()[-1]
+
+
+def test_tries_that_take_long_end_by_the_clock(machine):
+    """Sixty tries of fifteen seconds would be a quarter of an hour. The start gives up after a minute."""
+    machine.have()
+    (machine.state / "curl_says").write_text("curl: (28) Operation timed out after 15001 milliseconds\n")
+    (machine.state / "clock_step").write_text("25")
+    code, said, _ = machine.run("start")
+    assert code == 1 and said.splitlines()[0].startswith("searxng: not answering after 60 s. The last try: curl: (28)")
+    assert len((machine.state / "curl_calls").read_text().splitlines()) == 3      # at 25, 50 and 75 seconds
 
 
 def test_status_and_stop_are_what_they_were(machine):

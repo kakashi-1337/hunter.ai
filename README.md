@@ -1770,8 +1770,12 @@ started again.
 settings in `~/.hunterai/searxng/settings.yml`. It is left running when HunterAI stops;
 `scripts/searxng.sh stop` stops it. A container that cannot be reached (it publishes
 another address than `127.0.0.1:8888`, or none) or that was made from another version of
-the image is made again: it holds nothing, its settings are in that folder. One that does
-not stay up says why, with its last lines. `scripts/check-tools.sh` lists what the tools need.
+the image is made again: it holds nothing, its settings are in that folder. So is one that
+was made right and runs attached to no network of Docker: nothing is published for it then,
+it can look up no name, and a restart leaves it so (`docker port hunterai-searxng` shows
+nothing). One that does not stay up says why, with its last lines, and a search that does
+not answer within a minute says what the last try got. `scripts/check-tools.sh` lists what
+the tools need.
 
 **Before every answer.** Settings, "Knowledge base", has the switch "Ask the web before
 every answer". It is off until you switch it on. With it, HunterAI makes one search for
