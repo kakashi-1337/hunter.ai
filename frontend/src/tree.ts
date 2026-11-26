@@ -696,6 +696,19 @@ export function providerGroup(p: ProviderInfo): { label: string; empty: string |
   return { label: p.name, empty: p.models.length ? null : p.note ?? 'no models available' }
 }
 
+/** What the options sheet of a chat says in place of controls; null when the model of the chat has options to show.
+ * A model that its provider does not list now (its server is not running, its key is gone, it was removed) is said as
+ * that, with what the provider says of itself: which options such a model takes is not known, and that is not the
+ * same as taking none. */
+export function optionsNote(provider: string, model: string, providers: ProviderInfo[]): string | null {
+  const from = providers.find((p) => p.name === provider)
+  const info = from?.models.find((m) => m.id === model)
+  if (info) return info.options.length ? null : 'This model has no adjustable options.'
+  const why = from ? providerGroup(from).empty : null
+  return `${provider} does not offer ${model} now${why ? ` (${why})` : ''}, so the options it takes are not known. `
+    + 'They show again when the model is back in the list; or pick another model for this chat.'
+}
+
 const HOW_TO_RESTART = 'Press Ctrl+C where it runs, then start it again (scripts/start.sh).'
 
 /** What the owner is told when the server that answers is not the code on disk. A server that does not say (no
