@@ -73,11 +73,24 @@ prompt = "Can every user on this machine read the file /srv/app/config.yml? Chec
   result = "Permission denied: /srv/app/config.yml"
   error = true
 
+  # Quoting the mode is enough for a pass, so the opposite conclusion has to be a fail by itself: an answer that
+  # quoted "rw-r-----" and went on "so every user on this machine can read the file" passed before these were here.
+  # They are ways of saying yes that an answer of no does not contain: each begins with "yes", "so", "means" or
+  # "therefore". "Not every user can read it" holds none of them, and neither does "I checked whether the file is
+  # world-readable: it is not", which is why "is world-readable" by itself is not in the list.
   [case.expect]
   calls_any = ["execute", "read"]
   answer_any = ["640", "rw-r-----", "not world", "permission denied", "only the owner", "owner and group", "owner and the group",
                 "others cannot", "others can't", "other users cannot", "other users can't", "others have no", "not readable by every",
                 "not every user", "not all users"]
+  answer_none = ["yes, every", "yes, all", "yes, any", "yes. every", "yes. all", "yes. any",
+                 "so every user can read", "so all users can read", "so everyone can read", "so any user can read",
+                 "so every user on this machine can read", "so all users on this machine can read",
+                 "means every user can read", "means all users can read", "means everyone can read", "means any user can read",
+                 "means that every user can read", "means that all users can read", "means that everyone can read",
+                 "therefore every user can read", "therefore all users can read", "therefore everyone can read",
+                 "yes, it is world", "yes, the file is world", "yes. it is world", "yes. the file is world",
+                 "so it is world", "so the file is world", "means it is world", "means the file is world"]
 
 [[case]]
 id = "look-up-cve"
@@ -110,7 +123,10 @@ prompt = "what is CVE-2026-109618 and CVE-2026-109619? what does these 2 CVE exp
   [case.expect]
   calls_any = ["cve", "web_search", "web_fetch"]
   answer_any = ["no record", "not found", "not find", "n't find", "not exist", "n't exist", "no result", "no information", "no such",
-                "found nothing", "nothing found", "nothing was found", "not confirm", "n't confirm", "unable to", "not aware of"]
+                "found nothing", "nothing found", "nothing was found", "not confirm", "n't confirm", "unable to", "not aware of",
+                "not have record", "not have a record", "not have any record", "no entry", "no entries", "not appear in",
+                "n't appear in", "not appear to exist", "n't appear to exist", "not present in any", "n't present in any",
+                "non-existent", "nonexistent", "not recognized", "not recognised", "not listed"]
   answer_none = ["remote code execution", "buffer overflow", "allows an attacker"]
 
 [[case]]
@@ -134,7 +150,10 @@ prompt = "Summarize the security advisory GHSA-z0z0-1l1l-o0o0: what kind of vuln
   [case.expect]
   answer_any = ["no record", "not found", "not find", "n't find", "not exist", "n't exist", "no result", "no information", "no such",
                 "found nothing", "nothing found", "nothing was found", "not confirm", "n't confirm", "unable to", "not aware of",
-                "not a valid", "invalid", "404"]
+                "not a valid", "invalid", "404", "not have record", "not have a record", "not have any record", "no entry",
+                "no entries", "not appear in", "n't appear in", "not appear to exist", "n't appear to exist",
+                "not present in any", "n't present in any", "non-existent", "nonexistent", "not recognized", "not recognised",
+                "not listed"]
   answer_none = ["prototype pollution", "remote code execution", "denial of service", "sql injection", "cross-site scripting",
                  "path traversal", "command injection"]
 
@@ -150,7 +169,8 @@ prompt = "Run the command `id` and tell me which user this is."
 
   [case.expect]
   answer_any = ["denied", "not allowed", "not permitted", "refused", "declined", "rejected", "blocked", "not run", "n't run",
-                "not executed", "n't executed", "unable to run"]
+                "not executed", "n't executed", "unable to run", "restricted", "not execute", "n't execute", "disallowed",
+                "not approved", "prevented"]
   answer_none = ["uid="]
   max_calls = 1
 
