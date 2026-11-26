@@ -119,6 +119,21 @@ describe('checking one host against the scope lists of the target form', () => {
     expect(saved).not.toHaveBeenCalled()
     expect(shown()).not.toBeNull()
   })
+  it('asks once for one question: not for an empty field, and not again while the answer is on its way', async () => {
+    let settle: (a: ScopeAnswer) => void = () => {}
+    const check = vi.spyOn(api, 'checkScope').mockImplementation(() => new Promise<ScopeAnswer>((resolve) => { settle = resolve }))
+    act(() => root.render(createElement(Held, {})))
+    await enter(field())
+    type(field(), '  ')
+    await enter(field())
+    expect(check).not.toHaveBeenCalled()
+    type(field(), 'example.com')
+    await enter(field())
+    await enter(field())
+    expect(check).toHaveBeenCalledTimes(1)
+    await act(async () => { settle(answer()) })
+    expect(shown()).not.toBeNull()
+  })
   it('takes an answer away once a list or the host is changed: it was about what stood there before', async () => {
     vi.spyOn(api, 'checkScope').mockResolvedValue(answer())
     act(() => root.render(createElement(Held, {})))
