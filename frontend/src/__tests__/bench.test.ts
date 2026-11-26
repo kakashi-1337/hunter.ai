@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { GROUP_LABELS, benchLine, benchTable, cellOf, cloudLine, handChoice, modelNames, progressLine, seconds, sharedLine, sizeLine, stateWord, timeLine, verdictLine, verdictWord } from '../bench'
-import type { BenchMark, BenchMarkStatus, BenchProgress, BenchRun, ModelRef, SystemStatus } from '../types'
+import { GROUP_LABELS, benchLine, benchTable, cellOf, cloudLine, handChoice, judgeLine, judgingLine, modelNames, progressLine, seconds, sharedLine, sizeLine, stateWord, timeLine, verdictLine, verdictWord } from '../bench'
+import type { BenchJudging, BenchMark, BenchMarkStatus, BenchProgress, BenchRun, ModelRef, SystemStatus } from '../types'
 
 const A: ModelRef = { provider: 'ollama', model: 'hf.co/mradermacher/Huihui-Qwen3.5-9B-abliterated-GGUF:Q6_K' }
 const B: ModelRef = { provider: 'ollama', model: 'maternion/mimo-v2.6-heretic:9b-thinking-q6_K' }
@@ -20,21 +20,21 @@ const run = (over: Partial<BenchRun> = {}): BenchRun => ({
 
 describe('a cell of the table', () => {
   it('counts the runs that passed among those that were marked', () => {
-    expect(cellOf(marksOf('pass', 'pass', 'fail'))).toEqual({ passed: 2, counted: 3, errors: 0, skipped: 0, byHand: 0, text: '2/3', tone: 'mixed' })
+    expect(cellOf(marksOf('pass', 'pass', 'fail'))).toEqual({ passed: 2, counted: 3, errors: 0, skipped: 0, byHand: 0, toCheck: 0, text: '2/3', tone: 'mixed' })
     expect(cellOf(marksOf('pass', 'pass', 'pass'))).toMatchObject({ text: '3/3', tone: 'good' })
     expect(cellOf(marksOf('fail', 'fail', 'fail'))).toMatchObject({ text: '0/3', tone: 'bad' })
     expect(cellOf(marksOf('pass'))).toMatchObject({ text: '1/1', tone: 'good' })
   })
   it('keeps errors and skipped runs apart: they are neither a pass nor a fail', () => {
-    expect(cellOf(marksOf('pass', 'pass', 'error'))).toEqual({ passed: 2, counted: 2, errors: 1, skipped: 0, byHand: 0, text: '2/2 · 1 error', tone: 'good' })
+    expect(cellOf(marksOf('pass', 'pass', 'error'))).toEqual({ passed: 2, counted: 2, errors: 1, skipped: 0, byHand: 0, toCheck: 0, text: '2/2 · 1 error', tone: 'good' })
     expect(cellOf(marksOf('fail', 'error', 'error'))).toMatchObject({ text: '0/1 · 2 errors', tone: 'bad' })
     expect(cellOf(marksOf('pass', 'fail', 'skipped'))).toMatchObject({ text: '1/2 · 1 skipped', tone: 'mixed' })
-    expect(cellOf(marksOf('error', 'error'))).toEqual({ passed: 0, counted: 0, errors: 2, skipped: 0, byHand: 0, text: '2 errors', tone: 'none' })
+    expect(cellOf(marksOf('error', 'error'))).toEqual({ passed: 0, counted: 0, errors: 2, skipped: 0, byHand: 0, toCheck: 0, text: '2 errors', tone: 'none' })
     expect(cellOf(marksOf('error', 'skipped', 'skipped'))).toMatchObject({ text: '1 error · 2 skipped', tone: 'none' })
     expect(cellOf(marksOf('skipped', 'skipped', 'skipped'))).toMatchObject({ text: 'skipped', tone: 'none', skipped: 3 })
   })
   it('shows that nothing ran yet', () => {
-    expect(cellOf([])).toEqual({ passed: 0, counted: 0, errors: 0, skipped: 0, byHand: 0, text: '…', tone: 'none' })
+    expect(cellOf([])).toEqual({ passed: 0, counted: 0, errors: 0, skipped: 0, byHand: 0, toCheck: 0, text: '…', tone: 'none' })
   })
 })
 
@@ -197,6 +197,11 @@ describe('a bench of local models while another program holds a model in memory'
       `Ollama holds qwen3:8b and mimo:9b in memory now. The models of this bench that run on llama-server ${SLOW} `
       + 'To have one at a time, unload them first: `ollama stop qwen3:8b`, `ollama stop mimo:9b`.')
   })
+  it('says it of a judge in the words for one model', () => {
+    expect(sharedLine([A], status(held), true)).toBe(
+      `llama-server holds huihui-qwen3.5-9b in memory now. The judge, which runs on Ollama, ${SLOW} To have one at a time, stop llama-server first.`)
+    expect(sharedLine([A], status({ local_models: [{ name: 'qwen3:8b', vram_mb: 6000 }] }), true)).toBeNull()      // Ollama makes room among its own models
+  })
   it('names colibri too', () => {
     expect(sharedLine([A], status({ colibri: { model: 'qwen3.6-27b', context: 8192 } }))).toBe(
       `colibri holds qwen3.6-27b in memory now. The models of this bench that run on Ollama ${SLOW} To have one at a time, stop colibri first.`)
@@ -222,6 +227,51 @@ describe('a bench of local models while another program holds a model in memory'
   })
 })
 
+// After a bench has ended a judge model reads its answers. It changes no mark: where it and the mark that counts
+// differ, the cell says that there is something to check, and the owner decides.
+describe('what a judge model said of the answers', () => {
+  const read = (status: 'pass' | 'fail', judged: 'pass' | 'fail' | null, byHand: 'pass' | 'fail' | null = null, repeat = 1): BenchMark =>
+    ({ ...mark(A, 'c', repeat, status), judged, by_hand: byHand })
+  const judging = (over: Partial<BenchJudging> = {}): BenchJudging => ({ run_id: 'r1', provider: 'ollama', model: 'qwen3:8b', status: 'done',
+    note: '', total: 12, done: 12, created_at: '2026-11-27T10:00:00+00:00', ended_at: '2026-11-27T10:02:00+00:00', ...over })
+
+  it('is counted where it differs from the mark, and the marks stay as they are', () => {
+    expect(cellOf([read('fail', 'pass'), read('pass', 'pass', null, 2), read('pass', 'fail', null, 3)]))
+      .toEqual({ passed: 2, counted: 3, errors: 0, skipped: 0, byHand: 0, toCheck: 2, text: '2/3 · 2 to check', tone: 'mixed' })
+    expect(cellOf([read('fail', 'fail'), read('pass', null, null, 2)])).toMatchObject({ toCheck: 0, text: '1/2' })
+  })
+  it('is held against the mark the owner set, where he set one: what he decided is not to check again', () => {
+    expect(cellOf([read('fail', 'pass', 'pass')])).toMatchObject({ passed: 1, toCheck: 0, text: '1/1 · 1 by hand' })
+    expect(cellOf([read('fail', 'fail', 'pass')])).toMatchObject({ passed: 1, toCheck: 1, text: '1/1 · 1 by hand · 1 to check' })
+  })
+  it('is not counted for a run without a mark', () => {
+    expect(cellOf([{ ...mark(A, 'c', 1, 'error'), judged: 'pass' }])).toMatchObject({ toCheck: 0, text: '1 error' })
+  })
+  it('is named in the line of its run, with its reason and with whether it agrees', () => {
+    expect(judgeLine({ status: 'fail', judged: 'pass', judge_reason: 'It says nothing was found.' }))
+      .toEqual({ text: 'The judge says Pass: It says nothing was found.', differs: true })
+    expect(judgeLine({ status: 'pass', judged: 'pass', judge_reason: '' })).toEqual({ text: 'The judge says Pass.', differs: false })
+    expect(judgeLine({ status: 'fail', by_hand: 'pass', judged: 'pass', judge_reason: 'Right.' })).toEqual({ text: 'The judge says Pass: Right.', differs: false })
+    expect(judgeLine({ status: 'pass', judged: null, judge_error: 'its reply could not be read as one' })).toEqual({ text: 'The judge gave no verdict (its reply could not be read as one).', differs: false })
+    expect(judgeLine({ status: 'pass', judged: null, judge_error: null })).toBeNull()        // it was not asked about this run
+    expect(judgeLine({ status: 'pass' })).toBeNull()
+  })
+  it('says in a line who read the bench, how far, and how it ended', () => {
+    expect(judgingLine(judging(), 3)).toBe('Read by qwen3:8b: 12 of 12 answers, 3 to check.')
+    expect(judgingLine(judging(), 0)).toBe('Read by qwen3:8b: 12 of 12 answers, none to check.')
+    expect(judgingLine(judging({ status: 'running', done: 4 }), 1)).toBe('qwen3:8b is reading the answers: 4 of 12.')
+    expect(judgingLine(judging({ status: 'running', done: 4, doing: 'running' }), 1)).toBe('qwen3:8b is reading the answers: 4 of 12.')
+    expect(judgingLine(judging({ status: 'running', done: 4, doing: 'cooling' }), 1)).toBe('qwen3:8b is waiting for the machine to cool: 4 of 12 answers read.')
+    expect(judgingLine(judging({ status: 'cancelled', done: 4, doing: 'cooling' }), 1)).toBe('Read by qwen3:8b: 4 of 12 answers, 1 to check. Cancelled.')
+    expect(judgingLine(judging({ status: 'cancelled', done: 4 }), 1)).toBe('Read by qwen3:8b: 4 of 12 answers, 1 to check. Cancelled.')
+    expect(judgingLine(judging({ status: 'stopped', done: 3, note: 'The judge could not be asked three times in a row: Ollama not reachable' }), 0))
+      .toBe('Read by qwen3:8b: 3 of 12 answers, none to check. Stopped: The judge could not be asked three times in a row: Ollama not reachable')
+    expect(judgingLine(judging({ status: 'interrupted', done: 1, note: 'HunterAI stopped while this judging was running.' }), 0))
+      .toBe('Read by qwen3:8b: 1 of 12 answers, none to check. Interrupted: HunterAI stopped while this judging was running.')
+    expect(judgingLine(judging({ total: 1, done: 1 }), 1)).toBe('Read by qwen3:8b: 1 of 1 answer, 1 to check.')
+  })
+})
+
 // The rules of a set are lists of phrases, and a wording nobody thought of gets a wrong mark. The owner reads the
 // answer and sets the mark right; the table counts his mark and says that it holds one.
 describe('a mark the owner set by hand', () => {
@@ -229,7 +279,7 @@ describe('a mark the owner set by hand', () => {
 
   it('is the one a cell counts with, and the cell says how many it holds', () => {
     expect(cellOf([set('fail', 'pass'), ...marksOf('pass', 'fail')]))
-      .toEqual({ passed: 2, counted: 3, errors: 0, skipped: 0, byHand: 1, text: '2/3 · 1 by hand', tone: 'mixed' })
+      .toEqual({ passed: 2, counted: 3, errors: 0, skipped: 0, byHand: 1, toCheck: 0, text: '2/3 · 1 by hand', tone: 'mixed' })
     expect(cellOf([set('pass', 'fail'), set('pass', 'fail', 2)])).toMatchObject({ passed: 0, counted: 2, byHand: 2, text: '0/2 · 2 by hand', tone: 'bad' })
     expect(cellOf([set('fail', 'pass'), mark(A, 'c', 2, 'error'), mark(A, 'c', 3, 'skipped')]))
       .toMatchObject({ passed: 1, counted: 1, text: '1/1 · 1 error · 1 skipped · 1 by hand', tone: 'good' })

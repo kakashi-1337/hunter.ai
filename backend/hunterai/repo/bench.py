@@ -18,11 +18,13 @@ PROBLEM_CHARS = 300      # of what a refused call was told
 CALLS_KEPT = 50          # calls of one run; how many were made is kept beside them
 REASONS_KEPT = 40        # lines of one mark
 INTERRUPTED = "HunterAI stopped while this bench was running."
+JUDGING_INTERRUPTED = "HunterAI stopped while this judging was running."
 # A bench with what it was started with beside it, when that was more than its models, set and repeats
 RUNS = "select b.*, o.options_json from bench_runs b left join bench_options o on o.run_id = b.id"
 # A result with the mark its owner set by hand beside it, when he set one
-RESULTS = ("select r.*, c.status as by_hand, k.text as thinking from bench_results r"
-           " left join bench_corrections c on c.result_id = r.id left join bench_thinking k on k.result_id = r.id")
+RESULTS = ("select r.*, c.status as by_hand, k.text as thinking, j.verdict as judged, j.reason as judge_reason,"
+           " j.error as judge_error from bench_results r left join bench_corrections c on c.result_id = r.id"
+           " left join bench_thinking k on k.result_id = r.id left join bench_judgments j on j.result_id = r.id")
 
 
 class NotJudged(Exception):
@@ -64,6 +66,9 @@ class BenchResult(BaseModel):
     repeat: int
     status: Literal["pass", "fail", "error", "skipped"]        # what the rules of the set gave
     by_hand: Literal["pass", "fail"] | None = None             # what the owner says it is, where he set the mark right
+    judged: Literal["pass", "fail"] | None = None              # what a judge model said of the answer; it changes no mark
+    judge_reason: str = ""                                     # the judge's own sentence
+    judge_error: str | None = None                             # why the judge gave no verdict, when it was asked and gave none
     reasons: list[str]
     calls: list[CallBrief]
     calls_made: int
@@ -84,10 +89,25 @@ class Mark(BaseModel):
     repeat: int
     status: Literal["pass", "fail", "error", "skipped"]
     by_hand: Literal["pass", "fail"] | None = None
+    judged: Literal["pass", "fail"] | None = None
     turns: int
     input_tokens: int
     output_tokens: int
     duration_ms: int
+
+
+class Judging(BaseModel):
+    """The last time a judge model read the answers of a bench."""
+    run_id: str
+    provider: str
+    model: str
+    status: Literal["running", "done", "cancelled", "interrupted", "stopped"]
+    note: str
+    total: int          # the runs it was to read
+    done: int           # the runs it has read: those with a row of their own, whether it gave a verdict or not
+    created_at: str
+    ended_at: str | None
+    doing: Literal["running", "cooling"] | None = None      # while it runs: reading, or waiting for the machine. Not kept
 
 
 def _cut(text: str, most: int) -> str:
@@ -104,7 +124,8 @@ def _run(r) -> BenchRun:
 
 def _result(r) -> BenchResult:
     return BenchResult(id=r["id"], run_id=r["run_id"], provider=r["provider"], model=r["model"], case_id=r["case_id"],
-                       repeat=r["repeat"], status=r["status"], by_hand=r["by_hand"], reasons=json.loads(r["reasons_json"]),
+                       repeat=r["repeat"], status=r["status"], by_hand=r["by_hand"], judged=r["judged"],
+                       judge_reason=r["judge_reason"] or "", judge_error=r["judge_error"], reasons=json.loads(r["reasons_json"]),
                        calls=json.loads(r["calls_json"]), calls_made=r["calls_made"], answer=r["answer"],
                        thinking=r["thinking"] or "", turns=r["turns"],
                        input_tokens=r["input_tokens"], output_tokens=r["output_tokens"], duration_ms=r["duration_ms"],
@@ -199,8 +220,9 @@ async def results(conn, run_id: str) -> builtins.list[BenchResult]:
 async def marks(conn, run_id: str) -> builtins.list[Mark]:
     """Every result of a bench in the order they were added, as the table needs them."""
     rows = await (await conn.execute(
-        "select r.provider, r.model, r.case_id, r.repeat, r.status, c.status as by_hand, r.turns, r.input_tokens,"
-        " r.output_tokens, r.duration_ms from bench_results r left join bench_corrections c on c.result_id = r.id"
+        "select r.provider, r.model, r.case_id, r.repeat, r.status, c.status as by_hand, j.verdict as judged, r.turns,"
+        " r.input_tokens, r.output_tokens, r.duration_ms from bench_results r"
+        " left join bench_corrections c on c.result_id = r.id left join bench_judgments j on j.result_id = r.id"
         " where r.run_id=? order by r.rowid", (run_id,))).fetchall()
     return [Mark(**dict(r)) for r in rows]
 
@@ -223,6 +245,47 @@ async def delete(conn, run_id: str) -> bool:
     cur = await conn.execute("delete from bench_runs where id=?", (run_id,))
     await conn.commit()
     return cur.rowcount > 0
+
+
+# ---- a judge model's reading of the answers (bench/judging.py)
+
+async def start_judging(conn, run_id: str, ref: ModelRef, total: int) -> Judging:
+    """A judging of this bench begins: what a judging before it said is gone, whoever the judge was."""
+    await conn.execute("delete from bench_judgments where result_id in (select id from bench_results where run_id=?)", (run_id,))
+    await conn.execute(
+        "insert into bench_judgings(run_id,provider,model,status,note,total,created_at,ended_at) values(?,?,?,'running','',?,?,null)"
+        " on conflict(run_id) do update set provider=excluded.provider, model=excluded.model, status='running', note='',"
+        " total=excluded.total, created_at=excluded.created_at, ended_at=null", (run_id, ref.provider, ref.model, total, now()))
+    await conn.commit()
+    return await judging(conn, run_id)
+
+
+async def add_judgment(conn, result_id: str, verdict: str | None, reason: str = "", error: str | None = None) -> None:
+    await conn.execute(
+        "insert into bench_judgments(result_id,verdict,reason,error,created_at) values(?,?,?,?,?)"
+        " on conflict(result_id) do update set verdict=excluded.verdict, reason=excluded.reason, error=excluded.error,"
+        " created_at=excluded.created_at", (result_id, verdict, reason, error, now()))
+    await conn.commit()
+
+
+async def finish_judging(conn, run_id: str, status: str, note: str = "") -> None:
+    await conn.execute("update bench_judgings set status=?, note=?, ended_at=? where run_id=?", (status, note, now(), run_id))
+    await conn.commit()
+
+
+async def judging(conn, run_id: str) -> Judging | None:
+    r = await (await conn.execute(
+        "select g.*, (select count(*) from bench_judgments j join bench_results r on r.id = j.result_id where r.run_id = g.run_id)"
+        " as done from bench_judgings g where g.run_id=?", (run_id,))).fetchone()
+    return Judging(**dict(r)) if r else None
+
+
+async def interrupt_judgings(conn) -> int:
+    """At HunterAI's start: a judging that is still marked as running was cut off by the stop before. How many."""
+    cur = await conn.execute("update bench_judgings set status='interrupted', note=?, ended_at=? where status='running'",
+                             (JUDGING_INTERRUPTED, now()))
+    await conn.commit()
+    return cur.rowcount
 
 
 async def interrupt_running(conn) -> int:

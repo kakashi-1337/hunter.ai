@@ -102,11 +102,16 @@ def scripted(case: Case, tc: ToolCall) -> tuple[str, bool]:
     """(what the tool answers in this test, whether that is an error): the first entry of the case's script that
     names the tool and whose word, when it has one, stands in the arguments. With no such entry, a bookkeeping
     tool is answered neutrally, and any other tool is not available."""
-    said = json.dumps(tc.arguments, ensure_ascii=False, default=str).casefold()
+    return scripted_for(case, tc.name, json.dumps(tc.arguments, ensure_ascii=False, default=str))
+
+
+def scripted_for(case: Case, name: str, arguments: str) -> tuple[str, bool]:
+    """The same for a call that is known by its name and its arguments as JSON text: a stored call of a bench."""
+    said = arguments.casefold()
     for entry in case.tools:
-        if tc.name in entry.name and (entry.args_has is None or entry.args_has.casefold() in said):
+        if name in entry.name and (entry.args_has is None or entry.args_has.casefold() in said):
             return entry.result, entry.error
-    return (NOTED, False) if is_bookkeeping(tc.name) else (NOT_AVAILABLE, True)
+    return (NOTED, False) if is_bookkeeping(name) else (NOT_AVAILABLE, True)
 
 
 def _as_a_chat_reads_it(tc: ToolCall, names: Collection[str]) -> tuple[ToolCall, str | None]:
@@ -130,8 +135,12 @@ def _as_a_chat_reads_it(tc: ToolCall, names: Collection[str]) -> tuple[ToolCall,
     return tc, None
 
 
-async def _cool(model: str, tell: Tell | None) -> None:
-    """Waits while a part of this machine is at its limit, and raises TooHot when it does not cool in time.
+STOPPED = "The bench was stopped before the local model {model} was called. Let the machine cool and start the bench again."
+
+
+async def _cool(model: str, tell: Tell | None, stopped: str = STOPPED) -> None:
+    """Waits while a part of this machine is at its limit, and raises TooHot when it does not cool in time. `stopped`
+    is the sentence about what was stopped, for a caller that is no bench.
 
     A chat waits only before a call that loads a model. A bench waits before every call of a model that runs here:
     it is hours of calls with nobody watching, and a machine that is at its limit under them should get its pause."""
@@ -148,9 +157,8 @@ async def _cool(model: str, tell: Tell | None) -> None:
     if still is not None:
         raise cooling.TooHot(
             f"The {still.name} is at {still.degrees:.0f} °C and did not cool to {still.limit - thermal.MARGIN:.0f} °C within "
-            f"{cooling.WAIT / 60:.0f} minutes (its limit is {still.limit:.0f} °C). The bench was stopped before the local "
-            f"model {model} was called. Let the machine cool and start the bench again. {still.setting} sets the limit "
-            "in °C (off: no limit).")
+            f"{cooling.WAIT / 60:.0f} minutes (its limit is {still.limit:.0f} °C). {stopped.format(model=model)} "
+            f"{still.setting} sets the limit in °C (off: no limit).")
     if told and tell is not None:
         await tell("running")
 

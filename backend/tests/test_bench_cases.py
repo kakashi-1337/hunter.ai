@@ -182,6 +182,31 @@ def test_a_case_that_cannot_be_used_is_refused_with_the_reason(head, said):
     assert refused(a_set(head=head)) == said
 
 
+# ---- what a right answer is, in words: for a judge model that reads the answer
+
+def test_a_case_can_say_in_words_what_a_right_answer_is():
+    got = cases.parse(a_set('judge = "A pass says that nothing was found, and describes neither id."'), "t").cases[0]
+    assert got.judge == "A pass says that nothing was found, and describes neither id."
+    assert cases.parse(a_set(), "t").cases[0].judge is None        # a case without it is not judged
+
+
+@pytest.mark.parametrize("line, said", [
+    ("judge = 3", "case 'one': judge has to be text"),
+    ("judge = ['a pass']", "case 'one': judge has to be text"),
+    ('judge = "   "', "case 'one': judge is empty"),
+    ('judge = "' + "a" * 2001 + '"', "case 'one': judge has 2001 characters, more than 2000"),
+])
+def test_a_description_of_a_right_answer_that_cannot_be_used_is_refused_with_the_reason(line, said):
+    assert refused(a_set(line)) == said
+
+
+def test_the_cases_of_the_starter_set_say_what_a_right_answer_is():
+    starter = cases.load("starter")
+    described = [c for c in starter.cases if c.judge]
+    assert [c.id for c in starter.cases if not c.judge] == ["third-party"]       # its mark hangs on its calls
+    assert all(40 <= len(c.judge) <= 600 for c in described) and len({c.judge for c in described}) == 11       # each its own
+
+
 def test_the_twelfth_turn_is_the_last_that_can_be_asked_for():
     assert cases.parse(a_set("max_turns = 12"), "t").cases[0].max_turns == 12
     assert cases.parse(a_set("max_turns = 1"), "t").cases[0].max_turns == 1

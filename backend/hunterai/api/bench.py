@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field
 
 from .. import db
-from ..bench import cases, runner
+from ..bench import cases, judging, runner
 from ..bench.cases import CaseError
 from ..repo import bench as store
 from ..repo.bench import BenchRun, ModelRef
@@ -18,6 +18,9 @@ router = APIRouter(prefix="/api/bench")
 BUSY = "A bench is running. Wait for it or cancel it."
 RUNNING = "This bench is running. Cancel it first."
 NOT_JUDGED = "This run has no mark to set right: its model call failed, or it was skipped."
+JUDGING = "A judge is reading a bench. Wait for it or cancel it."
+JUDGING_THIS = "A judge is reading this bench. Cancel that first."
+JUDGE_BUSY = "A judging or a bench is running. Wait for it or cancel it."
 
 
 class ModelIn(BaseModel):
@@ -44,6 +47,17 @@ def _seen(run: BenchRun) -> BenchRun:
     return run
 
 
+async def _judging(conn, run_id: str):
+    """The last judging of a bench as it is shown: one the table still calls running while nothing runs it is over,
+    and one that runs says what it does now."""
+    stored = await store.judging(conn, run_id)
+    if stored is None or stored.status != "running":
+        return stored
+    if judging.running() != run_id:
+        return stored.model_copy(update={"status": "interrupted"})
+    return stored.model_copy(update={"doing": (judging.progress(run_id) or {}).get("doing", "running")})
+
+
 async def _bench(conn, run_id: str) -> BenchRun:
     run = await store.get(conn, run_id)
     if run is None:
@@ -59,6 +73,8 @@ async def list_sets():
 @router.post("/runs")
 async def start(body: StartIn):
     refs = [ModelRef(provider=m.provider, model=m.model) for m in body.models]
+    if judging.running() is not None:       # one model at a time on this machine: the judge is one
+        raise HTTPException(409, JUDGING)
     try:
         return await runner.start(db.connect, refs, body.set_id, body.repeats, body.thinking_off)
     except runner.Busy:
@@ -73,13 +89,15 @@ async def start(body: StartIn):
 
 @router.get("/runs")
 async def list_runs(conn=Depends(get_conn)):
-    return [{"run": _seen(run), "progress": runner.progress(run.id)} for run in await store.list(conn)]
+    return [{"run": _seen(run), "progress": runner.progress(run.id), "judging": judging.progress(run.id)}
+            for run in await store.list(conn)]
 
 
 @router.get("/runs/{rid}")
 async def get_run(rid: str, conn=Depends(get_conn)):
     run = await _bench(conn, rid)
-    return {"run": _seen(run), "marks": await store.marks(conn, rid), "progress": runner.progress(rid)}
+    return {"run": _seen(run), "marks": await store.marks(conn, rid), "progress": runner.progress(rid),
+            "judging": await _judging(conn, rid)}
 
 
 @router.get("/runs/{rid}/results")
@@ -101,6 +119,27 @@ async def set_mark(result_id: str, body: MarkIn, conn=Depends(get_conn)):
     return result
 
 
+@router.post("/runs/{rid}/judge")
+async def judge(rid: str, body: ModelIn, conn=Depends(get_conn)):
+    """A judge model reads the answers of this bench, which has ended. Its verdicts change no mark."""
+    await _bench(conn, rid)
+    try:
+        return await judging.start(db.connect, rid, ModelRef(provider=body.provider, model=body.model))
+    except judging.Busy:
+        raise HTTPException(409, JUDGE_BUSY) from None
+    except KeyError:
+        raise not_found("bench") from None
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from None
+
+
+@router.post("/runs/{rid}/judge/cancel", status_code=204)
+async def cancel_judging(rid: str, conn=Depends(get_conn)):
+    await _bench(conn, rid)
+    await judging.cancel(rid)       # one that is over has nothing to cancel, and that is fine
+    return Response(status_code=204)
+
+
 @router.post("/runs/{rid}/cancel", status_code=204)
 async def cancel(rid: str, conn=Depends(get_conn)):
     await _bench(conn, rid)
@@ -113,5 +152,7 @@ async def delete(rid: str, conn=Depends(get_conn)):
     await _bench(conn, rid)
     if runner.running() == rid:
         raise HTTPException(409, RUNNING)
+    if judging.running() == rid:
+        raise HTTPException(409, JUDGING_THIS)
     await store.delete(conn, rid)
     return Response(status_code=204)

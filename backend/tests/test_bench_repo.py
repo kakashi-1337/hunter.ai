@@ -81,7 +81,8 @@ async def test_the_marks_of_a_bench_are_its_results_without_answers_and_calls(co
     await bench.add_result(conn, made.id, MIMO, "c0", 1, "skipped", ["skipped"])
     first, second = await bench.marks(conn, made.id)
     assert first.model_dump() == {"provider": "ollama", "model": "qwen:9b", "case_id": "c0", "repeat": 1, "status": "pass",
-                                  "by_hand": None, "turns": 2, "input_tokens": 120, "output_tokens": 30, "duration_ms": 1500}
+                                  "by_hand": None, "judged": None, "turns": 2, "input_tokens": 120, "output_tokens": 30,
+                                  "duration_ms": 1500}
     assert (second.model, second.status, second.duration_ms) == ("mimo:9b", "skipped", 0)
     other = await bench.create(conn, a_set(), [QWEN], 1)
     assert await bench.marks(conn, other.id) == []

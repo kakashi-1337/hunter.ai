@@ -847,6 +847,8 @@ export interface BenchMark {
   status: BenchMarkStatus
   /** What the owner says the run is, where he set its mark right by hand. The table counts with it. */
   by_hand?: 'pass' | 'fail' | null
+  /** What a judge model said of the answer, after the bench had ended. It changes no mark. */
+  judged?: 'pass' | 'fail' | null
   turns: number
   input_tokens: number
   output_tokens: number
@@ -873,6 +875,9 @@ export interface BenchResult extends BenchMark {
   answer: string
   /** The end of what the model thought in its last call; '' when it did not think. Absent: a server from before it kept any. */
   thinking?: string
+  /** The judge's own sentence, and why it gave no verdict when it was asked and gave none. */
+  judge_reason?: string
+  judge_error?: string | null
   created_at: string
 }
 
@@ -892,8 +897,27 @@ export interface BenchProgress {
 export interface BenchListed {
   run: BenchRun
   progress: BenchProgress | null
+  /** How far a judge is with this bench, while one reads it. */
+  judging?: { done: number; total: number } | BenchJudging | null
+}
+
+/** The last time a judge model read the answers of a bench. */
+export interface BenchJudging {
+  run_id: string
+  provider: string
+  model: string
+  status: 'running' | 'done' | 'cancelled' | 'interrupted' | 'stopped'
+  note: string
+  /** The answers it was to read, and those it has read. */
+  total: number
+  done: number
+  created_at: string
+  ended_at: string | null
+  /** While it runs: whether it reads, or waits for the machine to cool before it asks a judge that runs here. */
+  doing?: 'running' | 'cooling' | null
 }
 
 export interface BenchDetail extends BenchListed {
   marks: BenchMark[]
+  judging?: BenchJudging | null
 }

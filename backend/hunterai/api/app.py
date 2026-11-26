@@ -10,6 +10,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 
 from .. import config, db, engine, mcp_manager, problems, procs, stale
+from ..bench import judging as bench_judging
 from ..bench import runner as bench_runner
 from ..tools import native
 from . import chats, findings, processes, providers, runs, search, settings, system, targets, tools, uploads
@@ -39,6 +40,7 @@ async def lifespan(app: FastAPI):
         await upstream.remember(conn)       # proxy passwords are scrubbed from tool output from the first call on
         await engine.recover(conn)
         await bench_runner.recover(conn)
+        await bench_judging.recover(conn)
         await procs.recover(conn)
     finally:
         await conn.close()
@@ -58,7 +60,10 @@ async def lifespan(app: FastAPI):
         # groups and MCP children are always ended.
         try:
             try:
-                await bench_runner.shutdown()   # before the runs of chats: a bench is the longer one
+                try:
+                    await bench_judging.shutdown()
+                finally:
+                    await bench_runner.shutdown()   # before the runs of chats: a bench is the longer one
             finally:
                 await engine.shutdown()
         finally:

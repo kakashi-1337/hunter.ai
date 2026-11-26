@@ -23,6 +23,7 @@ MAX_TURNS = 8           # model calls one test may take, unless the case says ot
 MAX_TURNS_CAP = 12      # ... and the most a case may ask for
 MAX_CASES = 200
 MAX_TEXT = 20_000       # characters of a prompt, and of one scripted result
+MAX_JUDGE = 2000        # characters of the description of a right answer
 MAX_FILE = 2_000_000    # bytes of an own file; a set of 200 short tests is a twentieth of this
 BRIEF_CHARS = 500       # of a prompt, in the lists the page shows
 SHOWN_CHARS = 80        # of a value of the file that a reason repeats
@@ -30,7 +31,7 @@ STARTER = "starter"
 OWN = "own:"            # the ids of the owner's own sets start with this; the rest is the file's name
 
 _ID = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
-_CASE_KEYS = ("id", "group", "prompt", "mode", "max_turns", "target", "tool", "expect")
+_CASE_KEYS = ("id", "group", "prompt", "mode", "max_turns", "judge", "target", "tool", "expect")
 _EXPECT_LISTS = ("calls_any", "calls_none", "answer_any", "answer_all", "answer_none")
 
 
@@ -80,6 +81,7 @@ class Case(_Model):
     target: CaseTarget | None = None
     tools: list[Scripted] = []
     max_turns: int = MAX_TURNS
+    judge: str | None = None    # what a right answer is, in words, for a judge model that reads the answer. None: not judged
     expect: Expect
 
 
@@ -228,12 +230,19 @@ def _case(raw: Any, number: int, seen: set[str]) -> Case:
     max_turns = _whole(raw.get("max_turns", MAX_TURNS), "max_turns", where)
     if not 1 <= max_turns <= MAX_TURNS_CAP:
         raise CaseError(f"{where}: max_turns is 1 to {MAX_TURNS_CAP}, not {max_turns}")
+    judge = raw.get("judge")
+    if judge is not None and not isinstance(judge, str):
+        raise CaseError(f"{where}: judge has to be text")
+    if judge is not None and not judge.strip():
+        raise CaseError(f"{where}: judge is empty")
+    if judge is not None and len(judge) > MAX_JUDGE:
+        raise CaseError(f"{where}: judge has {len(judge)} characters, more than {MAX_JUDGE}")
     target = _target(raw["target"], where) if "target" in raw else None
     tools = raw.get("tool", [])
     if not isinstance(tools, list) or not all(isinstance(t, dict) for t in tools):
         raise CaseError(f"{where}: tool has to be written as [[case.tool]]")
     return Case(id=ident, group=group, prompt=prompt, mode=mode, target=target,
-                tools=[_scripted(t, where) for t in tools], max_turns=max_turns,
+                tools=[_scripted(t, where) for t in tools], max_turns=max_turns, judge=judge,
                 expect=_expect(raw.get("expect", {}), where))
 
 

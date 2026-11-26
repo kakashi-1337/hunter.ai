@@ -155,6 +155,13 @@ async def _ask(provider_name: str, model: str, user: str, schema: dict,
     return text, usage
 
 
+async def ask_json(provider_name: str, model: str, system: str, user: str, schema: dict) -> tuple[dict | None, Usage]:
+    """One JSON object from this model, asked as the decision model is asked: no thinking, no temperature. None when
+    its reply holds none. KeyError for a provider that is not there; a ProviderError passes through."""
+    text, usage = await _ask(provider_name, model, user, schema, system)
+    return _parse(text), usage
+
+
 async def complete_json(conn, system: str, user: str, schema: dict, *,
                         allow_fallback: bool = True) -> tuple[dict | None, dict]:
     """One JSON answer from the decision model, with the default-then-fallback rule.

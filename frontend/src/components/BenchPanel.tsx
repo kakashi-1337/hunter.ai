@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import * as api from '../api'
-import { benchLine, benchTable, cloudLine, handChoice, modelNames, progressLine, seconds, sharedLine, sizeLine, stateWord, verdictLine } from '../bench'
+import { benchLine, benchTable, cloudLine, differs, handChoice, judgeLine, judgingLine, modelNames, progressLine, seconds, sharedLine, sizeLine, stateWord, verdictLine } from '../bench'
 import { confirmBox } from '../dialog'
 import { useStore } from '../store'
 import { visible } from '../tree'
@@ -9,6 +9,7 @@ import { Modal } from './Modal'
 
 const POLL_MS = 2000
 const keyOf = (ref: ModelRef) => `${ref.provider}\u0000${ref.model}`
+const nameOf = (ref: ModelRef) => `${ref.provider}/${ref.model}`
 const said = (e: unknown) => (e instanceof Error ? e.message : String(e))
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`
 
@@ -45,6 +46,7 @@ function CellDetail({ run, model, name, caseId, made, onMarked }: {
       {results && results.length === 0 && <div className="hint">This case has not run on this model yet.</div>}
       {results?.map((r) => {
         const choice = handChoice(r)
+        const judged = judgeLine(r)
         return (
         <div className="bench-run" key={r.id}>
           <div className="row">
@@ -53,6 +55,7 @@ function CellDetail({ run, model, name, caseId, made, onMarked }: {
             {choice && <button className="link bench-by-hand" onClick={() => void mark(r, choice.status)}
               title={choice.status ? 'The rules of a set are lists of phrases and can misread an answer. Your mark is counted, and what the rules said stays.' : 'Take your mark back: the run counts as the rules marked it.'}>{choice.label}</button>}
           </div>
+          {judged && <div className={`bench-judge${judged.differs ? ' differs' : ''}`}>{visible(judged.text)}</div>}
           {r.reasons.length > 0 && <ul className="bench-reasons">{r.reasons.map((line, i) => <li key={i}>{visible(line)}</li>)}</ul>}
           {r.calls.length > 0 && <ul className="bench-calls">{r.calls.map((c, i) => (
             <li className="mono" key={i}>{visible(c.name)} {visible(c.arguments)}{c.problem ? ` (not run: ${visible(c.problem)})` : ''}</li>))}</ul>}
@@ -86,13 +89,18 @@ export function BenchPanel({ onClose }: { onClose: () => void }) {
   const [busy, setBusy] = useState(false)
   const [machine, setMachine] = useState<SystemStatus | null>(null)       // what holds a model in memory now
   const [thinkingOff, setThinkingOff] = useState(false)                   // every call is asked without thinking
+  const [judge, setJudge] = useState('')                                  // the model that reads the answers of a bench that has ended
 
   const offered = useMemo(() => providers.filter((p) => p.configured && p.models.length > 0), [providers])
   const models: ModelRef[] = offered.flatMap((p) => p.models.map((m) => ({ provider: p.name, model: m.id }))).filter((ref) => picked.includes(keyOf(ref)))
   const set = sets.find((s) => s.id === setId) ?? null       // never one that cannot be used: such a set cannot be picked
-  const live = runs.some((r) => r.run.status === 'running') || opened?.run.status === 'running'
+  const reading = opened?.judging?.status === 'running'      // a judge reads the open bench now
+  const live = runs.some((r) => r.run.status === 'running') || opened?.run.status === 'running' || reading
+  const all: ModelRef[] = offered.flatMap((p) => p.models.map((m) => ({ provider: p.name, model: m.id })))
+  const judgeRef = all.find((ref) => nameOf(ref) === judge) ?? null
   const cloud = cloudLine(models)
   const shared = sharedLine(models, machine)
+  const sharedJudge = sharedLine(judgeRef ? [judgeRef] : [], machine, true)
 
   const open = useCallback(async (id: string) => {
     try { setOpened(await api.benchRun(id)) } catch (e) { setError(said(e)) }
@@ -109,7 +117,7 @@ export function BenchPanel({ onClose }: { onClose: () => void }) {
     let stop = false
     api.systemStatus().then((got) => { if (!stop) setMachine(got) }).catch(() => {})       // without it there is no warning, and that is all
     return () => { stop = true }
-  }, [pick])
+  }, [pick, judge])
 
   useEffect(() => {
     let stop = false
@@ -130,10 +138,10 @@ export function BenchPanel({ onClose }: { onClose: () => void }) {
   // While the opened bench runs, ask again every two seconds; when it has ended, the list learns its end too.
   const openedId = opened?.run.id, openedStatus = opened?.run.status
   useEffect(() => {
-    if (!opened || openedStatus !== 'running') return
+    if (!opened || (openedStatus !== 'running' && !reading)) return
     const timer = setTimeout(() => void open(opened.run.id), POLL_MS)
     return () => clearTimeout(timer)
-  }, [opened, openedStatus, open])
+  }, [opened, openedStatus, reading, open])
   useEffect(() => {
     if (!openedId || !openedStatus || openedStatus === 'running') return
     let stop = false
@@ -151,6 +159,15 @@ export function BenchPanel({ onClose }: { onClose: () => void }) {
     setCell(null)
     await open(started.id)
     await list()
+  })
+  const startJudging = (id: string) => act(async () => {
+    if (!judgeRef) return
+    await api.judgeBench(id, judgeRef)
+    await open(id)
+  })
+  const stopJudging = (id: string) => act(async () => {
+    await api.cancelJudging(id)
+    await open(id)
   })
   const cancel = (id: string) => act(async () => {
     await api.cancelBench(id)
@@ -219,7 +236,7 @@ export function BenchPanel({ onClose }: { onClose: () => void }) {
         </label>
         <span className="bench-size hint grow">{set ? sizeLine(models.length, set.cases.length, repeats) : ''}</span>
         <button className="btn primary" disabled={busy || live || !models.length || !set} onClick={() => void start()}
-          title={live ? 'A bench is running: one at a time' : undefined}>Run</button>
+          title={reading ? 'A judge is reading a bench: one at a time' : live ? 'A bench is running: one at a time' : undefined}>Run</button>
       </div>
       {cloud && <div className="bench-cloud">{cloud}</div>}
       {shared && <div className="bench-shared">{shared}</div>}
@@ -248,6 +265,20 @@ export function BenchPanel({ onClose }: { onClose: () => void }) {
           <div className="hint">{benchLine(run, opened!.marks.length)}</div>
           {run.note && <div className="bench-note">{run.note}</div>}
           {opened?.progress && <div className="bench-progress">{progressLine(opened.progress, run)}</div>}
+          {run.status !== 'running' && (
+            <div className="row">
+              <select aria-label="Judge" value={judge} disabled={reading} onChange={(e) => setJudge(e.target.value)}
+                title="A model that reads the answers of this bench, one after another, now that the bench has ended. It changes no mark: where it and a mark differ, the cell says that there is something to check.">
+                <option value="">Judge model…</option>
+                {all.map((ref) => <option key={keyOf(ref)} value={nameOf(ref)}>{nameOf(ref)}</option>)}
+              </select>
+              {reading
+                ? <button className="btn danger" disabled={busy} onClick={() => void stopJudging(run.id)}>Cancel judging</button>
+                : <button className="btn" disabled={busy || live || !judgeRef} onClick={() => void startJudging(run.id)}
+                    title={live ? 'A bench is running: one at a time' : undefined}>Judge this bench</button>}
+            </div>)}
+          {run.status !== 'running' && sharedJudge && <div className="bench-shared judge">{sharedJudge}</div>}
+          {opened?.judging && <div className="bench-judging">{judgingLine(opened.judging, opened.marks.filter(differs).length)}</div>}
           <table className="bench-table">
             <thead><tr><th></th>{run.models.map((m, i) => <th key={keyOf(m)} title={`${m.provider}/${m.model}`}>{names[i]}</th>)}</tr></thead>
             <tbody>
