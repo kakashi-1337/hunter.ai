@@ -59,6 +59,13 @@ export type Options = Partial<{
   top_p: number
   max_tokens: number
   context_window: number
+  top_k: number                // only the K likeliest tokens are considered
+  min_p: number                // tokens less likely than this share of the likeliest one are left out
+  repeat_penalty: number       // above 1: tokens that stand in the last tokens are less likely; 1: none
+  repeat_last_n: number        // how many tokens back the penalties look
+  presence_penalty: number     // for a token that stands there at all
+  frequency_penalty: number    // the more often it stands there
+  seed: number                 // the same seed gives the same answer to the same request
   effort: 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
   thinking: boolean
   thinking_budget: number

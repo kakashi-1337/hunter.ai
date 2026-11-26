@@ -1,3 +1,7 @@
+/** How the next token is chosen, as the servers for local models take it. A model names the ones its server takes
+ * among its options (ModelInfo.options), and only those are shown for it. */
+export const SAMPLING = ['top_k', 'min_p', 'repeat_penalty', 'repeat_last_n', 'presence_penalty', 'frequency_penalty', 'seed'] as const
+
 /** The usual effort values. A model that takes fewer says which (ModelInfo.efforts). */
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
 
