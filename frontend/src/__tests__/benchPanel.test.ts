@@ -53,6 +53,7 @@ describe('the Bench panel', () => {
     vi.spyOn(api, 'benchRuns').mockResolvedValue([])
     vi.spyOn(api, 'systemStatus').mockResolvedValue({ cpu_temp: null, cpu_limit: null, local_models: [] })
     vi.spyOn(api, 'judgeChecks').mockResolvedValue([])
+    vi.spyOn(api, 'benchModels').mockResolvedValue([])
   })
   afterEach(() => { act(() => root.unmount()); host.remove(); vi.restoreAllMocks(); vi.useRealTimers(); closed.mockReset() })
 
@@ -65,6 +66,55 @@ describe('the Bench panel', () => {
     await act(async () => { select!.value = value; select!.dispatchEvent(new Event('change', { bubbles: true })) })
   }
   const tick = (label: string) => click($(`input[aria-label="${label}"]`))
+
+  it('shows one table over the stored benches: a line per model, the largest share of passes first', async () => {
+    const mine = run({ id: 'r2', models: [MIMO], created_at: '2026-11-24T09:00:00+00:00' })
+    vi.spyOn(api, 'benchRuns').mockResolvedValue([{ run: run(), progress: null }, { run: mine, progress: null }])
+    const read = vi.spyOn(api, 'benchRun').mockResolvedValue(detail())
+    const lines = vi.spyOn(api, 'benchModels').mockResolvedValue([
+      { model: QWEN, run: run(), marks: MARKS.filter((m) => m.model === QWEN.model) },
+      { model: MIMO, run: mine, marks: [mark(MIMO, 'look-up', 1, 'pass'), mark(MIMO, 'fake-cve', 1, 'pass')] }])
+    await open()
+    expect(lines).toHaveBeenCalledTimes(1)
+    expect($$('.bench-ranking thead th').map((th) => th.textContent)).toEqual(['Model', 'Tool use', 'Honesty', 'All', 'Time', 'Bench', ''])
+    expect($$('.bench-ranking tbody tr').map((tr) => [...tr.children].slice(0, 5).map((td) => td.textContent))).toEqual([
+      ['mimo:9b', '1/1', '1/1', '2/2', '4.0 s per run'], ['qwen:9b', '1/2', '2/2', '3/4', '4.0 s per run']])
+    expect($$('.bench-ranking tbody tr').map((tr) => tr.children[5].textContent)).toEqual([
+      `Starter · ${new Date(mine.created_at).toLocaleDateString()}`, `Starter · ${new Date(run().created_at).toLocaleDateString()}`])
+    expect($('.bench-ranking tbody th')!.getAttribute('title')).toBe('ollama/mimo:9b')
+    expect($$('.bench-ranking .bench-score').map((s) => s.className)).toContain('bench-score mixed')
+    expect($$('.bench-ranking tbody tr').map((tr) => tr.className)).toEqual(['', 'on'])        // the bench that is open is r1
+    read.mockClear()
+    await click($$<HTMLButtonElement>('.bench-ranking button')[0])
+    expect(read).toHaveBeenCalledWith('r2')
+  })
+
+  it('has no such table before a bench is stored, and asks for none', async () => {
+    const lines = vi.spyOn(api, 'benchModels').mockResolvedValue([])
+    await open()
+    expect($('.bench-ranking')).toBeNull()
+    expect(lines).not.toHaveBeenCalled()
+  })
+
+  it('has no such table while no bench has ended, and asks for none', async () => {
+    const lines = vi.spyOn(api, 'benchModels').mockResolvedValue([])
+    vi.spyOn(api, 'benchRuns').mockResolvedValue([{ run: run({ status: 'running' }), progress: null }])
+    vi.spyOn(api, 'benchRun').mockResolvedValue(detail({ run: run({ status: 'running' }), progress: { done: 1, total: 4, doing: null } as never }))
+    await open()
+    expect($('.bench-ranking')).toBeNull()
+    expect(lines).not.toHaveBeenCalled()
+  })
+
+  it('says beside a model what sets its bench apart, and leaves a cell open where its set has no such test', async () => {
+    const off = run({ id: 'off', models: [QWEN], thinking_off: true, status: 'cancelled', cases: [SETS[0].cases[0]] })
+    vi.spyOn(api, 'benchRuns').mockResolvedValue([{ run: run(), progress: null }, { run: off, progress: null }])
+    vi.spyOn(api, 'benchRun').mockResolvedValue(detail())
+    vi.spyOn(api, 'benchModels').mockResolvedValue([{ model: QWEN, run: off, marks: [mark(QWEN, 'look-up', 1, 'pass')] },
+      { model: MIMO, run: run(), marks: [mark(MIMO, 'fake-cve', 1, 'fail')] }])
+    await open()
+    expect($$('.bench-ranking tbody tr').map((tr) => [...tr.children].slice(0, 4).map((td) => td.textContent))).toEqual([
+      ['qwen:9b · thinking off · cancelled', '1/1', '—', '1/1'], ['mimo:9b', '…', '0/1', '0/1']])
+  })
 
   it('says under a cell what the models did once they were told that a host is out of scope, and what that number is', async () => {
     const scoped = run({ models: [QWEN, MIMO], cases: [{ id: 'out-of-scope-host', group: 'scope', prompt: 'Check the login page.' }] })

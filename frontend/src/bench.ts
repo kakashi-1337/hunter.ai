@@ -1,5 +1,5 @@
 // What the Bench panel shows, worked out from what the server sends. No React here: these are tested as they are.
-import type { BenchCall, BenchJudging, BenchMark, BenchMarkStatus, BenchProgress, BenchResult, BenchRun, BenchStatus, CheckedAnswer, JudgeCheck, ModelRef, SystemStatus } from './types'
+import type { BenchCall, BenchJudging, BenchMark, BenchModelLine, BenchMarkStatus, BenchProgress, BenchResult, BenchRun, BenchStatus, CheckedAnswer, JudgeCheck, ModelRef, SystemStatus } from './types'
 
 /** The groups of cases in the order the table shows them. */
 export const GROUP_LABELS: Record<string, string> = { 'tool-use': 'Tool use', honesty: 'Honesty', scope: 'Scope', stopping: 'Stopping' }
@@ -245,4 +245,48 @@ export function handChoice(r: Marked): { label: string; status: 'pass' | 'fail' 
   if (r.status !== 'pass' && r.status !== 'fail') return null
   if (r.by_hand) return { label: 'Undo', status: null }
   return r.status === 'fail' ? { label: 'Count as pass', status: 'pass' } : { label: 'Count as fail', status: 'fail' }
+}
+
+export interface ModelsTable {
+  /** The groups that head the columns between the model and the whole. */
+  groups: { group: string; label: string }[]
+  rows: {
+    key: string
+    runId: string
+    model: ModelRef
+    name: string
+    set: string
+    when: string
+    /** What sets this bench apart: asked without thinking, ended early. */
+    notes: string[]
+    /** One per group of the table. null where the set of this line has no test of that group. */
+    cells: (Cell | null)[]
+    all: Cell
+    time: string
+  }[]
+}
+
+/** One table over the stored benches: a line per model with its newest bench, the largest share of passes first. Of
+ * two with the same share the one with more marked runs comes first, and a line without a marked run comes last. */
+export function modelsTable(lines: BenchModelLine[]): ModelsTable {
+  const same = (a: ModelRef, b: ModelRef) => a.provider === b.provider && a.model === b.model
+  const refs = lines.map((l) => l.model).filter((m, i, all) => all.findIndex((o) => same(o, m)) === i)
+  const names = modelNames(refs)
+  const used = lines.flatMap((l) => l.run.cases.map((c) => c.group))
+  const groups = [...new Set([...Object.keys(GROUP_LABELS), ...used])].filter((g) => used.includes(g)).map((group) => ({ group, label: GROUP_LABELS[group] ?? group }))
+  const rows = lines.map((l) => {
+    const groupOf = new Map(l.run.cases.map((c) => [c.id, c.group]))
+    const own = l.marks.filter((m) => groupOf.has(m.case_id))
+    const has = new Set(groupOf.values())
+    return {
+      key: `${l.run.id} ${l.model.provider}/${l.model.model}`, runId: l.run.id, model: l.model, name: names[refs.findIndex((o) => same(o, l.model))],
+      set: l.run.set_name, when: l.run.created_at,
+      notes: [...(l.run.thinking_off ? ['thinking off'] : []), ...(l.run.status !== 'done' ? [stateWord(l.run.status).toLowerCase()] : [])],
+      cells: groups.map(({ group }) => (has.has(group) ? cellOf(own.filter((m) => groupOf.get(m.case_id) === group)) : null)),
+      all: cellOf(own), time: timeLine(own),
+    }
+  })
+  const share = (c: Cell) => (c.counted ? c.passed / c.counted : -1)
+  rows.sort((a, b) => share(b.all) - share(a.all) || b.all.counted - a.all.counted || a.name.localeCompare(b.name))
+  return { groups, rows }
 }

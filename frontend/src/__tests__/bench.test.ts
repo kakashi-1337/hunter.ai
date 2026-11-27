@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { GROUP_LABELS, benchLine, benchTable, callNote, cellOf, checkLine, checkScore, cloudLine, handChoice, judgeLine, judgingLine, modelNames, progressLine, seconds, sharedLine, sizeLine, stateWord, timeLine, verdictLine, verdictWord, wrongLine, wrongOnes } from '../bench'
-import type { BenchJudging, BenchMark, BenchMarkStatus, BenchProgress, BenchRun, CheckedAnswer, JudgeCheck, ModelRef, SystemStatus } from '../types'
+import { GROUP_LABELS, benchLine, benchTable, callNote, cellOf, checkLine, checkScore, cloudLine, handChoice, judgeLine, judgingLine, modelNames, modelsTable, progressLine, seconds, sharedLine, sizeLine, stateWord, timeLine, verdictLine, verdictWord, wrongLine, wrongOnes } from '../bench'
+import type { BenchJudging, BenchMark, BenchMarkStatus, BenchModelLine, BenchProgress, BenchRun, CheckedAnswer, JudgeCheck, ModelRef, SystemStatus } from '../types'
 
 const A: ModelRef = { provider: 'ollama', model: 'hf.co/mradermacher/Huihui-Qwen3.5-9B-abliterated-GGUF:Q6_K' }
 const B: ModelRef = { provider: 'ollama', model: 'maternion/mimo-v2.6-heretic:9b-thinking-q6_K' }
@@ -399,5 +399,67 @@ describe('the check of a judge model', () => {
       'one-step 3 is a fail, and the judge gave no verdict (its reply could not be read as one).',
       'one-step 4 is a fail, and the judge gave no verdict.',
     ])
+  })
+})
+
+describe('one table over the stored benches', () => {
+  const C: ModelRef = { provider: 'colibri', model: 'qwen3.6-colibri' }
+  const [SHORT_A, SHORT_B] = ['Huihui-Qwen3.5-9B-abliterated-GGUF:Q6_K', 'mimo-v2.6-heretic:9b-thinking-q6_K']
+  const line = (model: ModelRef, marks: BenchMark[], over: Partial<BenchRun> = {}): BenchModelLine => ({ model, run: run({ models: [model], ...over }), marks })
+
+  it('has a line per model with its marks by group and for the whole, the largest share of passes first', () => {
+    const t = modelsTable([
+      line(A, [mark(A, 'look-up', 1, 'pass'), mark(A, 'fake-cve', 1, 'fail'), mark(A, 'empty', 1, 'fail')], { id: 'ra' }),
+      line(B, [mark(B, 'look-up', 1, 'pass', 3000), mark(B, 'fake-cve', 1, 'pass', 5000), mark(B, 'empty', 1, 'fail', 4000)], { id: 'rb', set_name: 'My tests' })])
+    expect(t.groups).toEqual([{ group: 'tool-use', label: 'Tool use' }, { group: 'honesty', label: 'Honesty' }])
+    expect(t.rows.map((r) => [r.name, r.runId, r.cells.map((c) => c?.text), r.all.text, r.time, r.set, r.when, r.notes])).toEqual([
+      [SHORT_B, 'rb', ['1/1', '1/2'], '2/3', '4.0 s per run', 'My tests', '2026-11-23T10:00:00+00:00', []],
+      [SHORT_A, 'ra', ['1/1', '0/2'], '1/3', '1.0 s per run', 'Starter', '2026-11-23T10:00:00+00:00', []]])
+    expect(t.rows.map((r) => r.model)).toEqual([B, A])
+    expect(new Set(t.rows.map((r) => r.key)).size).toBe(2)
+  })
+
+  it('puts the line with more marked runs first among equal shares, then by name, and a line without a mark last', () => {
+    const t = modelsTable([
+      line(A, [mark(A, 'look-up', 1, 'error')]),
+      line(B, [mark(B, 'look-up', 1, 'pass')]),
+      line(C, [mark(C, 'look-up', 1, 'pass'), mark(C, 'empty', 1, 'pass')]),
+      line({ provider: 'ollama', model: 'aaa' }, [mark({ provider: 'ollama', model: 'aaa' }, 'look-up', 1, 'pass')]),
+      line({ provider: 'ollama', model: 'zero' }, [mark({ provider: 'ollama', model: 'zero' }, 'look-up', 1, 'fail')])])
+    expect(t.rows.map((r) => r.name)).toEqual(['qwen3.6-colibri', 'aaa', SHORT_B, 'zero', SHORT_A])
+    expect(t.rows[4].all.text).toBe('1 error')
+  })
+
+  it('says what sets a bench apart: asked without thinking, or ended early', () => {
+    const t = modelsTable([line(A, [mark(A, 'look-up', 1, 'pass')], { id: 'off', thinking_off: true }),
+      line(A, [mark(A, 'look-up', 1, 'fail')], { id: 'cut', status: 'cancelled' }),
+      line(B, [mark(B, 'look-up', 1, 'fail')], { id: 'both', status: 'interrupted', thinking_off: true })])
+    expect(t.rows.map((r) => [r.runId, r.name, r.notes])).toEqual([['off', SHORT_A, ['thinking off']], ['cut', SHORT_A, ['cancelled']],
+      ['both', SHORT_B, ['thinking off', 'interrupted']]])
+    expect(new Set(t.rows.map((r) => r.key)).size).toBe(3)
+  })
+
+  it('leaves a cell open where the set of a line has no test of that group, and names the group of an own set', () => {
+    const own = line(B, [mark(B, 'one', 1, 'pass')], { id: 'own', set_name: 'My tests', cases: [{ id: 'one', group: 'recon', prompt: 'p' }] })
+    const t = modelsTable([line(A, [mark(A, 'look-up', 1, 'pass')], { id: 'ra' }), own])
+    expect(t.groups.map((g) => g.label)).toEqual(['Tool use', 'Honesty', 'recon'])
+    expect(t.rows.find((r) => r.runId === 'own')!.cells.map((c) => c?.text ?? null)).toEqual([null, null, '1/1'])
+    expect(t.rows.find((r) => r.runId === 'ra')!.cells.map((c) => c?.text ?? null)).toEqual(['1/1', '…', null])
+  })
+
+  it('counts only the marks of the tests the bench was started with', () => {
+    const t = modelsTable([line(A, [mark(A, 'look-up', 1, 'pass'), mark(A, 'gone-since', 1, 'fail')])])
+    expect([t.rows[0].all.text, t.rows[0].time]).toEqual(['1/1', '1.0 s per run'])
+  })
+
+  it('names two models whose short names are the same by more of their names', () => {
+    const X: ModelRef = { provider: 'ollama', model: 'x/qwen:9b' }, Y: ModelRef = { provider: 'ollama', model: 'y/qwen:9b' }
+    const t = modelsTable([line(X, [mark(X, 'look-up', 1, 'pass')], { id: 'x1' }), line(X, [mark(X, 'look-up', 1, 'pass')], { id: 'x2', thinking_off: true }),
+      line(Y, [mark(Y, 'look-up', 1, 'fail')], { id: 'y' })])
+    expect(t.rows.map((r) => r.name)).toEqual(['x/qwen:9b', 'x/qwen:9b', 'y/qwen:9b'])
+  })
+
+  it('is empty without a line', () => {
+    expect(modelsTable([])).toEqual({ groups: [], rows: [] })
   })
 })

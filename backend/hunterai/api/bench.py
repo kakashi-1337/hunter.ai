@@ -109,6 +109,12 @@ async def list_runs(conn=Depends(get_conn)):
             for run in await store.list(conn)]
 
 
+@router.get("/models")
+async def list_models(conn=Depends(get_conn)):
+    """One table over the stored benches: a line per model with its newest bench, and the model's marks in it."""
+    return [{"model": line.model, "run": _seen(line.run), "marks": line.marks} for line in await store.newest(conn)]
+
+
 @router.get("/runs/{rid}")
 async def get_run(rid: str, conn=Depends(get_conn)):
     run = await _bench(conn, rid)

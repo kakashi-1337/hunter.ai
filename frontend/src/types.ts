@@ -916,6 +916,13 @@ export interface BenchProgress {
   doing: 'running' | 'cooling'
 }
 
+/** The newest bench of a model with a set, for the table over all stored benches: the bench, and the model's marks in it. */
+export interface BenchModelLine {
+  model: ModelRef
+  run: BenchRun
+  marks: BenchMark[]
+}
+
 export interface BenchListed {
   run: BenchRun
   progress: BenchProgress | null

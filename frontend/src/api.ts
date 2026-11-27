@@ -8,7 +8,7 @@ import type {
   ChatKb, Collection, Job, JobAction, KbDocument, KbHealth, KbHit, KbStatus, UploadResult,
   Chat, Finding, Goal, Grant, McpStatus, Message, Mode, Options, PermissionDecision, PermissionRequest, ProcessInfo, ProviderInfo,
   BriefResult, RunDetail, RunSummary, ScopeAnswer, SearchHit, Settings, StartedRun, Target, ToolInfo, Upload,
-  BenchDetail, BenchJudging, BenchListed, BenchResult, BenchRun, BenchSet, JudgeCheck, JudgeCheckDetail, ModelRef,
+  BenchDetail, BenchJudging, BenchListed, BenchModelLine, BenchResult, BenchRun, BenchSet, JudgeCheck, JudgeCheckDetail, ModelRef,
 } from './types'
 
 export class ApiError extends Error {
@@ -260,6 +260,8 @@ export const startBench = (models: ModelRef[], set_id: string, repeats: number, 
   request<BenchRun>('POST', '/api/bench/runs', { models, set_id, repeats, thinking_off: thinkingOff })
 export const benchRuns = () => request<BenchListed[]>('GET', '/api/bench/runs')
 export const benchRun = (id: string) => request<BenchDetail>('GET', `/api/bench/runs/${id}`)
+/** A line per model: its newest bench with a set that has ended, with the model's marks in it. */
+export const benchModels = () => request<BenchModelLine[]>('GET', '/api/bench/models')
 /** The runs of one case on one model, with their lines, calls and answers. */
 export const benchCell = (id: string, model: ModelRef, caseId: string) =>
   request<BenchResult[]>('GET', `/api/bench/runs/${id}/results${q({ provider: model.provider, model: model.model, case_id: caseId })}`)
