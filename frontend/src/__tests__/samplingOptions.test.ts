@@ -159,10 +159,29 @@ describe('the sampling options of a chat', () => {
     expect([input('Presence penalty').value, input('Presence penalty').min, input('Presence penalty').max]).toEqual(['0', '-2', '2'])
     expect([input('Frequency penalty').value, input('Frequency penalty').min, input('Frequency penalty').max]).toEqual(['0', '-2', '2'])
     expect([input('Min P').value, input('Min P').min, input('Min P').max]).toEqual(['0', '0', '1'])
-    expect(input('Temperature').value).toBe('0')                 // the sliders that were there rest where they did
+    expect([input('Temperature').value, input('Temperature').min, input('Temperature').max]).toEqual(['1', '0', '2'])
+    expect([input('Top P').value, input('Top P').min, input('Top P').max, input('Top P').step]).toEqual(['1', '0.05', '1', '0.05'])
+    expect(['Temperature', 'Top P'].map((label) => field(label)!.querySelector('output')!.textContent)).toEqual(['—', '—'])
     expect(['Min P', 'Repeat penalty', 'Presence penalty', 'Frequency penalty'].map((label) => input(label).step)).toEqual(['0.01', '0.05', '0.1', '0.1'])
     expect(field('Repeat penalty')!.querySelector('output')!.textContent).toBe('—')
     expect(field('Repeat penalty')!.querySelector<HTMLButtonElement>('button')!.disabled).toBe(true)
+  })
+
+  it('offers no Top P of 0, which a server that checks what it is sent refuses', async () => {
+    await open()
+    expect(Number(input('Top P').min)).toBeGreaterThan(0)
+    await type(input('Top P'), '0.05')
+    expect(saved.pop()).toEqual({ top_p: 0.05 })
+    expect(field('Top P')!.querySelector('output')!.textContent).toBe('0.05')
+  })
+
+  it('shows a Top P of 0 that a chat still has as set, and takes it back with its reset', async () => {
+    install({ ...CHAT, options: { top_p: 0 } })
+    await open()
+    expect(field('Top P')!.querySelector('output')!.textContent).toBe('0')
+    await act(async () => { field('Top P')!.querySelector<HTMLButtonElement>('button')!.click() })
+    expect(saved.pop()).toEqual({})
+    expect(input('Top P').value).toBe('1')
   })
 
   it('drops them when the chat moves to a model that does not take them', () => {

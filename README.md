@@ -2172,6 +2172,23 @@ the wheel over it, and typing 16000 saved 1 first. A chat with that limit ends e
 after one token, with "The answer was cut off at the 1 output token this chat allows" under
 it. If a chat of yours says so, empty the field and send "continue".
 
+### A slider in Options
+
+Temperature, Top P, Min P and the three penalties are sliders. One that is not set shows
+"—" beside it and stands at the value that changes nothing: 1 for Temperature, Top P and
+Repeat penalty, 0 for Min P and the two other penalties. Moving a slider sets it for the
+chat, and **reset** beside it takes the setting back and leaves it to the model.
+
+Top P starts at 0.05. Until 27 November 2026 it started at 0, and Temperature and Top P
+stood at 0 while they were not set, so a slider that was moved and put back where it had
+stood was set to 0. colibri refuses a Top P of 0 in its own words ("`top_p` must be greater
+than 0 and at most 1"). A chat that still has that value shows 0 beside the slider: press
+its reset, or move it.
+
+When a server refuses a request and its words name an option of the chat (`top_p`,
+`temperature`, `max_tokens` and so on), the line under the answer says which setting under
+Options that is.
+
 ### Sampling, for a local model
 
 For a model of Ollama or of your llama-server, Options has seven more settings under
@@ -2416,7 +2433,8 @@ An error says what is wrong and what to do about it.
   connection, the proxy for model providers), Ollama that does not answer (`ollama serve`,
   `ollama ps`), colibri that does not answer (`./start-here.sh` in its folder, the address
   under Settings), llama-server that does not answer (start it, the address under
-  Settings), a request the provider did not accept (the model list, Options).
+  Settings), a request the provider did not accept (the model list, Options; when its
+  words name an option of the chat, the setting under Options that it is).
 - **An answer that did not end by itself** has a line under it: cut off at the "Max output
   tokens" of the chat, at the model's own limit for one answer, by the full context window
   of a local model (which holds the request and the answer together), or ended by the

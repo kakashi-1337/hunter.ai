@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import math
+import re
 import time
 import traceback
 from pathlib import Path
@@ -16,6 +17,12 @@ _PLACES = ("body", "query", "path", "header", "cookie")       # where FastAPI fo
 COLIBRI = "colibri"         # the provider that is a server of the owner's with one model: other things can be done about its errors
 LLAMACPP = "llamacpp"       # the owner's llama-server: he starts it, with the model and the context he chooses
 _SPOKEN = {LLAMACPP: ("llama.cpp", "llama-server")}     # how a provider is named in words, where its name in the code is none
+# What a chat sets under Options, by the name a server uses for it when it refuses one, with what the sheet calls it.
+OPTIONS = {"temperature": "Temperature", "top_p": "Top P", "max_tokens": "Max output tokens", "top_k": "Top K",
+           "min_p": "Min P", "repeat_penalty": "Repeat penalty", "repeat_last_n": "Repeat last N (tokens)",
+           "presence_penalty": "Presence penalty", "frequency_penalty": "Frequency penalty", "seed": "Seed",
+           "enable_thinking": "Thinking", "reasoning_effort": "Reasoning effort"}
+_OPTION = re.compile(r"(?<![a-z_])(" + "|".join(OPTIONS) + r")(?![a-z0-9_])")       # the name alone, not as a part of a longer one
 
 
 def _one(error: dict) -> str:
@@ -81,6 +88,10 @@ def _advice(e, who: str | None) -> str:
                     "it starts), then send the message again.")
         return ("It could not be reached, or it failed on its side: check the internet connection (and the proxy for model "
                 "providers under Settings, if you set one), then send the message again.")
+    named = _OPTION.search(text)
+    if named:                                       # the words name something the chat itself sets: that is where to change it
+        return (f"That is {OPTIONS[named.group(1)]} under Options: give it a value the model's server takes, or unset it there "
+                "to leave it to the model's default, then send the message again.")
     if who == COLIBRI:                              # it serves one model: there is no other one to pick in the list
         return ("colibri did not accept the request as it was sent: its words say what the model it serves does not do. For "
                 "tools or pictures, have it serve another model (./start-here.sh --reconfigure in the colibri folder).")

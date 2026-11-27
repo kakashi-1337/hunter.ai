@@ -1,4 +1,6 @@
 """An error says what is wrong and what to do about it, in words the owner can act on."""
+from pathlib import Path
+
 import httpx
 import pytest
 from pydantic import ValidationError
@@ -136,6 +138,71 @@ def test_a_request_the_provider_does_not_accept_points_at_the_model_and_the_opti
     assert problems.model_call(failed("bad_request", "HTTP 404: model gpt-9 does not exist", status=404)) == (
         "openai: HTTP 404: model gpt-9 does not exist. The provider did not accept the request as it was sent: if its words name "
         "the model, pick another one; if they name an option, change it under Options.")
+
+
+# ---- a refusal that names an option of the chat
+
+TOP_P = "HTTP 400: `top_p` must be greater than 0 and at most 1."       # colibri's words for a Top P of 0
+WHERE = "give it a value the model's server takes, or unset it there to leave it to the model's default, then send the message again."
+
+
+def test_a_refusal_that_names_an_option_of_the_chat_says_where_it_is_set():
+    assert problems.model_call(failed("bad_request", TOP_P, status=400, provider="colibri")) == (
+        f"colibri: HTTP 400: `top_p` must be greater than 0 and at most 1. That is Top P under Options: {WHERE}")
+
+
+@pytest.mark.parametrize("provider", ["colibri", "llamacpp", "ollama", "openai"])
+def test_where_a_refused_option_is_set_is_said_for_every_provider(provider):
+    said = problems.model_call(failed("bad_request", TOP_P, status=400, provider=provider))
+    assert said.endswith(f"That is Top P under Options: {WHERE}")
+    assert "serve another model" not in said and "pick another one" not in said and "chat template" not in said
+
+
+@pytest.mark.parametrize("words, label", [
+    ("Invalid 'temperature': decimal above maximum value", "Temperature"),
+    ("`max_tokens` must be at least 1", "Max output tokens"),
+    ("top_k must be positive", "Top K"),
+    ("min_p is out of range", "Min P"),
+    ("Error: repeat_penalty must be > 0.0", "Repeat penalty"),
+    ("repeat_last_n must be >= -1", "Repeat last N (tokens)"),
+    ("presence_penalty must be between -2 and 2", "Presence penalty"),
+    ("frequency_penalty must be between -2 and 2", "Frequency penalty"),
+    ("seed must be a whole number", "Seed"),
+    ("`enable_thinking` is not something this model takes", "Thinking"),
+    ("reasoning_effort 'max' is not one of low, medium, high", "Reasoning effort"),
+])
+def test_a_refused_option_is_called_what_the_options_sheet_calls_it(words, label):
+    assert problems.model_call(failed("bad_request", f"HTTP 400: {words}", status=400)).endswith(f"That is {label} under Options: {WHERE}")
+
+
+def test_every_name_the_advice_uses_for_an_option_stands_on_the_options_sheet():
+    sheet = (Path(problems.__file__).parents[2] / "frontend/src/components/AdvancedOptions.tsx").read_text(encoding="utf-8")
+    assert len(problems.OPTIONS) == 12
+    for label in problems.OPTIONS.values():
+        assert f'label="{label}"' in sheet or f"<span>{label}</span>" in sheet, label
+
+
+def test_the_first_option_the_words_name_is_the_one_that_is_said():
+    said = problems.model_call(failed("bad_request", "HTTP 400: top_p and temperature cannot both be set", status=400))
+    assert "That is Top P under Options" in said and "Temperature" not in said
+
+
+def test_a_longer_name_that_holds_the_name_of_an_option_is_not_that_option():
+    for words in ("max_tokens_to_sample is required", "the reseed failed", "no_top_p", "top_p2 is unknown"):
+        said = problems.model_call(failed("bad_request", f"HTTP 400: {words}", status=400))
+        assert said.endswith("if they name an option, change it under Options."), words
+
+
+def test_a_refusal_that_names_no_option_keeps_the_advice_for_its_provider():
+    said = problems.model_call(failed("bad_request", "HTTP 400: this model does not take tools", status=400, provider="colibri"))
+    assert said.endswith("For tools or pictures, have it serve another model (./start-here.sh --reconfigure in the colibri folder).")
+
+
+def test_a_failure_of_another_kind_that_names_an_option_keeps_the_advice_for_its_kind():
+    said = problems.model_call(failed("unavailable", "HTTP 500: the top_p sampler failed", status=500, provider="colibri"))
+    assert "It failed on its side" in said and "under Options" not in said
+    said = problems.model_call(failed("rate_limit", "HTTP 429: max_tokens per minute reached", status=429))
+    assert "limits how often" in said and "under Options" not in said
 
 
 def test_an_error_that_already_says_what_to_do_is_left_as_it_is():
