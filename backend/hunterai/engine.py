@@ -791,7 +791,8 @@ async def _name_skills(conn, run_id: str, system: str, asked: str, embedded, cal
 async def _ending(chat, provider_name: str, model: str, acc: _Attempt) -> NoticeBlock | None:
     """The word for the owner when the last model call did not end by itself: cut off at a limit, or ended by the
     provider's filter. The answer looks finished otherwise, and stops in the middle of a sentence. And when it ended
-    with thinking only: there is no answer then, and the page would show a turn that says nothing."""
+    with thinking only, or with nothing at all: there is no answer then, and the page would show a turn that says
+    nothing."""
     try:
         options = Options(**(chat.options or {}))
         if acc.window:              # the run raised it: that is the window the answer was written in
@@ -806,6 +807,8 @@ async def _ending(chat, provider_name: str, model: str, acc: _Attempt) -> Notice
             return NoticeBlock(kind=said[0], text=said[1])
         if problems.only_thought(acc.items[acc.last:], acc.stop):
             return NoticeBlock(kind="no_answer", text=problems.no_answer(acc.quiet, acc.refused))
+        if problems.said_nothing(acc.items[acc.last:]):
+            return NoticeBlock(kind="no_answer", text=problems.nothing_written(acc.produced))
         return None
     except Exception:  # noqa: BLE001 - the run is done; a word that cannot be made is left out
         return None

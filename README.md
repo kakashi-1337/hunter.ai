@@ -2136,6 +2136,26 @@ were given on thinking. That small model does not end a turn with thinking only 
 (it thinks until it is cut off), so the second call as a whole was tried against a stand-in
 server, and not yet with the 9B model it was built for.
 
+#### A turn that is nothing at all
+
+A model can also end a turn by itself with nothing a chat can show: no text, no thinking and
+no tool call, though it wrote a few tokens. The page used to show a turn that says nothing,
+and a run that looked as if it had just stopped. Reported on 27 November 2026 with
+DeepHat-V1-7B on the owner's laptop, where the log of the model's server showed a call that
+wrote 6 tokens.
+
+A line under such a turn now says so: "The model ended its turn without an answer: it wrote
+6 tokens, and no text or tool call came of them. Send the message again, or pick another
+model for this chat."
+
+- HunterAI does not ask such a turn again by itself: nothing about the second call would be
+  different.
+- What the tokens were, HunterAI cannot say. The model's server hands over text and tool
+  calls, and these tokens became neither: blank lines, for one, or a list of tool calls with
+  no call in it.
+- A turn that was cut off at a limit or ended by a filter keeps its own line, and so does a
+  turn of thinking only.
+
 ### A number in Options
 
 "Max output tokens", "Context window", "Thinking budget", Top K, Repeat last N and Seed are
