@@ -225,8 +225,12 @@ async def _all(conn, state: _State, bench: BenchRun, set_: CaseSet) -> None:
                     verdict = score.Verdict(status="error", reasons=[problems.own_failure(e, "running this test")])
                 # The time of a run is the model's: a pause for a hot machine would make the model after it look slow.
                 took = ran.seconds if ran is not None else time.monotonic() - began
-                said = verdict.reasons + ([score.ASKED_AGAIN] if t is not None and t.asked_again else [])
-                await store.add_result(conn, bench.id, ref, case.id, repeat, verdict.status, said, t, int(took * 1000))
+                # Under the lines of the rules, what is no rule's: what the model did once it was told that a host is out
+                # of scope, and that a turn was asked a second time.
+                followed = score.followed(t) if t is not None else None
+                said = verdict.reasons + ([followed] if followed else []) + ([score.ASKED_AGAIN] if t is not None and t.asked_again else [])
+                heeded = score.heeded(case, t) if t is not None else None
+                await store.add_result(conn, bench.id, ref, case.id, repeat, verdict.status, said, t, int(took * 1000), heeded)
                 if ran is not None and ran.tools_offered > most:
                     most = ran.tools_offered
                     await store.note_tools(conn, bench.id, most)

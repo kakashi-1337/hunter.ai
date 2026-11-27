@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import * as api from '../api'
-import { benchLine, benchTable, checkLine, checkScore, cloudLine, differs, handChoice, judgeLine, judgingLine, modelNames, progressLine, seconds, sharedLine, sizeLine, stateWord, verdictLine, wrongLine, wrongOnes } from '../bench'
+import { THEN_LEGEND, benchLine, benchTable, callNote, checkLine, checkScore, cloudLine, differs, handChoice, judgeLine, judgingLine, modelNames, progressLine, seconds, sharedLine, sizeLine, stateWord, verdictLine, wrongLine, wrongOnes } from '../bench'
+import type { Cell } from '../bench'
 import { confirmBox } from '../dialog'
 import { useStore } from '../store'
 import { visible } from '../tree'
@@ -17,6 +18,11 @@ const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`
  * calls and the answer, so a mark can be seen for what it is. A mark the rules got wrong can be set right here:
  * `onMarked` is called after it, for the table to be counted again. `rule`: how the test is judged, in its own
  * words, for the owner who decides: as the bench kept them, or as the set says them now for a bench from before. */
+/** Under the mark of a cell: what the models did once they were told that a host is out of scope. */
+function ThenLine({ cell }: { cell: Cell }) {
+  return cell.then && <span className={`bench-then ${cell.then.tone}`} title={THEN_LEGEND}>{cell.then.text}</span>
+}
+
 function CellDetail({ run, model, name, caseId, made, rule, onMarked }: {
   run: BenchRun; model: ModelRef; name: string; caseId: string; made: number; rule: string | null; onMarked: () => void
 }) {
@@ -60,7 +66,7 @@ function CellDetail({ run, model, name, caseId, made, rule, onMarked }: {
           {judged && <div className={`bench-judge${judged.differs ? ' differs' : ''}`}>{visible(judged.text)}</div>}
           {r.reasons.length > 0 && <ul className="bench-reasons">{r.reasons.map((line, i) => <li key={i}>{visible(line)}</li>)}</ul>}
           {r.calls.length > 0 && <ul className="bench-calls">{r.calls.map((c, i) => (
-            <li className="mono" key={i}>{visible(c.name)} {visible(c.arguments)}{c.problem ? ` (not run: ${visible(c.problem)})` : ''}</li>))}</ul>}
+            <li className="mono" key={i}>{visible(c.name)} {visible(c.arguments)}{visible(callNote(c))}</li>))}</ul>}
           {r.calls_made > r.calls.length && <div className="hint">{r.calls.length === 1 ? 'The first call' : `The first ${r.calls.length} calls`} of {r.calls_made} {r.calls.length === 1 ? 'is' : 'are'} shown.</div>}
           {r.status !== 'skipped' && (r.answer ? <pre>{visible(r.answer)}</pre> : <div className="hint">No answer.</div>)}
           {r.thinking && (
@@ -345,7 +351,7 @@ export function BenchPanel({ onClose }: { onClose: () => void }) {
             <thead><tr><th></th>{run.models.map((m, i) => <th key={keyOf(m)} title={`${m.provider}/${m.model}`}>{names[i]}</th>)}</tr></thead>
             <tbody>
               {table.groups.flatMap((g) => [
-                <tr className="bench-group" key={g.group}><th>{g.label}</th>{g.totals.map((c, i) => <td key={i}><span className={`bench-cell ${c.tone}`}>{c.text}</span></td>)}</tr>,
+                <tr className="bench-group" key={g.group}><th>{g.label}</th>{g.totals.map((c, i) => <td key={i}><span className={`bench-cell ${c.tone}`}>{c.text}</span><ThenLine cell={c} /></td>)}</tr>,
                 ...g.rows.map((row) => (
                   <tr key={`${g.group}/${row.caseId}`}>
                     <th title={row.prompt}>{row.caseId}</th>
@@ -354,15 +360,17 @@ export function BenchPanel({ onClose }: { onClose: () => void }) {
                         <button className={`bench-cell ${c.tone}`} aria-label={`${row.caseId} on ${names[i]}: ${c.text}`}
                           aria-pressed={shownCell?.caseId === row.caseId && keyOf(shownCell.model) === keyOf(run.models[i])}
                           onClick={() => setCell({ model: run.models[i], caseId: row.caseId })}>{c.text}</button>
+                        <ThenLine cell={c} />
                       </td>
                     ))}
                   </tr>
                 )),
               ])}
-              <tr className="bench-all"><th>All</th>{table.totals.map((c, i) => <td key={i}><span className={`bench-cell ${c.tone}`}>{c.text}</span></td>)}</tr>
+              <tr className="bench-all"><th>All</th>{table.totals.map((c, i) => <td key={i}><span className={`bench-cell ${c.tone}`}>{c.text}</span><ThenLine cell={c} /></td>)}</tr>
               <tr className="bench-all"><th>Time</th>{table.times.map((t, i) => <td key={i}>{t}</td>)}</tr>
             </tbody>
           </table>
+          {table.totals.some((c) => c.then) && <div className="hint bench-then-legend">{THEN_LEGEND}</div>}
           {!shownCell && <div className="hint">Press a cell to see its runs: what the model called, what it answered, and which rule did not hold. A mark the rules got wrong can be set right there.</div>}
           {shownCell && <CellDetail key={`${run.id}/${keyOf(shownCell.model)}/${shownCell.caseId}`} run={run} model={shownCell.model} caseId={shownCell.caseId}
             name={names[run.models.findIndex((m) => keyOf(m) === keyOf(shownCell.model))]}

@@ -853,6 +853,10 @@ export interface BenchMark {
   by_hand?: 'pass' | 'fail' | null
   /** What a judge model said of the answer, after the bench had ended. It changes no mark. */
   judged?: 'pass' | 'fail' | null
+  /** A call of this run went to a host on the out-of-scope list of the test's target, and the model was told so as a
+   * chat tells it. True: it then made no such call again and gave the answer the test asks for. Null or not there: no
+   * call of the run was refused (or the run broke). It changes no mark. */
+  heeded?: boolean | null
   turns: number
   input_tokens: number
   output_tokens: number
@@ -865,6 +869,8 @@ export interface BenchCall {
   arguments: string
   /** What the model was told when a chat would not have run the call. */
   problem: string | null
+  /** The out-of-scope hosts for which the scope guard of a chat would not have run it: `problem` is its refusal then. */
+  refused?: string[]
 }
 
 /** One run with what it left behind. */
