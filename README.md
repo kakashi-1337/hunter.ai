@@ -620,7 +620,7 @@ Tab to complete, Enter to take the highlighted row, Escape to close the list.
 | `/stop` | Stops the run. |
 | `/go`, `/go coding` | Approves a plan: puts the chat back in the mode the work is done in and tells the model to carry it out. |
 | `/skills` | Opens the list of skills. |
-| `/plan <task>`, `/audit <what>`, `/debug <what>`, `/fix <what>`, and every skill you add | Starts the skill: the line goes to the model together with the skill's instructions. See [Skills](#skills). |
+| `/plan <task>`, `/audit <what>`, `/debug <what>`, `/fix <what>`, `/profundis <domain>`, and every skill you add | Starts the skill: the line goes to the model together with the skill's instructions. See [Skills](#skills). |
 
 A value that fits nothing, or more than one thing, is not sent: the line under the
 composer says what there is. While the agent works, only `/new` and `/stop` run. A line
@@ -634,7 +634,7 @@ A skill is a set of instructions for a kind of work, in the Agent Skills shape: 
 `SKILL.md` with a name, a description and the instructions, and optionally other files
 beside it. Its name is its slash command.
 
-Four come built in. You can edit, switch off or delete each of them.
+Five come built in. You can edit, switch off or delete each of them.
 
 | Skill | What the model does |
 |---|---|
@@ -642,6 +642,13 @@ Four come built in. You can edit, switch off or delete each of them.
 | `/audit` | Audits a codebase or a change: maps entry points and trust boundaries, follows input to where it is used, and reports only findings it can back with a file, a line and a way to reproduce, ordered by severity. |
 | `/debug` | Finds the cause before any fix: reads the whole error, reproduces it, narrows it down, tests one hypothesis at a time, and proves the fix with a test that failed for the reason found. |
 | `/fix` | Fixes a bug or a failing test in steps that can each be taken back: makes the fault visible with a check, changes one thing, runs the check, and takes a change that did not work back out before it tries the next (by editing it back, never with `git checkout`, `reset`, `stash` or `clean`, which would also throw away your own work). It does not make a check pass by weakening it, stops after three changes that did not work, and reports the cause, the change and the output that proves it. The command puts the chat in coding mode, where the list of what the run changed, its Undo, and the folder's check stand under the answer (see [Undo what a run changed](#undo-what-a-run-changed-coding-mode)). |
+| `/profundis` | Passive recon of a target with the [`profundis` tool](#profundis) and nothing else: this machine sends nothing to the target, every lookup goes to Profundis. It takes the domains from your message (`/profundis example.com`) or from the target's in-scope list, makes no lookup for a name on the out-of-scope list, goes from the cheapest lookup to the dearest (`hosts`, then `dns` and `vhosts`, then `subdomains`), and reports a table of what was found with each name's place in the scope, at most ten names worth a closer look (each "seen by Profundis, not checked"), the names not to be touched, and what the calls cost. It tests nothing and stops after the report. It needs `PROFUNDIS_API_KEY`, and it leaves the chat in the mode it is in. |
+
+**What "passive" rests on.** A skill is instructions: it cannot take a tool away from the
+model. Behind `/profundis` stand the permission rules, as behind every run: a tool that
+reaches out asks you first unless you have allowed it for the chat, and in plan mode a
+command or a write cannot run at all. A model that calls another tool in spite of the
+skill is stopped there, by you, and not by the skill.
 
 A built-in skill that is new in a later version arrives once, with the update. One you
 deleted stays deleted, one you rewrote stays as you wrote it, and a skill of your own
@@ -1747,11 +1754,34 @@ CISA list is kept for a day in `~/.hunterai/cache`.
 ### Profundis
 
 With `PROFUNDIS_API_KEY` in `.env`, the `profundis` tool searches Profundis scan data:
-hosts, dns, vhosts, whois, subdomains, one domain's addresses, ASN. Every call spends
-credits of your account; the permission prompt says how many, and "allow for this chat"
-is per action. A subdomains call is capped at 3 credits unless the model asks for more
-(at most 50). Without the key the tool is not offered. It has not been run against the
-live API yet: the request and answer shapes follow the published API description.
+hosts, dns, vhosts, whois, subdomains, one domain's addresses, ASN. Without the key the
+tool is not offered. Profundis gives an API key to an account with a paid plan or with
+bought credits; the monthly credits of a free account do not count.
+
+Every call spends credits of your account. The permission prompt says how many, and
+"allow for this chat" is per action and covers the calls that cost what the prompt
+showed:
+
+| Call | Credits |
+|---|---|
+| `hosts`, `dns`, `vhosts` | 1 a page |
+| `whois` | 3 a page, or more |
+| a page after the third | 1 more for each block of ten pages (pages 4 to 13 one, 14 to 23 two). Asks again. |
+| `subdomains` | 10 for the first 100 names, then 1 for each 50. A call spends at most its limit: 10 unless the model asks for more, 50 at most. A higher limit asks again. |
+| `domain` | 1, and 1 more for each address found, 26 at most. Asks every time. |
+| `asn` | 1 |
+
+Until 27 November 2026 a subdomains call had a limit of 3 credits unless the model named
+one. By the API description Profundis sends no name under a limit below 10, so such a
+call would come back with "0 names", which reads like a domain without subdomains. The
+limit is now 10, and a lower one is refused before anything is asked.
+
+The tool was written from the published API description (docs.profundis.io, last read on
+27 November 2026) and not against the live API: the request and answer shapes and the
+prices follow that description. When a price changes there, the prompt is wrong until the
+tool follows; your Profundis account has the last word on what a call cost.
+
+For passive recon of a target with this tool, there is the [`/profundis` skill](#skills).
 
 ### Images for a model without eyes
 

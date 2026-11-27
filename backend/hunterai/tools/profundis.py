@@ -5,7 +5,10 @@ The key is read from PROFUNDIS_API_KEY for each call and sent as a header only; 
 put into a URL, a result, or an error. Every call spends credits of the owner's account,
 which is why each action has its own "allow for this chat" answer and why the cost is in
 the permission prompt. What comes back was collected from hosts on the Internet: it is
-data about them, not instructions."""
+data about them, not instructions.
+
+The prices are the ones the API description gave on 27 November 2026 (docs.profundis.io:
+"API usage", "Subdomain enumeration", and the costs in the MCP "Tools reference")."""
 from __future__ import annotations
 
 import ipaddress
@@ -22,11 +25,11 @@ KEY_NAME = "PROFUNDIS_API_KEY"
 SEARCHES = ("hosts", "dns", "vhosts", "whois")
 ACTIONS = (*SEARCHES, "subdomains", "domain", "asn")
 PATHS = {"subdomains": "subdomains", "domain": "domains/details", "asn": "asn/details"}
-COST = {"hosts": "1 credit", "dns": "1 credit", "vhosts": "1 credit", "whois": "3 credits or more",
-        "domain": "about 1 credit per address found (10 or more is common; there is no limit to set)", "asn": "1 credit"}
+COST = {"hosts": 1, "dns": 1, "vhosts": 1, "whois": 3, "asn": 1}     # credits of one call; a WHOIS search "starts at" its price
 MAX_QUERY_BYTES = 512
 DEFAULT_PER_PAGE = 10
-DEFAULT_MAX_CREDITS = 3
+DEFAULT_MAX_CREDITS = 10     # of a subdomains call: what up to the first 100 names cost. Under a lower limit Profundis
+#                              sends no name at all, and "0 names" reads like a domain that has none.
 MAX_CHARS = 24_000           # of one result given to the model
 MAX_NAMES = 3000             # subdomains kept from one stream
 MAX_STREAM_BYTES = 2 * 1024**2
@@ -74,6 +77,12 @@ def _asn(question: str) -> dict:
         return {"question": "partial_name", "partial_name": question}
 
 
+def _extra(page: int) -> int:
+    """The credits a deep page costs on top of its search: none for pages 1 to 3, then one for each block of ten
+    pages (4 to 13 one, 14 to 23 two, page 100 ten)."""
+    return -(-max(0, page - 3) // 10)
+
+
 def request(args: dict) -> tuple[str, dict]:
     """(path, JSON body) of the one request an action makes. Raises ToolError on bad input."""
     action = args["action"]
@@ -98,13 +107,21 @@ async def _prepare(ctx: ToolContext, args: dict) -> Prepared:
         raise ToolError(f"{KEY_NAME} is not set in the .env file")
     action = args["action"]
     _, body = request(args)
-    cost = f"at most {body['max_credits']} credits" if action == "subdomains" else COST[action]
-    # An answer for the chat covers calls that cost what was shown: a higher limit asks again,
-    # and a lookup with no limit asks every time.
-    grant = {"subdomains": f"profundis:subdomains:{body.get('max_credits')}", "domain": ""}.get(action, f"profundis:{action}")
+    # An answer for the chat covers calls that cost what was shown: a higher limit and a deeper page ask again,
+    # and a lookup with no limit to set asks every time.
+    if action == "subdomains":
+        cost = f"at most {body['max_credits']} credits of your Profundis account (10 for the first 100 names, 1 for each 50 more)"
+        grant = f"profundis:subdomains:{body['max_credits']}"
+    elif action == "domain":
+        cost, grant = "1 credit and 1 more for each address found, 26 at most, of your Profundis account", ""
+    else:
+        extra = _extra(body["page"]) if action in SEARCHES else 0
+        credits = COST[action] + extra
+        cost = f"{credits} credit{'' if credits == 1 else 's'}{' or more' if action == 'whois' else ''} of your Profundis account"
+        grant = f"profundis:{action}" + (f":+{extra}" if extra else "")
     what = body.get("raw_query") or body.get("domain") or str(args.get("query") or "").strip()
     # The search goes to Profundis, not to the target: scope does not apply.
-    return Prepared(grant_target=grant, preview=f"Profundis {action}: {what}\nCost: {cost} of your Profundis account")
+    return Prepared(grant_target=grant, preview=f"Profundis {action}: {what}\nCost: {cost}")
 
 
 def _clean(text: str, key: str) -> str:
@@ -114,9 +131,9 @@ def _clean(text: str, key: str) -> str:
 def _failure(status: int, raw: bytes, headers, key: str) -> str:
     message = ""
     try:
-        err = json.loads(raw).get("error")
-        if isinstance(err, dict):
-            message = " ".join(str(err.get(k) or "") for k in ("code", "message")).strip()
+        said = json.loads(raw)
+        err = said.get("error") if isinstance(said.get("error"), dict) else said     # a code and a message, inside `error` or bare
+        message = " ".join(str(err.get(k) or "") for k in ("code", "message")).strip()
     except (ValueError, AttributeError):
         pass
     message = _clean(message, key)[:300]
@@ -186,7 +203,12 @@ def _subdomains(raw: bytes, cut: bool, key: str) -> ToolResult:
                 item = json.loads(line)
             except ValueError:
                 continue
-            (errors if isinstance(item, dict) and item.get("error") else controls).append(_clean(_row(item), key)[:400])
+            if item.get("type") == "heartbeat":         # keeps the stream open and says nothing
+                continue
+            # An error is something under `error`, or a code together with a message. A notice has no message, and
+            # the lines about the account and the enumeration have neither.
+            failed = item.get("error") or (item.get("code") and item.get("message"))
+            (errors if failed else controls).append(_clean(_row(item), key)[:400])
         elif len(names) < MAX_NAMES:
             names.append(_clean(line[:260], key))
         else:
@@ -247,8 +269,11 @@ def tools() -> list[Tool]:
             "fields": {"type": "string", "maxLength": 300, "description": "Comma-separated fields to return, or all."},
             "per_page": {"type": "integer", "enum": [10, 30, 50]},
             "page": {"type": "integer", "minimum": 1, "maximum": 100},
-            "max_credits": {"type": "integer", "minimum": 1, "maximum": 50,
-                            "description": f"Spending limit of one subdomains call (default {DEFAULT_MAX_CREDITS})."},
-            "only_resolving": {"type": "boolean", "description": "subdomains: only names that resolve now."}},
+            "max_credits": {"type": "integer", "minimum": DEFAULT_MAX_CREDITS, "maximum": 50,
+                            "description": f"Spending limit of one subdomains call (default {DEFAULT_MAX_CREDITS}). The first 100 "
+                                           "names cost 10 credits and each 50 more cost 1; under 10 no name comes back."},
+            "only_resolving": {"type": "boolean", "description": "subdomains: Profundis resolves the names now and returns only "
+                                                                 "those that resolve. Without it the names are the ones it has "
+                                                                 "seen, and some of them may no longer resolve."}},
         "required": ["action"], "additionalProperties": False},
         "network", _run, prepare=_prepare, available=available)]

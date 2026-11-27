@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from hunterai import config
+from hunterai import config, skills
 from tests.test_api import client  # noqa: F401
 
 TEXT = "---\nname: Recon Notes\ndescription: Use when mapping a target.\n---\nList the hosts first.\n"
@@ -10,7 +10,7 @@ async def test_the_builtin_skills_are_listed(client):
     listed = (await client.get("/api/skills")).json()
     assert [(s["name"], s["mode"], s["builtin"], s["enabled"], s["auto"]) for s in listed] == [
         ("audit", None, True, True, True), ("debug", None, True, True, True), ("fix", "coding", True, True, True),
-        ("plan", "plan", True, True, True)]
+        ("plan", "plan", True, True, True), ("profundis", None, True, True, True)]
     assert all(s["body"] and s["description"] for s in listed)
 
 
@@ -24,7 +24,7 @@ async def test_writing_changing_and_deleting_a_skill(client):
     assert (await client.patch(f"/api/skills/{s['id']}", json={"name": "recon-two"})).json()["name"] == "recon-two"
     assert (await client.delete(f"/api/skills/{s['id']}")).status_code == 204
     assert (await client.patch(f"/api/skills/{s['id']}", json={"enabled": True})).status_code == 404
-    assert len((await client.get("/api/skills")).json()) == 4
+    assert len((await client.get("/api/skills")).json()) == len(skills.BUILTINS)
 
 
 async def test_what_a_skill_cannot_be(client):
@@ -45,10 +45,10 @@ async def test_looking_at_a_source_keeps_nothing_until_it_is_added(client):
     body = seen.json()
     assert body["label"] == "pasted text" and [(s["name"], s["taken"], s["problem"], s["findings"]) for s in body["skills"]] == [("recon-notes", False, None, [])]
     assert "folder" not in body["skills"][0]
-    assert len((await client.get("/api/skills")).json()) == 4
+    assert len((await client.get("/api/skills")).json()) == len(skills.BUILTINS)
     added = await client.post("/api/skills/add", json={"id": body["id"], "picks": [{"key": ".", "name": "recon"}]})
     assert added.status_code == 200 and [(s["name"], s["source"]) for s in added.json()] == [("recon", "pasted text")]
-    assert [s["name"] for s in (await client.get("/api/skills")).json()] == ["audit", "debug", "fix", "plan", "recon"]
+    assert [s["name"] for s in (await client.get("/api/skills")).json()] == ["audit", "debug", "fix", "plan", "profundis", "recon"]
     again = await client.post("/api/skills/add", json={"id": body["id"], "picks": [{"key": "."}]})
     assert again.status_code == 400 and "no longer" in again.text
 

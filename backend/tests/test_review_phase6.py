@@ -137,9 +137,9 @@ def test_plain_text_in_other_scripts_and_emoji_are_fine():
 
 async def test_profundis_chat_grants_are_per_spending_limit_and_never_for_uncapped_calls(monkeypatch):
     monkeypatch.setenv("PROFUNDIS_API_KEY", "k" * 40)
-    one = await profundis._prepare(None, {"action": "subdomains", "domain": "example.com", "max_credits": 1})
+    ten = await profundis._prepare(None, {"action": "subdomains", "domain": "example.com", "max_credits": 10})
     fifty = await profundis._prepare(None, {"action": "subdomains", "domain": "example.com", "max_credits": 50})
-    assert one.grant_target != fifty.grant_target and "1" in one.grant_target
+    assert ten.grant_target != fifty.grant_target and "10" in ten.grant_target
     assert (await profundis._prepare(None, {"action": "domain", "domain": "example.com"})).grant_target == ""
     assert (await profundis._prepare(None, {"action": "hosts", "query": "host:a.com"})).grant_target == "profundis:hosts"
 

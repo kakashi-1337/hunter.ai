@@ -81,12 +81,92 @@ async def test_bad_arguments_are_refused_before_anything_is_asked(conn, args, me
 
 @respx.mock
 async def test_subdomains_reads_names_and_control_lines_and_caps_credits(conn):
-    body = "a.example.com\nb.example.com\n" + json.dumps({"credits_charged": 1, "capped": False, "max_credits": 3}) + "\n"
+    """The limit a call has when the model names none is what the first names of a domain cost: Profundis charges 10
+    credits for up to 100 of them, and under a lower limit it sends no name at all."""
+    body = "a.example.com\nb.example.com\n" + json.dumps({"type": "credits", "credits_charged": 10, "capped": False, "max_credits": 10}) + "\n"
     route = respx.post(f"{API}/subdomains").mock(return_value=httpx.Response(200, text=body, headers={"content-type": "text/event-stream"}))
     block, req = await use(conn, action="subdomains", domain="Example.com.")
-    assert json.loads(route.calls.last.request.content) == {"domain": "example.com", "max_credits": 3}
+    assert json.loads(route.calls.last.request.content) == {"domain": "example.com", "max_credits": 10}
     assert "2 names" in block.content and "a.example.com\nb.example.com" in block.content and "credits_charged" in block.content
-    assert "at most 3 credits" in req.preview
+    assert "Cost: at most 10 credits of your Profundis account (10 for the first 100 names, 1 for each 50 more)" in req.preview
+    assert req.grant_target == "profundis:subdomains:10"
+    _, req = await use(conn, action="subdomains", domain="example.com", max_credits=11)
+    assert json.loads(route.calls.last.request.content) == {"domain": "example.com", "max_credits": 11}
+    assert "at most 11 credits" in req.preview and req.grant_target == "profundis:subdomains:11"      # a higher limit asks again
+
+
+async def test_a_limit_that_buys_no_name_is_refused_before_anything_is_asked(conn):
+    """A model that read "0 names" under such a limit would report a domain without subdomains."""
+    tool = profundis.tools()[0]
+    limit = tool.parameters["properties"]["max_credits"]
+    assert limit["minimum"] == profundis.DEFAULT_MAX_CREDITS == 10 and "no name" in limit["description"]
+    chat, run_id = await seeded_run(conn)
+    out, events, _ = await run_call(conn, chat, run_id, ToolCall("c", "profundis", {"action": "subdomains", "domain": "example.com", "max_credits": 9}))
+    assert out.block.is_error and "9 is less than the minimum of 10" in out.block.content
+    assert all(e["type"] != "permission_request" for e in events)
+
+
+@respx.mock
+async def test_what_only_keeps_a_stream_open_is_left_out_and_the_account_lines_are_kept(conn):
+    body = "".join(line + "\n" for line in (
+        "a.example.com", json.dumps({"type": "heartbeat"}), json.dumps({"type": "heartbeat"}), "b.example.com",
+        json.dumps({"type": "enumeration", "only_resolving": False, "partial": True}),
+        json.dumps({"type": "credits", "credits_charged": 10, "balance": 90})))
+    respx.post(f"{API}/subdomains").mock(return_value=httpx.Response(200, text=body))
+    block, _ = await use(conn, action="subdomains", domain="example.com")
+    assert not block.is_error and block.content.startswith("2 names") and "heartbeat" not in block.content
+    assert '"partial": true' in block.content and '"balance": 90' in block.content
+
+
+@respx.mock
+async def test_a_coded_line_inside_a_subdomain_stream_is_an_error(conn):
+    """How the API description writes one: a code and a message, with no `error` around them. Q2014 (the credits ran
+    out) can come after the names, and the names before it are then not all there are."""
+    body = "a.example.com\n" + json.dumps({"type": "credits", "credits_charged": 10}) + "\n" + json.dumps({"code": "Q2014", "message": "insufficient credits"}) + "\n"
+    respx.post(f"{API}/subdomains").mock(return_value=httpx.Response(200, text=body))
+    block, _ = await use(conn, action="subdomains", domain="example.com")
+    assert block.is_error and "Q2014" in block.content and "insufficient credits" in block.content and "a.example.com" in block.content
+    assert block.content.index("credits_charged") < block.content.index("Profundis reported an error") < block.content.index("Q2014")
+
+
+@pytest.mark.parametrize("line, said", [
+    ({"code": "N1", "notice": "the list was stopped at your limit"}, "the list was stopped at your limit"),
+    ({"type": "enumeration", "message": "a refresh of the names was queued"}, "a refresh of the names was queued"),
+    ({"type": "credits", "code": "C1", "balance": 4}, '"balance": 4'),
+])
+@respx.mock
+async def test_a_line_that_only_tells_something_is_shown_and_is_no_error(conn, line, said):
+    """An error is what the API description calls one: something under `error`, or a code together with a message."""
+    respx.post(f"{API}/subdomains").mock(return_value=httpx.Response(200, text="a.example.com\n" + json.dumps(line) + "\n"))
+    block, _ = await use(conn, action="subdomains", domain="example.com")
+    assert not block.is_error and said in block.content and "reported an error" not in block.content
+
+
+@respx.mock
+async def test_an_error_line_that_names_its_kind_is_an_error_too(conn):
+    body = "a.example.com\n" + json.dumps({"type": "error", "code": "Q2014", "message": "insufficient credits"}) + "\n"
+    respx.post(f"{API}/subdomains").mock(return_value=httpx.Response(200, text=body))
+    block, _ = await use(conn, action="subdomains", domain="example.com")
+    assert block.is_error and "Q2014" in block.content
+
+
+@pytest.mark.parametrize("action, page, cost, grant", [
+    ("hosts", 1, "Cost: 1 credit of", "profundis:hosts"),
+    ("hosts", 3, "Cost: 1 credit of", "profundis:hosts"),
+    ("hosts", 4, "Cost: 2 credits of", "profundis:hosts:+1"),
+    ("dns", 13, "Cost: 2 credits of", "profundis:dns:+1"),
+    ("vhosts", 14, "Cost: 3 credits of", "profundis:vhosts:+2"),
+    ("hosts", 100, "Cost: 11 credits of", "profundis:hosts:+10"),
+    ("whois", 3, "Cost: 3 credits or more of", "profundis:whois"),
+    ("whois", 4, "Cost: 4 credits or more of", "profundis:whois:+1"),
+])
+@respx.mock
+async def test_a_deep_page_costs_more_and_is_asked_for_again(conn, action, page, cost, grant):
+    """Pages 1 to 3 cost the price of the search, and each block of ten pages after them one credit more. An answer
+    for the chat covers calls that cost what was shown, so a deeper page is not covered by it."""
+    respx.post(f"{API}/{action}").mock(return_value=httpx.Response(200, json={"total": 0, "relation": "eq", "data": []}))
+    _, req = await use(conn, action=action, query="host:example.com", page=page)
+    assert cost in req.preview and req.grant_target == grant
 
 
 @respx.mock
@@ -109,18 +189,22 @@ async def test_too_many_names_are_cut_with_a_note(conn, monkeypatch):
 async def test_domain_and_asn_lookups(conn):
     d = respx.post(f"{API}/domains/details").mock(return_value=httpx.Response(200, json={"domain": "example.com", "total_ips": 1, "results": [{"ip": "192.0.2.1"}]}))
     a = respx.post(f"{API}/asn/details").mock(return_value=httpx.Response(200, json={"profundis_quotas": {"MaxQueryPerDay": 6000}, "results": [{"as_hierarchy": [{"as_number": 64500}]}]}))
-    block, _ = await use(conn, action="domain", domain="example.com")
+    block, req = await use(conn, action="domain", domain="example.com")
     assert json.loads(d.calls.last.request.content) == {"domain": "example.com"} and "192.0.2.1" in block.content
+    assert "Cost: 1 credit and 1 more for each address found, 26 at most, of your" in req.preview and not req.grant_target
     for query, body in (("AS64500", {"question": "number", "number": 64500}), ("192.0.2.0/24", {"question": "cidr", "cidr": "192.0.2.0/24"}),
                         ("192.0.2.9", {"question": "ip", "ip": "192.0.2.9"}), ("Example Net", {"question": "partial_name", "partial_name": "Example Net"})):
         block, req = await use(conn, action="asn", query=query)
         assert json.loads(a.calls.last.request.content) == body and query in req.preview
+        assert "Cost: 1 credit of your Profundis account" in req.preview and req.grant_target == "profundis:asn"
     assert "64500" in block.content and "MaxQueryPerDay" not in block.content
 
 
 @pytest.mark.parametrize("status, body, headers, message", [
     (401, {"error": {"code": "UNAUTHORIZED", "message": "bad key " + KEY}}, {}, "did not accept the key"),
     (402, {"error": {"code": "NO_CREDITS", "message": "no credits left"}}, {}, "no credits left"),
+    (402, {"code": "Q2014", "message": "fewer than 10 spendable credits"}, {}, "(HTTP 402): Q2014 fewer than 10 spendable credits"),
+    (402, ["not", "an", "object"], {}, "(HTTP 402): plan, credits, or budget"),
     (403, {"error": {"code": "PLAN", "message": "paid plan required"}}, {}, "paid plan required"),
     (429, {}, {"retry-after": "7"}, "wait 7 s"),
     (500, None, {}, "HTTP 500"),
