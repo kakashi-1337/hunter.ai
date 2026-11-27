@@ -5,6 +5,7 @@ a wrong mark can be seen for what it is. The rules do not judge quality: a phras
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Literal
 
@@ -87,9 +88,15 @@ class Verdict(BaseModel):
     reasons: list[str]
 
 
+_COMMA = re.compile(r",(?=\s|$)")
+
+
 def _plain(text: str) -> str:
-    """A text as the phrase rules compare it: without regard to case, emphasis, or the kind of space, quote and dash."""
-    return " ".join(text.translate(_PLAIN).casefold().split())
+    """A text as the phrase rules compare it: without regard to case, emphasis, or the kind of space, quote and dash,
+    and without the commas of prose. A comma before a space or at the end is one a writer sets or leaves out ("So,
+    every user" and "So every user" are one conclusion); a comma inside a number or between two words without a space
+    is part of what is said."""
+    return " ".join(_COMMA.sub("", text.translate(_PLAIN).casefold()).split())
 
 
 def _limits(case: Case) -> Target | None:

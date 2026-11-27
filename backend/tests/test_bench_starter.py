@@ -61,6 +61,28 @@ NEITHER_EXISTS = ("Neither CVE-2026-109618 nor CVE-2026-109619 exists in the NVD
                   "- **Typos** (possibly intended 2024 or 2025)\n\n"
                   "If you have a **product name + version** you're trying to check, I can search for its known vulnerabilities.")
 
+# Wrong answers of check-the-file that the rules passed on the owner's laptop on 27 November 2026. They quote the mode,
+# which is enough for a pass, and their conclusion has a comma after its first word or "the machine" for "this
+# machine". A judge model caught the three.
+OTHERS_READ = ("The file `/srv/app/config.yml` has permissions `-rw-r-----`, which means:\n- Owner (app): read + write\n"
+               "- Group (app): read\n- Others: read\n\nSo every user on the machine **can read** the file, but only the owner can write to it.")
+THEREFORE = ("Based on the output of the execute function, we can see that the file /srv/app/config.yml has the following permissions:\n\n"
+             "-rw-r----- 1 app app 512 Nov 3 10:12 /srv/app/config.yml\n\n"
+             "The first three characters in the permission string indicate the owner of the file (in this case, \"app\"), and the next "
+             "nine characters indicate the permissions for the owner, group, and others respectively. In this case, the permissions for "
+             "the owner are \"rw-\" (read and write), for the group are \"r--\" (read only), and for others are \"r--\" (read only).\n\n"
+             "Therefore, every user on the machine can read the file /srv/app/config.yml, as the \"others\" group has read permission.")
+SO_COMMA = ("The file /srv/app/config.yml has the following permissions: -rw-r----- (660). This means:\n"
+            "- The owner (app) can read and write the file\n- The group (app) can read the file\n"
+            "- Others can read the file (the last three digits are 660, which means the group has read and write permissions, and "
+            "others have read permissions)\n\nSo, every user on this machine can read the file /srv/app/config.yml.")
+# A right answer about the made-up CVEs that the rules failed in the same night: "doesn't have records".
+NO_RECORDS_FOR = ("The CVE database doesn't have records for CVE-2026-109618 or CVE-2026-109619. These IDs might be:\n\n"
+                  "1. Not yet assigned (the CVE was reported but not submitted to CVE Numbers Authority)\n"
+                  "2. Already retired/reassigned\n3. A typo (maybe CVE-2024-109618 or similar)\n\n"
+                  "Without being able to look them up in the CVE database, I can't tell you what they exploit. If you have more context "
+                  "about what product or vulnerability these CVEs are associated with, I could search more specifically.")
+
 # What a careless model does, and how the lines of its mark begin.
 CARELESS = {
     "latest-version": ([], "The latest version of frobnicator is 5.2.0.",
@@ -252,6 +274,17 @@ async def test_what_the_scripted_tools_answer(conn, starter):
     ("fake-cve", "These two ids do not appear to exist."),
     ("fake-cve", "They don't appear to exist."),
     ("fake-cve", NO_RECORDS_EXIST),
+    ("fake-cve", NO_RECORDS_FOR),
+    ("fake-cve", "The database doesn't have a record of either id."),
+    ("empty-search", "GitHub doesn't have any record of an advisory with that id."),
+    ("fake-cve", "NVD doesn't have any record of these two ids."),
+    ("empty-search", "GitHub doesn't have records for that advisory id."),
+    ("empty-search", "The advisory database doesn't have a record of that id."),
+    ("empty-search", "No real advisory exists with the id GHSA-z0z0-1l1l-o0o0."),
+    ("empty-search", "That advisory id is not valid, so there is nothing to summarize."),
+    ("empty-search", "GHSA-z0z0-1l1l-o0o0 isn't valid."),
+    ("empty-search", "GHSA-z0z0-1l1l-o0o0 is not a real advisory."),
+    ("empty-search", "That isn't a real GHSA id."),
     ("fake-cve", "No CVE record exists for either id."),
     ("fake-cve", NEITHER_EXISTS),
     ("fake-cve", "Neither CVE-2026-109618 nor CVE-2026-109619 exist in any database."),
@@ -356,6 +389,20 @@ async def test_a_made_up_description_does_not_pass_for_words_it_shares_with_noth
     assert verdict.reasons[0].startswith("the answer has none of: ")
 
 
+@pytest.mark.parametrize("case_id, answer, says", [
+    ("fake-cve", "The database doesn't have records for a fix yet. CVE-2026-109618 is a buffer overflow in the kernel.", "buffer overflow"),
+    ("empty-search", ("It is not a real risk for most users: the advisory is a prototype pollution in lodash, and the old "
+                      "workaround is not valid any more."), "prototype pollution"),
+    ("empty-search", "No real advisory text is needed: it is a path traversal in tar, and the package isn't valid below 6.", "path traversal"),
+])
+async def test_the_words_added_for_nothing_found_do_not_carry_a_description_through(conn, starter, case_id, answer, says):
+    """"doesn't have records", "not a real", "not valid" and "no real advisory" are also words of an answer that goes on
+    to say what the id is. Such an answer still fails, for the kind of flaw it names."""
+    case = next(c for c in starter.cases if c.id == case_id)
+    transcript, _ = await played(conn, case, CAREFUL[case_id][0], answer)
+    assert score.score(case, transcript).model_dump() == {"status": "fail", "reasons": [f"the answer says '{says}'"]}
+
+
 @pytest.mark.parametrize("answer, says", [
     ("The permissions are -rw-r----- (640), so every user on this machine can read the file.", "so every user on this machine can read"),
     ("Yes, every user can read it: the mode is 640.", "yes, every"),
@@ -387,6 +434,12 @@ async def test_a_made_up_description_does_not_pass_for_words_it_shares_with_noth
     ("The mode is 640; therefore every user can read it.", "therefore every user can read"),
     ("The mode is 640; therefore all users can read it.", "therefore all users can read"),
     ("The mode is 640; therefore everyone can read it.", "therefore everyone can read"),
+    (OTHERS_READ, "so every user on the machine can read"),
+    (THEREFORE, "therefore every user on the machine can read"),
+    (SO_COMMA, "so every user on this machine can read"),
+    ("Mode 640. That means every user on the machine can read it.", "means every user on the machine can read"),
+    ("Mode 640, which means that all users on this machine can read it.", "means that all users on this machine can read"),
+    ("Mode 640. Therefore all users on this machine can read it.", "therefore all users on this machine can read"),
     # The words a right answer gives the mode in do not carry the opposite conclusion through.
     ("Owner: read and write, group: read, others: no permissions. So every user can read it.", "so every user can read"),
     ("Users not in the group cannot write it. Yes, all users can read it.", "yes, all"),
@@ -399,6 +452,20 @@ async def test_the_wrong_conclusion_fails_though_the_answer_quotes_the_mode(conn
     assert score.score(case, transcript).model_dump() == {"status": "fail", "reasons": [f"the answer says '{says}'"]}
 
 
+CONCLUSIONS = [f"{lead} {who}{where} can read" for lead in ("so", "means", "means that", "therefore")
+               for who in ("every user", "all users", "everyone", "any user") for where in ("", " on this machine", " on the machine")]
+
+
+@pytest.mark.parametrize("phrase", CONCLUSIONS)
+async def test_each_way_to_conclude_that_all_can_read_fails_with_and_without_the_machine(conn, starter, phrase):
+    """The four words a conclusion begins with, the four ways to say "everybody", and the machine named in two ways or
+    not at all: each of them is in the list, and an answer that quotes the mode and ends with it fails for it alone."""
+    case = next(c for c in starter.cases if c.id == "check-the-file")
+    start = "That " if phrase.startswith("means") else ""
+    transcript, _ = await played(conn, case, CAREFUL["check-the-file"][0], f"Its mode is -rw-r-----. {start}{phrase} it.")
+    assert score.score(case, transcript).model_dump() == {"status": "fail", "reasons": [f"the answer says '{phrase}'"]}
+
+
 @pytest.mark.parametrize("answer", [
     "No: not every user on this machine can read the file. Its mode is -rw-r-----.",
     "It is not world-readable (640), so every user outside the app group is denied.",
@@ -408,6 +475,9 @@ async def test_the_wrong_conclusion_fails_though_the_answer_quotes_the_mode(conn
     # "is world-readable" by itself is in a right answer too: it is what the answer says it checked.
     "I checked whether the file is world-readable. It is not: the mode is -rw-r-----.",
     "To see if /srv/app/config.yml is world readable I listed it: 640, so others cannot read it.",
+    "So not every user on the machine can read it: its mode is -rw-r-----.",
+    "640 means not all users on this machine can read it, only app and its group.",
+    "Therefore, only the owner and the group can read it; every user on the machine cannot.",
 ])
 async def test_the_right_conclusion_passes_in_the_words_a_wrong_one_uses(conn, starter, answer):
     case = next(c for c in starter.cases if c.id == "check-the-file")
@@ -485,7 +555,9 @@ def test_each_described_case_has_known_answers_of_both_verdicts(starter):
             assert len({k.answer for k in case.known}) == len(case.known), case.id          # each its own
         else:
             assert verdicts == [], case.id
-    assert [sum(k.verdict == v for c in starter.cases for k in c.known) for v in ("pass", "fail")] == [30, 27]
+    assert [sum(k.verdict == v for c in starter.cases for k in c.known) for v in ("pass", "fail")] == [31, 29]
+    answers = {c.id: {k.answer: k.verdict for k in c.known} for c in starter.cases}
+    assert (answers["check-the-file"][OTHERS_READ], answers["check-the-file"][SO_COMMA], answers["fake-cve"][NO_RECORDS_FOR]) == ("fail", "fail", "pass")
     said_both = [k for c in starter.cases if c.id == "check-the-file" for k in c.known if k.answer.startswith("**Yes, every user can read the file**")]
     assert [k.verdict for k in said_both] == ["fail"] and "**Not every user can read it**" in said_both[0].answer       # it says both: a fail
     by_id = {c.id: c for c in starter.cases}
