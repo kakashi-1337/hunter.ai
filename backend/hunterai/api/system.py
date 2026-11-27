@@ -21,6 +21,8 @@ from ..providers import colibri, llamacpp, ollama, registry
 from ..repo import settings as store
 from ..tools import caido_tools
 from ..tools import registry as tools
+from .. import problems, worker
+from ..repo import jobs
 
 router = APIRouter(prefix="/api")
 
@@ -29,7 +31,7 @@ LOCAL = "ollama"
 # The services that run beside HunterAI. One that answered before and does not answer now has stopped, and
 # the page says so; the start script only says it in the terminal it ran in. Programs and folders are not
 # watched: what is missing there is the owner's doing, and the setup check lists it.
-WATCHED = ("ollama", "qdrant", "searxng")
+WATCHED = ("ollama", "qdrant", "searxng", "worker")
 ANSWERED = "answered:"      # settings key: when the service last answered
 IN_USE = 7 * 86400          # a service that has not answered for this long is no longer taken to be in use
 LOOK_EVERY = 60.0           # seconds between two looks at the services on behalf of the status
@@ -276,6 +278,19 @@ def _mcp_item() -> tuple[dict, list[str]]:
     return item, [s.name for s in dead]
 
 
+async def _worker_item(conn) -> dict:
+    """The line of the worker: the process beside the server that reads documents in, writes memory and matches
+    skills. It writes a sign of life every two seconds. Without a fresh one it does not run, and its jobs wait."""
+    age = await worker.since(conn)
+    ok = age is not None and age < worker.ALIVE_SECONDS
+    detail = "runs" if ok else "no sign of it" if age is None else f"no sign of it for {diagnostics.lasted(age)}"
+    waiting = 0 if ok else await jobs.waiting(conn, list(worker.HANDLERS))
+    if waiting:
+        detail += f"; {waiting} job{' waits' if waiting == 1 else 's wait'} for it"
+    return _item("worker", "The worker (reads documents in, writes memory)", ok, detail,
+                 f"It is started with HunterAI: {problems.RESTART}. Why it ended stands in the terminal it ran in.")
+
+
 async def _answered(conn, name: str) -> float | None:
     """When the service last answered, as far as the store knows."""
     last = await store.get(conn, ANSWERED + name)
@@ -360,6 +375,7 @@ async def checkup(request: Request, conn=Depends(get_conn)):
         _item("qdrant", "Qdrant (the knowledge base)", qdrant is not None,
               f"answers at {config.qdrant_url()}" if qdrant is not None else f"no answer at {config.qdrant_url()}",
               "Run `scripts/qdrant.sh` in the HunterAI folder (it needs Docker)."),
+        await _worker_item(conn),
         _item("searxng", "SearXNG (web_search)", searx is not None,
               f"answers at {config.searxng_url()}" if searx is not None else f"no answer at {config.searxng_url()}",
               "Run `scripts/searxng.sh start` in the HunterAI folder (it needs Docker)."),
