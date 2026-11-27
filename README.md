@@ -1669,7 +1669,25 @@ An error a server answers with in place of a result is not a stop. It goes to th
 the tool's error ("The server answered with an error instead of a result: ..."), and the
 server keeps running. Until now such an answer was taken for a stop: the server was ended
 and started again, and after the second one it stayed off until HunterAI was restarted.
-What a server printed is in `~/.hunterai/logs/mcp-<name>.log`.
+
+What a server printed is in `~/.hunterai/logs/mcp-<name>.log`. HunterAI writes a line of
+its own there each time a server ends that it did not stop itself: the time, what it saw
+of the end, and whether the server was started again.
+
+```
+[HunterAI 2026-11-27 16:50:03] The server stopped under a call of search_skills: MCPError: Connection closed. It is started again.
+```
+
+Until 27 November 2026 that file held only what the server printed. A server that ends
+without a word left it empty, what HunterAI had seen of the end was gone from the server's
+status as soon as the server was back, and the error of the call sent its reader to the
+empty file. The error of the call now says what was seen as well ("MCP server skills
+stopped while it ran this call (MCPError: Connection closed). ..."). `Connection closed`
+means that the server's process ended, or closed its output, while HunterAI waited for its
+answer; why it did is the server's to say, and it says so only when it prints something.
+A server can print anything into its own log, also a line that looks like one of
+HunterAI's: read the file as you read any output of a server. The check of a server under
+"Manage MCP servers" shows these lines with the rest, and reads no hint from them.
 
 "Add from a repo, package, or config" takes a GitHub or GitLab URL, an npm package
 (`npm:@scope/name`, with a version or a tag after it if you want one: `@1.2.3`, `@latest`),

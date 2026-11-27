@@ -318,6 +318,18 @@ def test_hints_from_what_a_server_printed():
     assert mcp_adder.hints("all good") == []
 
 
+def test_hunterais_own_lines_in_a_log_give_no_hint():
+    """They name the tool a server stopped under, and a tool can be named after a token or a key. What a hint is read
+    from is what the server printed."""
+    own = "[HunterAI 2026-11-27 16:50:03] The server stopped under a call of refresh_token: MCPError: Connection closed. It is started again.\n"
+    assert mcp_adder.hints(own) != []                                    # the words alone would give one
+    assert mcp_adder.printed(own) == "" and mcp_adder.hints(mcp_adder.printed(own)) == []
+    both = "npm warn old lockfile\n" + own + "Error: BRAVE_API_KEY environment variable is required\n"
+    assert mcp_adder.printed(both) == "npm warn old lockfile\nError: BRAVE_API_KEY environment variable is required\n"
+    assert any("key" in h for h in mcp_adder.hints(mcp_adder.printed(both)))
+    assert mcp_adder.printed("a line that quotes [HunterAI 2026] in its middle\n") == "a line that quotes [HunterAI 2026] in its middle\n"
+
+
 async def test_api_flow_inspect_install_enable_check_edit_delete(client, tmp_path, monkeypatch):
     monkeypatch.setenv("HUNTERAI_MCP", "on")
     manager = mcp_manager.Manager({}); monkeypatch.setattr(mcp_manager, "manager", manager)
@@ -344,6 +356,13 @@ async def test_api_flow_inspect_install_enable_check_edit_delete(client, tmp_pat
         await client.put("/api/mcp/byhand", json={"enabled": True})
         dead = (await client.post("/api/mcp/servers/byhand/check")).json()
         assert dead["state"] != "ready" and dead["ping_ms"] is None
+        assert "] The server did not start: " in dead["log_tail"]        # what HunterAI saw of it stands where the owner is sent to look
+        log = config.logs_dir() / "mcp-byhand.log"
+        log.write_text(log.read_text() + "[HunterAI 2026-11-27 16:50:03] The server stopped under a call of refresh_token: MCPError: "
+                                         "Connection closed. It is started again.\n")
+        again = (await client.post("/api/mcp/servers/byhand/check")).json()
+        assert "refresh_token" in again["log_tail"] and any("was not found" in h for h in again["hints"])
+        assert not any("key" in h for h in again["hints"])               # HunterAI's own lines are shown, and no hint is read from them
         assert (await client.delete("/api/mcp/servers/fake")).status_code == 204 and (await client.delete("/api/mcp/servers/fake")).status_code == 404
         assert (await client.delete("/api/mcp/servers/rea")).status_code == 400
         from hunterai.tools import registry

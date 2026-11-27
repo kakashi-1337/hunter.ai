@@ -229,4 +229,4 @@ async def check_server(name: str):
     state = status["state"] if status else ("disabled" if not cfg.enabled else "not started")
     return {"name": name, "state": state, "tools": (status or {}).get("tools", []), "error": (status or {}).get("error"),
             "ping_ms": ping, "log_tail": tail,
-            "hints": mcp_adder.hints(f"{(status or {}).get('error') or ''}\n{tail}") if state != "ready" else []}
+            "hints": mcp_adder.hints(f"{(status or {}).get('error') or ''}\n{mcp_adder.printed(tail)}") if state != "ready" else []}

@@ -701,5 +701,11 @@ def log_tail(name: str, chars: int = 3000) -> str:
         return ""
 
 
+def printed(tail: str) -> str:
+    """What the server itself printed, of the tail of its log: without the lines HunterAI wrote there about its ends.
+    Those name the tool a server stopped under, and a hint is not to be read from the name of a tool."""
+    return "".join(line for line in tail.splitlines(keepends=True) if not line.startswith(mcp_manager.OWN))
+
+
 def hints(text: str) -> list[str]:
     return [h for rx, h in HINTS if re.search(rx, text or "")]
