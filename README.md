@@ -188,13 +188,21 @@ What is refused is what is out of scope for certain:
   to find that out (a lookup tells the name to a name server before anything was
   allowed); the call asks you once its address is known, as before.
 - **Not** a host that is on neither list. It asks you, as before.
-- **Not** a call that is about the host and does not go to it: a web search goes to a
-  search engine and a CVE lookup to the NVD, and a tool that only reads (your knowledge
-  base, your notes) goes nowhere.
-- **Not** a tool of an MCP server that is given the host as a bare name
-  (`payments.shop.example`, without `https://`). HunterAI cannot look into such a tool:
-  it reads whole addresses off its arguments and nothing else, so the guard knows of no
-  host in that call. Given an address, the call is refused like any other.
+- **Not** a call of one of HunterAI's own tools that is about the host and does not go
+  to it: a web search goes to a search engine and a CVE lookup to the NVD, and a tool
+  that only reads (your knowledge base, your notes) goes nowhere.
+
+A tool of an MCP server is read more widely, because HunterAI cannot look into it. Its
+arguments are read for hosts as a command is read: a host that a line without a path
+excludes is refused wherever it stands among them, as a whole address
+(`https://payments.shop.example/`) or as a bare name (`payments.shop.example`). That
+holds for a lookup about the host too; it cannot be told from a scan. Until 27 November
+2026 only whole addresses were read, and a scanner of a server that was given a bare
+name was run. Only a server's tools that reach out are read (risk class `network` or
+`execute`, and `execute` is what a server has unless you say otherwise). A server whose
+tools go nowhere, one that keeps notes for example, would be refused a note that
+mentions the host: give it the risk class `read` or `write` in `~/.hunterai/mcp.json`,
+and the guard does not look at it.
 
 A model that answers three refusals in a row with one more call to an out-of-scope host
 is stopped, with a line for you that names the host. A subagent's calls are held to the
@@ -426,12 +434,12 @@ Put a model and its fine-tuned version into one bench to see what the training c
   What counts as a call to the host is what a chat counts: the tool has to be one that
   reaches out, and the host one it goes to. A web search or a CVE lookup about the host
   goes to a search engine or to the NVD, and is no longer counted; until that day it was,
-  and a run that never went near the host failed. A tool of an MCP server is counted when
-  a host stands anywhere in its arguments, as before, because HunterAI cannot look into
-  it; it is told the refusal only where a chat would tell it, which is when the argument
-  is a whole address. A list of the test itself (`no_host`) is held against every call as
-  it is written. The scope guard can be switched off for chats in Settings; the bench
-  always answers as the guard does.
+  and a run that never went near the host failed. A tool of an MCP server is read for
+  hosts anywhere among its arguments, as the guard of a chat reads it, because HunterAI
+  cannot look into it: it is refused and told so, and it is never taken to go nowhere. A
+  list of the test itself (`no_host`) is held against every call as it is written. The
+  scope guard can be switched off for chats in Settings; the bench always answers as the
+  guard does.
 - **A test passes when all of its rules hold.** Each rule that does not hold gives one
   line: "made no call to cve, web_search or web_fetch", "the answer says 'buffer
   overflow'", "a call named payments.shop.example". Press a cell of the table to see its

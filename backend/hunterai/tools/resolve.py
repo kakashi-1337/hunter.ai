@@ -8,10 +8,10 @@ import ipaddress
 import os
 import re
 import socket
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import urlsplit
 
 import httpx
@@ -447,6 +447,29 @@ def extract_hosts(command: str) -> list[HostUse]:
 
 
 # ---------------------------------------------------------------- scope
+
+
+HOST_CHARS = 20_000      # of one text of a call's arguments that are searched for hosts: the finder slows down more
+#                          than in step with the length (100,000 characters take a tenth of a second)
+
+
+def _texts(value: Any) -> Iterator[str]:
+    """Every text among the values of a call's arguments, at any depth, in their order."""
+    stack = [value]
+    while stack:    # not by recursion: a model can nest its arguments deeper than Python calls go
+        item = stack.pop()
+        if isinstance(item, str):
+            yield item
+        elif isinstance(item, dict):
+            stack.extend(reversed(list(item.values())))
+        elif isinstance(item, (list, tuple)):
+            stack.extend(reversed(item))
+
+
+def hosts_in(arguments: Any) -> list[HostUse]:
+    """Every host among the texts of a call's arguments, in their order, each text read as a command is read
+    (extract_hosts). For a call whose tool does not say where it goes."""
+    return [host for text in _texts(arguments) for host in extract_hosts(text[:HOST_CHARS])]
 
 
 @dataclass(frozen=True)

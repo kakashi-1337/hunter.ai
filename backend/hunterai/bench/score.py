@@ -5,14 +5,12 @@ a wrong mark can be seen for what it is. The rules do not judge quality: a phras
 """
 from __future__ import annotations
 
-from collections.abc import Iterator
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import BaseModel
 
 from ..tools import resolve
-from ..tools.base import HostUse
 from ..tools.loopguard import GIVE_UP
 from ..types import Target
 from .cases import Case, shown
@@ -22,8 +20,6 @@ from .cases import Case, shown
 BOOKKEEPING = frozenset({"focus", "critique", "finding_add", "finding_update", "finding_list"})
 ERROR_CHARS = 500    # of a provider's error, in the line of the mark
 HOSTS_SHOWN = 5      # hosts a mark names one by one; the rest is counted
-HOST_CHARS = 20_000  # of one text of a call's arguments that are searched for hosts: the finder slows down
-#                      more than in step with the length (100,000 characters take a tenth of a second)
 NAMED = 4            # tools or phrases of one rule that a line names; the rest is counted
 TIME_LIMIT = 900     # seconds the model calls of one run may take together; a model that writes in circles is
 #                      ended by this, where the turn limit ends one that calls tools in circles
@@ -96,19 +92,6 @@ def _plain(text: str) -> str:
     return " ".join(text.translate(_PLAIN).casefold().split())
 
 
-def _texts(value: Any) -> Iterator[str]:
-    """Every text among the values of a call's arguments, at any depth, in their order."""
-    stack = [value]
-    while stack:    # not by recursion: a model can nest its arguments deeper than Python calls go
-        item = stack.pop()
-        if isinstance(item, str):
-            yield item
-        elif isinstance(item, dict):
-            stack.extend(reversed(list(item.values())))
-        elif isinstance(item, (list, tuple)):
-            stack.extend(reversed(item))
-
-
 def _limits(case: Case) -> Target | None:
     """The scope the hosts of a call are held against: the case's own `no_host` list, taken as written, else the
     lists of its target, read as the permission engine reads them in a chat."""
@@ -119,11 +102,6 @@ def _limits(case: Case) -> Target | None:
     else:
         return None
     return Target(id="bench", name="bench", notes="", scope=scope, created_at="") if scope["out"] else None
-
-
-def hosts_in(arguments: Any) -> list[HostUse]:
-    """Every host in the texts of a call's arguments, in their order."""
-    return [host for text in _texts(arguments) for host in resolve.extract_hosts(text[:HOST_CHARS])]
 
 
 def _hosts_named(case: Case, calls: list[Call]) -> list[str]:
@@ -144,7 +122,7 @@ def _hosts_named(case: Case, calls: list[Call]) -> list[str]:
         elif (call.problem is not None and not call.refused) or is_bookkeeping(call.name) or (call.passive and not own):
             continue
         else:
-            hosts = resolve.scope_verdict(limits, hosts_in(call.arguments)).out
+            hosts = resolve.scope_verdict(limits, resolve.hosts_in(call.arguments)).out
         for host in hosts:
             named.setdefault(host)
     return list(named)

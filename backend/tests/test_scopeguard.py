@@ -8,7 +8,7 @@ import dataclasses
 import pytest
 import respx
 
-from hunterai import permissions
+from hunterai import mcp_manager, permissions
 from hunterai.providers.base import TextDelta, ToolCall
 from hunterai.repo import chats, messages, runs, settings
 from hunterai.tools import (
@@ -17,10 +17,11 @@ from hunterai.tools import (
     registry,
     runner,
     scopeguard,
+    search,
     shell,
     web,
 )
-from hunterai.tools.base import HostUse, Prepared
+from hunterai.tools.base import HostUse, Prepared, Tool, ToolResult
 from hunterai.types import TextBlock
 from tests.test_api import client  # noqa: F401 (client is a fixture)
 from tests.test_engine import go, use
@@ -207,6 +208,103 @@ async def test_a_tool_loaded_on_demand_is_judged_as_the_tool_it_names(conn, dns)
     out, _, steps, _ = await judged(conn, call, names={"srv_send", on_demand.CALL, on_demand.FIND})
     assert out.block.content == REFUSED and ran == []
     assert [(s.kind, s.name, s.status) for s in steps] == [("tool_call", "srv_send", "error")]
+
+
+# ---- a tool of an MCP server: HunterAI reads whole addresses off its arguments, and the guard every host besides
+
+def a_scanner(risk="execute") -> list:
+    """A tool of an MCP server as the manager registers one: what a call touches is read off its arguments, the same
+    way for every server (mcp_manager.generic_prepare). Returns what it was run with."""
+    ran: list = []
+
+    async def handler(ctx, args):
+        ran.append(args)
+        return ToolResult("scanned")
+
+    async def prepare(ctx, args):
+        return await mcp_manager.generic_prepare(risk, ctx, args)
+    registry.register(Tool("srv_scan", "scans a host", {"type": "object"}, risk, handler, prepare=prepare, source="mcp:scanner"))
+    return ran
+
+
+async def named(conn, name: str, arguments: dict, scope=SHOP, names=None) -> list:
+    """What the guard would refuse this call for."""
+    chat, run_id = await seeded_run(conn, scope=scope)
+    return await scopeguard.named(conn, chat.id, run_id, ToolCall("c1", name, arguments), names or {name})
+
+
+async def test_a_tool_of_a_server_that_is_given_the_host_as_a_bare_name_is_not_run(conn, dns):
+    """Found on 27 November 2026: HunterAI reads whole addresses off the arguments of a server's tool and no bare name,
+    so a scanner that was given `payments.shop.example` named no host for the guard, and a chat ran it."""
+    ran = a_scanner()
+    call = ToolCall("c1", "srv_scan", {"target": "payments.shop.example", "ports": "1-1024"})
+    out, events, steps, _ = await judged(conn, call, names={"srv_scan"})
+    assert (out.block.is_error, out.block.content, ran) == (True, REFUSED, [])
+    assert permissions.pending() == [] and not [e for e in events if e["type"] == "permission_request"]
+    assert dns[1] == []
+    assert [(s.kind, s.name, s.status) for s in steps] == [("tool_call", "srv_scan", "error")]
+
+
+@pytest.mark.parametrize("arguments", [
+    {"target": "payments.shop.example"},
+    {"targets": ["www.shop.example", "payments.shop.example"]},
+    {"options": {"scan": {"host": "payments.shop.example", "port": 443}}},
+    {"command": "scan --host payments.shop.example --fast"},
+    {"target": "payments.shop.example:8443"},
+])
+async def test_the_name_is_found_wherever_it_stands_among_the_arguments(conn, dns, arguments):
+    a_scanner()
+    assert await named(conn, "srv_scan", arguments) == [("payments.shop.example", None)]
+
+
+async def test_a_name_in_scope_a_name_on_neither_list_and_a_word_that_only_looks_like_a_host_are_left_alone(conn, dns):
+    a_scanner()
+    for arguments in ({"target": "www.shop.example"}, {"target": "cdn.other.example"}, {"file": "README.md", "notes": "see scan.txt"}):
+        assert await named(conn, "srv_scan", arguments) == [], arguments
+
+
+async def test_an_address_and_a_bare_name_are_each_named_once_the_address_first(conn, dns):
+    a_scanner()
+    scope = {"in": ["*.shop.example"], "out": ["payments.shop.example", "vault.shop.example"]}
+    arguments = {"also": "vault.shop.example and payments.shop.example", "url": "https://payments.shop.example/login"}
+    assert await named(conn, "srv_scan", arguments, scope=scope) == [("payments.shop.example", None), ("vault.shop.example", None)]
+
+
+async def test_a_bare_name_that_only_a_line_with_a_path_excludes_is_not_refused(conn, dns):
+    """A bare name says no path, as a command says none: it cannot be told whether the call goes under that path."""
+    a_scanner()
+    scope = {"in": ["*.shop.example"], "out": ["www.shop.example/admin"]}
+    assert await named(conn, "srv_scan", {"target": "www.shop.example"}, scope=scope) == []
+    under = await named(conn, "srv_scan", {"url": "https://www.shop.example/admin/users"}, scope=scope)
+    assert under == [("www.shop.example", "www.shop.example/admin")]             # the one address it names is judged as before
+
+
+async def test_a_bare_address_in_an_excluded_network_is_refused_too(conn, dns):
+    a_scanner()
+    assert await named(conn, "srv_scan", {"target": "10.1.2.3"}, scope={"in": [], "out": ["10.0.0.0/8"]}) == [("10.1.2.3", None)]
+    assert await named(conn, "srv_scan", {"target": "192.168.1.5"}, scope={"in": [], "out": ["10.0.0.0/8"]}) == []
+
+
+async def test_a_tool_of_a_server_that_only_reads_is_not_looked_at_as_before(conn, dns):
+    a_scanner(risk="read")
+    assert await named(conn, "srv_scan", {"target": "payments.shop.example", "url": "https://payments.shop.example/"}) == []
+
+
+async def test_a_tool_of_a_server_that_is_loaded_on_demand_is_refused_the_bare_name_too(conn, dns):
+    ran = a_scanner()
+    call = ToolCall("c1", on_demand.CALL, {"tool": "srv_scan", "arguments": {"target": "payments.shop.example"}})
+    out, _, steps, _ = await judged(conn, call, names={"srv_scan", on_demand.CALL, on_demand.FIND})
+    assert (out.block.content, ran) == (REFUSED, [])
+    assert [(s.kind, s.name, s.status) for s in steps] == [("tool_call", "srv_scan", "error")]
+
+
+async def test_a_tool_of_hunterais_own_is_read_as_it_says_itself_and_no_further(conn, dns):
+    """A web search about the host goes to a search engine, and its tool says that scope does not apply (tools/search.py).
+    A fetch goes to the host of its address. Neither is read for names, as a tool of a server is."""
+    for t in search.tools():
+        registry.register(t)
+    assert await named(conn, "web_search", {"query": "payments.shop.example login rate limit"}) == []
+    assert await named(conn, "web_fetch", {"url": "https://www.shop.example/go?next=payments.shop.example"}) == []
 
 
 async def test_a_call_the_runner_will_not_take_is_left_to_the_runner(conn, dns):
