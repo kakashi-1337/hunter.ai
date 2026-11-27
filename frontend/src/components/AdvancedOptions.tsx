@@ -7,7 +7,8 @@ import { useModelInfo } from './ModelPicker'
 
 const VERBOSITY = ['low', 'medium', 'high'] as const
 
-/** `rest`: where the slider stands while the option is not set: the value that changes nothing (the least one unless given). */
+/** `rest`: where the slider stands while the option is not set: the value that changes nothing (the least one unless given).
+ * A slider that is moved and put back there is then set to a value that does no harm. */
 function Slider({ label, value, min, max, step, rest = min, onChange }: { label: string; value: number | undefined; min: number; max: number; step: number; rest?: number; onChange: (v: number | undefined) => void }) {
   return (
     <label className="field">
@@ -85,8 +86,8 @@ export function AdvancedOptions() {
       {open && (
         <div className="sheet" role="dialog" aria-label="Model options">
           {note && <div className="hint">{note}</div>}
-          {has('temperature') && <Slider label="Temperature" value={draft.temperature} min={0} max={2} step={0.1} onChange={(v) => set({ temperature: v })} />}
-          {has('top_p') && <Slider label="Top P" value={draft.top_p} min={0} max={1} step={0.05} onChange={(v) => set({ top_p: v })} />}
+          {has('temperature') && <Slider label="Temperature" value={draft.temperature} min={0} max={2} step={0.1} rest={1} onChange={(v) => set({ temperature: v })} />}
+          {has('top_p') && <Slider label="Top P" value={draft.top_p} min={0.05} max={1} step={0.05} rest={1} onChange={(v) => set({ top_p: v })} />}
           {has('max_tokens') && <NumberField label="Max output tokens" value={draft.max_tokens} placeholder="model default" onChange={(v) => set({ max_tokens: v })} />}
           {has('context_window') && <NumberField label="Context window (tokens)" value={draft.context_window} placeholder={info?.context_window ? String(info.context_window) : 'model default'} onChange={(v) => set({ context_window: v })} />}
           {has('effort') && (
