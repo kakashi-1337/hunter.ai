@@ -274,8 +274,18 @@ def test_an_answer_that_ended_by_itself_needs_no_word(reason):
 
 def test_an_answer_cut_at_the_limit_the_chat_sets_says_where_to_raise_it():
     assert problems.cut_off("length", provider="abliteration", max_tokens=512, output_tokens=512) == ("cut_off", (
-        'The answer was cut off at the 512 output tokens this chat allows. Send "continue" to have the model go on, or raise '
-        '"Max output tokens" under Options.'))
+        'The answer was cut off at the 512 output tokens this chat allows. Send "continue" to have the model go on. For longer '
+        'answers raise "Max output tokens" under Options, or empty that field: this chat then sets no limit of its own.'))
+
+
+def test_a_limit_of_one_token_is_one_token_and_the_word_says_how_to_have_no_limit():
+    """Seen on the owner's laptop on 27 November 2026: a chat with a limit of 1 ended every answer after one token, and
+    its owner asked whether the limit was not automatic. It is, with an empty field, and the word named only a number
+    to raise."""
+    kind, text = problems.cut_off("length", provider="ollama", max_tokens=1, output_tokens=1, window=16384)
+    assert kind == "cut_off" and text.startswith("The answer was cut off at the 1 output token this chat allows. ")
+    assert text.endswith("or empty that field: this chat then sets no limit of its own.")
+    assert "1,000 output tokens this chat allows" in problems.cut_off("length", provider="openai", max_tokens=1000, output_tokens=1000)[1]
 
 
 def test_an_answer_cut_by_the_window_of_a_local_model_says_so():

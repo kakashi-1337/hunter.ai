@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { SAMPLING, effortChoices } from '../options'
+import { SAMPLING, effortChoices, typedNumber } from '../options'
 import { useChatView, useStore } from '../store'
 import { optionsNote, pruneOptions } from '../tree'
 import type { Options } from '../types'
@@ -21,13 +21,24 @@ function Slider({ label, value, min, max, step, rest = min, onChange }: { label:
   )
 }
 
-/** A whole number of `least` or more (1 unless given); anything else leaves the option unset. */
+/** A whole number of `least` or more (1 unless given); anything else leaves the option unset. What is typed is saved
+ * when its owner is done with it, with Enter or by leaving the field: a field that saved every change made a limit
+ * of one token out of the first key of "16000". Escape closes the sheet, and what was typed goes with it. It is a
+ * field for text, so it has no steps, and neither the wheel nor an arrow key can set it (in a field for numbers
+ * either of them made 1 out of nothing). */
 function NumberField({ label, value, placeholder, least = 1, onChange }: { label: string; value: number | undefined; placeholder: string; least?: number; onChange: (v: number | undefined) => void }) {
+  const [typed, setTyped] = useState<string | null>(null)       // null: nothing is being typed, and the field shows what the chat has
+  const done = () => {
+    if (typed === null) return
+    setTyped(null)
+    const n = typedNumber(typed, least)
+    if (n !== value) onChange(n)
+  }
   return (
     <label className="field">
       <span>{label}</span>
-      <input type="number" min={least} step={1} value={value ?? ''} placeholder={placeholder}
-        onChange={(e) => { const n = Math.floor(Number(e.target.value)); onChange(e.target.value === '' || !Number.isFinite(n) || n < least ? undefined : n) }} />
+      <input type="text" inputMode="numeric" value={typed ?? value ?? ''} placeholder={placeholder}
+        onChange={(e) => setTyped(e.target.value)} onBlur={done} onKeyDown={(e) => { if (e.key === 'Enter') done() }} />
     </label>
   )
 }
@@ -47,7 +58,12 @@ export function AdvancedOptions() {
   useEffect(() => { if (open && chat) setDraft(chat.options) }, [open, chat])
   useEffect(() => {
     if (!open) return
-    const close = (e: MouseEvent) => { if (root.current && !root.current.contains(e.target as Node)) setOpen(false) }
+    const close = (e: MouseEvent) => {
+      if (!root.current || root.current.contains(e.target as Node)) return
+      const at = document.activeElement
+      if (at instanceof HTMLElement && root.current.contains(at)) at.blur()      // a number that is being typed is saved before the sheet goes
+      setOpen(false)
+    }
     const esc = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false)
     window.addEventListener('mousedown', close)
     window.addEventListener('keydown', esc)

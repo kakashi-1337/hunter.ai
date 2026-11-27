@@ -185,8 +185,10 @@ def cut_off(reason: str | None, *, provider: str | None, max_tokens: int | None 
     if not at_limit(reason):
         return None
     if max_tokens and output_tokens >= max_tokens:
-        return "cut_off", (f'The answer was cut off at the {max_tokens:,} output tokens this chat allows. Send "continue" to '
-                           'have the model go on, or raise "Max output tokens" under Options.')
+        tokens = "token" if max_tokens == 1 else "tokens"
+        return "cut_off", (f'The answer was cut off at the {max_tokens:,} output {tokens} this chat allows. Send "continue" to '
+                           'have the model go on. For longer answers raise "Max output tokens" under Options, or empty that '
+                           "field: this chat then sets no limit of its own.")
     if provider == LOCAL:           # Ollama writes until the window is full: the request and the answer share it
         size = f" ({window:,} tokens)" if window else ""
         if circles:

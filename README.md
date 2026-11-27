@@ -2040,6 +2040,22 @@ were given on thinking. That small model does not end a turn with thinking only 
 (it thinks until it is cut off), so the second call as a whole was tried against a stand-in
 server, and not yet with the 9B model it was built for.
 
+### A number in Options
+
+"Max output tokens", "Context window", "Thinking budget", Top K, Repeat last N and Seed are
+fields for a whole number. What you type is saved when you are done with it: with Enter, by
+leaving the field, or by closing Options with a click elsewhere. Escape closes Options
+without it. Nothing is saved while you type, and neither the mouse wheel nor an arrow key
+changes such a field. An empty field leaves the setting to the model; with an empty "Max
+output tokens" the chat sets no limit of its own. "16,000" is read as 16000, and what is
+not a whole number ("16k") leaves the field empty.
+
+Until 27 November 2026 these fields saved every change at once. In a real browser
+(Chromium) a click into the empty "Max output tokens" and the Up arrow made it 1, so did
+the wheel over it, and typing 16000 saved 1 first. A chat with that limit ends every answer
+after one token, with "The answer was cut off at the 1 output token this chat allows" under
+it. If a chat of yours says so, empty the field and send "continue".
+
 ### Sampling, for a local model
 
 For a model of Ollama or of your llama-server, Options has seven more settings under
