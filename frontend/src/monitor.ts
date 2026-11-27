@@ -24,6 +24,10 @@ export function gib(bytes: number): string {
   return n >= 100 ? n.toFixed(0) : n >= 10 ? n.toFixed(1) : n.toFixed(2)
 }
 
+const MIB = 1024 ** 2
+/** An amount of memory in the list under a bar: in GiB, and in MiB under a tenth of a GiB, where GiB would read "0.00". */
+const amount = (bytes: number): string => (bytes >= GIB / 10 ? `${gib(bytes)} GiB` : `${Math.round(bytes / MIB)} MiB`)
+
 const share = (part: number, whole: number): number => (whole > 0 ? Math.min(1, Math.max(0, part / whole)) : 0)
 
 function load(label: string, percent: number | null, about: string): Meter {
@@ -38,10 +42,10 @@ function heat(label: string, degrees: number, limit: number | null, setting: str
 }
 
 function held(label: string, used: number, total: number, holders: Holder[], about: string): Meter {
-  const parts = holders.map((h) => ({ name: h.name, figure: `${gib(h.bytes)} GiB` }))
+  const parts = holders.map((h) => ({ name: h.name, figure: amount(h.bytes) }))
   const rest = used - holders.reduce((sum, h) => sum + h.bytes, 0)
-  if (holders.length && rest >= GIB / 100) parts.push({ name: 'other', figure: `${gib(rest)} GiB` })
-  parts.push({ name: 'free', figure: `${gib(Math.max(0, total - used))} GiB` })
+  if (holders.length && rest >= GIB / 100) parts.push({ name: 'other', figure: amount(rest) })
+  parts.push({ name: 'free', figure: amount(Math.max(0, total - used)) })
   return { label, figure: `${gib(used)} / ${gib(total)} GiB`, share: share(used, total), level: '', about, parts }
 }
 
