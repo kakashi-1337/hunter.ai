@@ -59,7 +59,7 @@ async def test_the_sets_are_listed_with_their_cases_and_what_is_wrong_with_a_fil
     assert [c["judge"] for c in two["cases"]] == [None, None]       # how a test is judged, for the owner who reads its runs
     assert broken == {"id": "own:broken", "name": "broken", "builtin": False, "cases": [], "known": 0, "problem": "case 1: it has no id"}
     assert (two["id"], two["name"], [c["id"] for c in two["cases"]]) == ("own:two", "Two", ["record", "sum"])
-    assert (starter["known"], two["known"]) == (57, 0)          # the answers with a known verdict, to check a judge model with
+    assert (starter["known"], two["known"]) == (60, 0)          # the answers with a known verdict, to check a judge model with
 
 
 async def test_the_set_files_are_not_read_on_the_servers_own_thread(client, monkeypatch):
@@ -543,7 +543,7 @@ ALL_BUSY = {"detail": "A bench, a judging or a check of a judge is running. Wait
 async def test_a_judge_is_checked_on_the_known_answers_of_a_set_and_its_numbers_are_listed(client):
     from hunterai.bench import judging
     (cases.folder() / "two.toml").write_text(KNOWN_TWO)
-    assert [s["known"] for s in (await client.get("/api/bench/sets")).json()] == [57, 4]
+    assert [s["known"] for s in (await client.get("/api/bench/sets")).json()] == [60, 4]
     assert (await client.get("/api/bench/judge-checks")).json() == []
     use(verdict("pass", "It says so."), verdict("pass", "Looks fine."), verdict("fail", "Wrong number."), verdict("fail", "It is 43."), name="judge")
     r = await client.post("/api/bench/judge-checks", json=CHECK)

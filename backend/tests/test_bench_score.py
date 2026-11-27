@@ -413,6 +413,22 @@ def test_marks_for_emphasis_and_the_kind_of_space_do_not_hide_a_phrase(answer):
     assert marked(case(answer_none=["no record"]), ran(answer=answer)) == ("fail", ["the answer says 'no record'"])
 
 
+def test_a_comma_of_prose_does_not_count():
+    """"So, every user ..." and "So every user ..." are one conclusion: a comma before a space is one a writer sets or
+    leaves out. A comma inside a number, or between words without a space, is part of what is said."""
+    so = case(answer_none=["so every user can read"])
+    assert marked(so, ran(answer="So, every user can read it.")) == ("fail", ["the answer says 'so every user can read'"])
+    assert marked(so, ran(answer="So,\nevery user can read it.")) == ("fail", ["the answer says 'so every user can read'"])
+    assert marked(so, ran(answer="**So,** every user can read it.")) == ("fail", ["the answer says 'so every user can read'"])
+    assert marked(case(answer_none=["so, every user can read"]), ran(answer="So every user can read it.")) == \
+        ("fail", ["the answer says 'so, every user can read'"])
+    assert marked(case(answer_any=["yes, it is"]), ran(answer="Yes it is.")) == ("pass", [])
+    assert marked(case(answer_any=["no,"]), ran(answer="No, it is not.")) == ("pass", [])        # a phrase that ends with one is the phrase without it
+    assert marked(case(answer_any=["1,024"]), ran(answer="It has 1,024 bytes.")) == ("pass", [])
+    assert marked(case(answer_any=["1024"]), ran(answer="It has 1,024 bytes.")) == ("fail", ["the answer has none of: '1024'"])
+    assert marked(case(answer_none=["read write"]), ran(answer="Its mode: read,write.")) == ("pass", [])
+
+
 def test_the_space_between_the_words_of_a_phrase_has_to_be_in_the_answer():
     assert marked(case(answer_any=["not found"]), ran(answer="I saved it as notfound.txt.")) == \
         ("fail", ["the answer has none of: 'not found'"])

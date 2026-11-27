@@ -477,12 +477,12 @@ Put a model and its fine-tuned version into one bench to see what the training c
   model is asked about the answers of the set whose right verdict is known, with the
   question a judging asks, and the line says how many it called right, how many fails it
   called a pass and how many passes a fail. Its score then stands beside its name in the
-  pick ("· 52/57 right"), and the answers it did not get right can be unfolded. One check
-  is kept per set and judge. The Starter set has 57 known answers, 30 passes and 27 fails.
+  pick ("· 52/60 right"), and the answers it did not get right can be unfolded. One check
+  is kept per set and judge. The Starter set has 60 known answers, 31 passes and 29 fails.
   Some are what local models really answered. Three are wrong answers that the rules pass
   and two are right answers that the rules fail: no list of phrases gets those, which is
   why a judge reads both. A small judge is a poor one: a model of 0.8B parameters called
-  45 of the 57 right, and 8 fails a pass.
+  45 of the then 57 right, and 8 fails a pass.
 - **The open cell says how its test is judged**, in the test's own words: the words the
   judge model is given. A mark you set by hand and a verdict of the judge are held
   against the same thing.
@@ -566,8 +566,10 @@ every call of that bench is asked without thinking: faster, and the same for eve
 The line over its table then ends with "thinking off", and "Pick these again" ticks the
 box again. A model that does not think is asked the same way; Ollama takes that (it
 refuses only thinking switched *on* for such a model).
-Phrases are compared without regard to case, to marks for emphasis, and to the kind of
-quote, dash and space. A set that names a tool HunterAI does not have at the moment (a
+Phrases are compared without regard to case, to marks for emphasis, to the kind of
+quote, dash and space, and to a comma of prose: one before a space or at the end ("So,
+every user" and "so every user" are one phrase; the comma in "1,024" or in "read,write"
+counts). A set that names a tool HunterAI does not have at the moment (a
 typo, an MCP server that is not connected) says so in the note of its bench.
 
 **Time and heat.** Five models, twelve tests and three repeats are 180 runs of one to
