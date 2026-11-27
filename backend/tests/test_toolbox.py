@@ -84,3 +84,18 @@ def test_the_bin_folder_next_to_the_code_comes_first(monkeypatch):
     monkeypatch.setenv("PATH", f"/usr/bin:{toolbox.folder()}:/bin")
     assert procs.child_env()["PATH"] == f"{project}:{toolbox.folder()}:/usr/bin:/bin"              # both first, the project's before the other
     assert "gitleaks (finds secrets" in modes.build_system("pentesting", None, ["execute"])
+
+
+def test_where_a_program_of_the_folder_is(monkeypatch):
+    assert toolbox.where("nuclei") is None
+    own = program("nuclei")
+    assert toolbox.where("nuclei") == own
+    program("notes.txt", executable=False)
+    assert toolbox.where("notes.txt") is None                        # a file that cannot be run is no program
+    assert toolbox.where("../nuclei") is None and toolbox.where("") is None
+    project = toolbox.PROJECT_BIN
+    project.mkdir()
+    (project / "nuclei").write_text("#!/bin/sh\n")
+    (project / "nuclei").chmod(0o755)
+    assert toolbox.where("nuclei") == project / "nuclei"             # the folder that comes first, as in a command
+

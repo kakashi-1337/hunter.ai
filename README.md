@@ -2203,6 +2203,30 @@ in every request. The setup check lists what the folders hold.
 To see what these programs send to a target, switch Caido's recording on: the model is
 then told how to send each of them through Caido (see [Caido](#caido)).
 
+**A flag the program does not know.** The model is told to ask a program for its flags
+with `-h` and not to invent any. A model that writes a flag from memory all the same gets
+the program's answer ("flag provided but not defined: -scrape") and, since 27 November
+2026, what the program's own help says about it: HunterAI asks the program for its help
+itself and adds the entries closest to the flag to the result, by the words of the flag's
+name and by its spelling.
+
+```
+flag provided but not defined: -status-code-range
+[probe does not know the flag -status-code-range. Its own help (probe -h) has these that are close:
+  -sc, -status-code        display response status-code
+  -mc, -match-code string  match response with specified status code (-mc 200,302)
+Use a flag only as the help writes it; read all of it with: probe -h]
+```
+
+When the help has nothing close, or does not come within five seconds, the line sends the
+model to the help instead of to another guess. This is for a program of your tool folder
+only, and only when a command's output names an unknown flag: HunterAI then runs that
+program with its help switch and nothing else (`-h` or `--help`, by the way the program
+words its error), with no input, without your API keys, once for each file as it is now.
+It recognises the wording of Go's flag package ("flag provided but not defined", which
+is what the owner's scanners answered), of cobra, argparse, getopt, click and clap. The
+same line stands in the output of a background process when it is read.
+
 ### Interface font
 
 The interface is set in the fonts of your system. Settings, "Interface", has the field

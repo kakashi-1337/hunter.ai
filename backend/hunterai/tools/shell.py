@@ -61,6 +61,26 @@ def unrecorded(command: str, names: set[str]) -> tuple[str, str] | None:
     return None
 
 
+def programs(command: str, names: set[str]) -> list[tuple[str, str]]:
+    """(program, its arguments as they are written) for each simple command of `command` that runs one of `names`.
+    Read from the text as `unrecorded` reads it: what is in quotes or in a comment is not a command."""
+    wanted = sorted((n for n in names if n in command), key=len, reverse=True)
+    if not wanted:
+        return []
+    bare = _COMMENT.sub(" ", _QUOTED.sub("''", command))
+    return [(m.group(1), m.group(2)) for m in re.finditer(_RUNS % "|".join(map(re.escape, wanted)), bare)]
+
+
+async def _flags(command: str, output: str) -> str:
+    """Lines for the end of a result whose output says that a program of the owner's tool folder does not know a
+    flag: what that program's own help has that is close. See `flaghelp`."""
+    from .. import flaghelp, toolbox
+    if not flaghelp.unknown(output):
+        return ""
+    runs = [(name, given, toolbox.where(name)) for name, given in programs(command, {t["name"] for t in toolbox.installed()})]
+    return await flaghelp.note([r for r in runs if r[2] is not None], output)
+
+
 async def _hold_unrecorded(ctx: ToolContext, command: str) -> None:
     """While recording in Caido is on, a scanner from the owner's tool folder is not run until its command sends
     it through Caido: what the owner wants to see in the history does not depend on the model remembering a
@@ -173,13 +193,14 @@ async def _execute(ctx: ToolContext, args: dict) -> ToolResult:
         done = await procs.wait(p.id, timeout)
         took = time.monotonic() - began
         result = _finished(done, took, timeout if done.status == "killed" and took >= timeout else None)
-        return said(result, _not_carried(up, before) if up is not None else "")
+        return said(result, (_not_carried(up, before) if up is not None else "") + await _flags(args["command"], result.text))
     deadline = time.monotonic() + procs.BACKGROUND_FIRST_WAIT
     while time.monotonic() < deadline and p.id in [x.id for x in procs.running(ctx.chat_id)]:
         await asyncio.sleep(0.05)
     now = await procs.get(p.id)
     if now.status != "running":
-        return said(_finished(now, time.monotonic() - began, None))
+        result = _finished(now, time.monotonic() - began, None)
+        return said(result, await _flags(args["command"], result.text))
     text, nxt, _ = procs.read(p.log_path)
     return said(ToolResult(
         f"started background process {p.id} (pid {p.pid})\n{text}\n"
@@ -207,7 +228,7 @@ async def _output(ctx: ToolContext, args: dict) -> ToolResult:
     lines = [_status(p), f"bytes {offset}-{nxt} of {total}", text]
     if nxt < total or p.status == "running":
         lines.append(f"more: process_output(id=\"{p.id}\", offset={nxt})")
-    return ToolResult("\n".join(lines))
+    return ToolResult("\n".join(lines) + await _flags(p.command, text))
 
 
 async def _prepare_input(ctx: ToolContext, args: dict) -> Prepared:
