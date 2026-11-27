@@ -24,8 +24,9 @@ CHECK_INTERRUPTED = "HunterAI stopped while this check was running."
 RUNS = "select b.*, o.options_json from bench_runs b left join bench_options o on o.run_id = b.id"
 # A result with the mark its owner set by hand beside it, when he set one
 RESULTS = ("select r.*, c.status as by_hand, k.text as thinking, j.verdict as judged, j.reason as judge_reason,"
-           " j.error as judge_error from bench_results r left join bench_corrections c on c.result_id = r.id"
-           " left join bench_thinking k on k.result_id = r.id left join bench_judgments j on j.result_id = r.id")
+           " j.error as judge_error, f.refused, f.again, f.heeded from bench_results r"
+           " left join bench_corrections c on c.result_id = r.id left join bench_thinking k on k.result_id = r.id"
+           " left join bench_judgments j on j.result_id = r.id left join bench_refusals f on f.result_id = r.id")
 
 
 class NotJudged(Exception):
@@ -41,6 +42,7 @@ class CallBrief(BaseModel):
     name: str
     arguments: str                  # the start of the arguments as JSON text
     problem: str | None = None      # the start of what the model was told, when a chat would not have run the call
+    refused: list[str] = []         # the out-of-scope hosts the scope guard of a chat refused the call for: `problem` is its refusal
 
 
 class BenchRun(BaseModel):
@@ -75,6 +77,9 @@ class BenchResult(BaseModel):
     calls_made: int
     answer: str
     thinking: str = ""              # the end of what the model thought in its last call, when it thought
+    refused: int = 0                # calls of the run that the scope guard of a chat would not have run: the model was told so
+    again: int = 0                  # of them, the ones it made after it had been told
+    heeded: bool | None = None      # told, it made no such call again and gave the answer the test asks for. None: never told
     turns: int
     input_tokens: int
     output_tokens: int
@@ -91,6 +96,7 @@ class Mark(BaseModel):
     status: Literal["pass", "fail", "error", "skipped"]
     by_hand: Literal["pass", "fail"] | None = None
     judged: Literal["pass", "fail"] | None = None
+    heeded: bool | None = None      # see BenchResult
     turns: int
     input_tokens: int
     output_tokens: int
@@ -159,7 +165,8 @@ def _result(r) -> BenchResult:
                        repeat=r["repeat"], status=r["status"], by_hand=r["by_hand"], judged=r["judged"],
                        judge_reason=r["judge_reason"] or "", judge_error=r["judge_error"], reasons=json.loads(r["reasons_json"]),
                        calls=json.loads(r["calls_json"]), calls_made=r["calls_made"], answer=r["answer"],
-                       thinking=r["thinking"] or "", turns=r["turns"],
+                       thinking=r["thinking"] or "", refused=r["refused"] or 0, again=r["again"] or 0,
+                       heeded=None if r["heeded"] is None else bool(r["heeded"]), turns=r["turns"],
                        input_tokens=r["input_tokens"], output_tokens=r["output_tokens"], duration_ms=r["duration_ms"],
                        created_at=r["created_at"])
 
@@ -180,12 +187,13 @@ async def create(conn, set_: CaseSet, models: builtins.list[ModelRef], repeats: 
 
 
 async def add_result(conn, run_id: str, ref: ModelRef, case_id: str, repeat: int, status: str, reasons: builtins.list[str],
-                     t: Transcript | None = None, duration_ms: int = 0) -> BenchResult:
+                     t: Transcript | None = None, duration_ms: int = 0, heeded: bool | None = None) -> BenchResult:
     """The mark of one run of a case with what the run left behind, or without (`t` is None) for a run that was
-    never made. Long things are kept as their start."""
+    never made. Long things are kept as their start. `heeded`: what the model did once the scope guard had refused a
+    call of the run (score.heeded); it is kept for a run in which a call was refused."""
     calls = t.calls if t is not None else []
     kept = [CallBrief(name=c.name, arguments=_cut(json.dumps(c.arguments, ensure_ascii=False, default=str), ARGS_CHARS),
-                      problem=None if c.problem is None else _cut(c.problem, PROBLEM_CHARS)).model_dump()
+                      problem=None if c.problem is None else _cut(c.problem, PROBLEM_CHARS), refused=c.refused).model_dump()
             for c in calls[:CALLS_KEPT]]
     more = len(reasons) - REASONS_KEPT
     lines = reasons if more <= 0 else [*reasons[:REASONS_KEPT], f"and {more} more line{'' if more == 1 else 's'}"]
@@ -199,6 +207,9 @@ async def add_result(conn, run_id: str, ref: ModelRef, case_id: str, repeat: int
     if t is not None and t.thinking:
         end = t.thinking if len(t.thinking) <= THINKING_CHARS else "…" + t.thinking[-THINKING_CHARS:]
         await conn.execute("insert into bench_thinking(result_id,text) values(?,?)", (rid, end))
+    if t is not None and t.refusals:
+        await conn.execute("insert into bench_refusals(result_id,refused,again,heeded) values(?,?,?,?)",
+                           (rid, t.refusals, t.again, None if heeded is None else int(heeded)))
     await conn.commit()
     return await result(conn, rid)
 
@@ -252,10 +263,10 @@ async def results(conn, run_id: str) -> builtins.list[BenchResult]:
 async def marks(conn, run_id: str) -> builtins.list[Mark]:
     """Every result of a bench in the order they were added, as the table needs them."""
     rows = await (await conn.execute(
-        "select r.provider, r.model, r.case_id, r.repeat, r.status, c.status as by_hand, j.verdict as judged, r.turns,"
+        "select r.provider, r.model, r.case_id, r.repeat, r.status, c.status as by_hand, j.verdict as judged, f.heeded, r.turns,"
         " r.input_tokens, r.output_tokens, r.duration_ms from bench_results r"
         " left join bench_corrections c on c.result_id = r.id left join bench_judgments j on j.result_id = r.id"
-        " where r.run_id=? order by r.rowid", (run_id,))).fetchall()
+        " left join bench_refusals f on f.result_id = r.id where r.run_id=? order by r.rowid", (run_id,))).fetchall()
     return [Mark(**dict(r)) for r in rows]
 
 

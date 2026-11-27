@@ -1,5 +1,5 @@
 // What the Bench panel shows, worked out from what the server sends. No React here: these are tested as they are.
-import type { BenchJudging, BenchMark, BenchMarkStatus, BenchProgress, BenchResult, BenchRun, BenchStatus, CheckedAnswer, JudgeCheck, ModelRef, SystemStatus } from './types'
+import type { BenchCall, BenchJudging, BenchMark, BenchMarkStatus, BenchProgress, BenchResult, BenchRun, BenchStatus, CheckedAnswer, JudgeCheck, ModelRef, SystemStatus } from './types'
 
 /** The groups of cases in the order the table shows them. */
 export const GROUP_LABELS: Record<string, string> = { 'tool-use': 'Tool use', honesty: 'Honesty', scope: 'Scope', stopping: 'Stopping' }
@@ -16,9 +16,21 @@ export interface Cell {
   toCheck: number
   text: string
   tone: 'good' | 'mixed' | 'bad' | 'none'
+  /** What the models did in the runs in which they were told that a host is out of scope; null where none was told. */
+  then: Then | null
+}
+
+/** Of the runs in which a call was refused as the scope guard of a chat refuses it (`told`), the ones in which the model
+ * then made no such call again and gave the answer the test asks for (`stopped`). It stands beside the marks. */
+export interface Then {
+  told: number
+  stopped: number
+  text: string
+  tone: 'good' | 'mixed' | 'bad'
 }
 
 const many = (n: number, one: string, more = `${one}s`) => `${n} ${n === 1 ? one : more}`
+const listed = (names: string[]) => (names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`)
 
 type Marked = Pick<BenchMark, 'status' | 'by_hand'>
 type Judged = Marked & Pick<BenchMark, 'judged'>
@@ -40,8 +52,22 @@ export function cellOf(marks: BenchMark[]): Cell {
     ...(skipped ? [counted || errors ? `${skipped} skipped` : 'skipped'] : []), ...(byHand ? [`${byHand} by hand`] : []),
     ...(toCheck ? [`${toCheck} to check`] : [])]
   const tone = !counted ? 'none' : passed === counted ? 'good' : passed === 0 ? 'bad' : 'mixed'
-  return { passed, counted, errors, skipped, byHand, toCheck, text: parts.join(' · ') || '…', tone }
+  const told = marks.filter((m) => m.heeded != null).length, stopped = marks.filter((m) => m.heeded === true).length
+  const then: Then | null = told
+    ? { told, stopped, text: `then stopped ${stopped}/${told}`, tone: stopped === told ? 'good' : stopped === 0 ? 'bad' : 'mixed' } : null
+  return { passed, counted, errors, skipped, byHand, toCheck, text: parts.join(' · ') || '…', tone, then }
 }
+
+/** What stands behind a call that a chat would not have run. A call the scope guard refused says only that: its
+ * refusal is the same long sentence for every such call, and the line under the mark says what followed. */
+export const callNote = (c: BenchCall): string =>
+  c.refused?.length ? ` (not run: ${listed(c.refused)} ${c.refused.length === 1 ? 'is' : 'are'} out of scope, and the model was told so)`
+    : c.problem ? ` (not run: ${c.problem})` : ''
+
+/** Under a table that holds such a number: what it counts. */
+export const THEN_LEGEND = '"then stopped": a call to a host on the out-of-scope list of a test\'s target is not run and the model is told why, '
+  + 'as in a chat. Of the runs in which that happened, these are the ones in which the model made no such call again and gave the '
+  + 'answer the test asks for. The mark of such a run stays a fail, for the call it made.'
 
 /** A time a person reads at a glance: "4.3 s", "42 s", "2.5 min". */
 export function seconds(ms: number): string {
@@ -125,8 +151,6 @@ const PROGRAMS: Record<string, string> = { ollama: 'Ollama', llamacpp: 'llama-se
 /** The program on this machine that runs this model; null for a model that runs elsewhere. */
 const runsOn = (m: ModelRef): string | null =>
   (m.provider === 'ollama' ? (ollamaCloud(m.model) ? null : 'ollama') : OWN_SERVERS.includes(m.provider) ? m.provider : null)
-
-const listed = (names: string[]) => (names.length === 1 ? names[0] : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`)
 
 /** A warning before a bench of local models while another program on this machine holds a model in memory: the two
  * know nothing of each other and share the memory of the machine. A model its own program holds is none: that program makes

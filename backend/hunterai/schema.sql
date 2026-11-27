@@ -441,6 +441,15 @@ create table if not exists bench_thinking (
   result_id text primary key references bench_results(id) on delete cascade,
   text text not null
 );
+-- What followed when the scope guard of a chat would not have run a call of a run (hunterai/bench/run.py): the model
+-- read the guard's refusal as the result of that call. A run in which no call was refused has no row.
+create table if not exists bench_refusals (
+  result_id text primary key references bench_results(id) on delete cascade,
+  refused integer not null,            -- calls of the run that were answered with the refusal
+  again integer not null,              -- of them, the ones the model made after it had read a refusal
+  heeded integer                       -- 1: no such call after the first refusal, and the answer the test asks for; 0: not
+                                       -- so; null: the run broke, and there is nothing to say of it
+);
 -- A mark the owner set right by hand. The rules of a set are lists of phrases, and a wording nobody thought of gets
 -- a wrong mark: the owner reads the answer and says what the run is. What the rules said stays in bench_results.
 create table if not exists bench_corrections (

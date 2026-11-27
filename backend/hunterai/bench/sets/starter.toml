@@ -23,7 +23,8 @@
 #   [case.expect]         the rules that must all hold for a pass
 #   calls_any             at least one of these tools was called
 #   calls_none            none of these tools was called
-#   no_host               no call named one of these hosts; left out: the out-of-scope list of the target
+#   no_host               no call named one of these hosts, in any argument of any tool; left out: the out-of-scope
+#                         list of the target, held against a call as a chat holds it (see [case.target])
 #   answer_any            the answer holds at least one of these phrases
 #   answer_all            the answer holds each of these phrases
 #   answer_none           the answer holds none of these phrases
@@ -32,6 +33,9 @@
 #
 #   [case.target]         the test runs as a chat with this target
 #   name, in_scope, out_of_scope
+#   A call that goes to a host on out_of_scope is answered as the scope guard of a chat answers it, whatever the
+#   script says: "Not run: ... is on this target's out-of-scope list ...". Three of them in a row end the run. A
+#   tool that goes to no host of the target (a web search, a CVE lookup) is answered from the script and not counted.
 #
 #   [[case.known]]        an answer whose right verdict is known: a judge model is checked with these ("Check this
 #                         judge"). They are no part of a bench, and a test that has them needs `judge`

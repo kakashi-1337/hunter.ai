@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { GROUP_LABELS, benchLine, benchTable, cellOf, checkLine, checkScore, cloudLine, handChoice, judgeLine, judgingLine, modelNames, progressLine, seconds, sharedLine, sizeLine, stateWord, timeLine, verdictLine, verdictWord, wrongLine, wrongOnes } from '../bench'
+import { GROUP_LABELS, benchLine, benchTable, callNote, cellOf, checkLine, checkScore, cloudLine, handChoice, judgeLine, judgingLine, modelNames, progressLine, seconds, sharedLine, sizeLine, stateWord, timeLine, verdictLine, verdictWord, wrongLine, wrongOnes } from '../bench'
 import type { BenchJudging, BenchMark, BenchMarkStatus, BenchProgress, BenchRun, CheckedAnswer, JudgeCheck, ModelRef, SystemStatus } from '../types'
 
 const A: ModelRef = { provider: 'ollama', model: 'hf.co/mradermacher/Huihui-Qwen3.5-9B-abliterated-GGUF:Q6_K' }
@@ -20,21 +20,59 @@ const run = (over: Partial<BenchRun> = {}): BenchRun => ({
 
 describe('a cell of the table', () => {
   it('counts the runs that passed among those that were marked', () => {
-    expect(cellOf(marksOf('pass', 'pass', 'fail'))).toEqual({ passed: 2, counted: 3, errors: 0, skipped: 0, byHand: 0, toCheck: 0, text: '2/3', tone: 'mixed' })
+    expect(cellOf(marksOf('pass', 'pass', 'fail'))).toEqual({ passed: 2, counted: 3, errors: 0, skipped: 0, byHand: 0, toCheck: 0, text: '2/3', tone: 'mixed', then: null })
     expect(cellOf(marksOf('pass', 'pass', 'pass'))).toMatchObject({ text: '3/3', tone: 'good' })
     expect(cellOf(marksOf('fail', 'fail', 'fail'))).toMatchObject({ text: '0/3', tone: 'bad' })
     expect(cellOf(marksOf('pass'))).toMatchObject({ text: '1/1', tone: 'good' })
   })
   it('keeps errors and skipped runs apart: they are neither a pass nor a fail', () => {
-    expect(cellOf(marksOf('pass', 'pass', 'error'))).toEqual({ passed: 2, counted: 2, errors: 1, skipped: 0, byHand: 0, toCheck: 0, text: '2/2 · 1 error', tone: 'good' })
+    expect(cellOf(marksOf('pass', 'pass', 'error'))).toEqual({ passed: 2, counted: 2, errors: 1, skipped: 0, byHand: 0, toCheck: 0, text: '2/2 · 1 error', tone: 'good', then: null })
     expect(cellOf(marksOf('fail', 'error', 'error'))).toMatchObject({ text: '0/1 · 2 errors', tone: 'bad' })
     expect(cellOf(marksOf('pass', 'fail', 'skipped'))).toMatchObject({ text: '1/2 · 1 skipped', tone: 'mixed' })
-    expect(cellOf(marksOf('error', 'error'))).toEqual({ passed: 0, counted: 0, errors: 2, skipped: 0, byHand: 0, toCheck: 0, text: '2 errors', tone: 'none' })
+    expect(cellOf(marksOf('error', 'error'))).toEqual({ passed: 0, counted: 0, errors: 2, skipped: 0, byHand: 0, toCheck: 0, text: '2 errors', tone: 'none', then: null })
     expect(cellOf(marksOf('error', 'skipped', 'skipped'))).toMatchObject({ text: '1 error · 2 skipped', tone: 'none' })
     expect(cellOf(marksOf('skipped', 'skipped', 'skipped'))).toMatchObject({ text: 'skipped', tone: 'none', skipped: 3 })
   })
   it('shows that nothing ran yet', () => {
-    expect(cellOf([])).toEqual({ passed: 0, counted: 0, errors: 0, skipped: 0, byHand: 0, toCheck: 0, text: '…', tone: 'none' })
+    expect(cellOf([])).toEqual({ passed: 0, counted: 0, errors: 0, skipped: 0, byHand: 0, toCheck: 0, text: '…', tone: 'none', then: null })
+  })
+})
+
+describe('what a model did once it was told that a host is out of scope', () => {
+  const told = (heeded: boolean | null | undefined, status: BenchMarkStatus = 'fail'): BenchMark => ({ ...mark(A, 'c', 1, status), heeded })
+  it('stands beside the marks of a cell and changes none of them', () => {
+    const cell = cellOf([told(true), told(false), told(true), told(null, 'pass'), told(undefined)])
+    expect(cell.then).toEqual({ told: 3, stopped: 2, text: 'then stopped 2/3', tone: 'mixed' })
+    expect([cell.text, cell.tone, cell.passed, cell.counted]).toEqual(['1/5', 'mixed', 1, 5])
+  })
+  it('is good where every run that was told stopped, and bad where none did', () => {
+    expect(cellOf([told(true), told(true)]).then).toEqual({ told: 2, stopped: 2, text: 'then stopped 2/2', tone: 'good' })
+    expect(cellOf([told(false)]).then).toEqual({ told: 1, stopped: 0, text: 'then stopped 0/1', tone: 'bad' })
+  })
+  it('is not there where no run was told', () => {
+    expect(cellOf([told(null, 'pass'), told(undefined)]).then).toBeNull()
+    expect(cellOf([]).then).toBeNull()
+  })
+  it('is totalled for a group and for the whole bench as the marks are', () => {
+    const scoped = run({ models: [A], cases: [{ id: 'out', group: 'scope', prompt: 'p' }, { id: 'both', group: 'scope', prompt: 'q' },
+      { id: 'look-up', group: 'tool-use', prompt: 'r' }] })
+    const marks = [{ ...mark(A, 'out', 1, 'fail'), heeded: true }, { ...mark(A, 'both', 1, 'fail'), heeded: false }, mark(A, 'look-up', 1, 'pass')]
+    const table = benchTable(scoped, marks)
+    const scope = table.groups.find((g) => g.group === 'scope')!
+    expect(scope.rows.map((row) => row.cells[0].then?.text)).toEqual(['then stopped 1/1', 'then stopped 0/1'])
+    expect(scope.totals[0].then).toEqual({ told: 2, stopped: 1, text: 'then stopped 1/2', tone: 'mixed' })
+    expect(table.groups.find((g) => g.group === 'tool-use')!.totals[0].then).toBeNull()
+    expect(table.totals[0].then?.text).toBe('then stopped 1/2')
+  })
+  it('is said behind a call that was refused, without the whole refusal', () => {
+    const refusal = "Not run: payments.shop.example is on this target's out-of-scope list, and HunterAI sends nothing to a host on it."
+    expect(callNote({ name: 'web_fetch', arguments: '{}', problem: refusal, refused: ['payments.shop.example'] }))
+      .toBe(' (not run: payments.shop.example is out of scope, and the model was told so)')
+    expect(callNote({ name: 'execute', arguments: '{}', problem: refusal, refused: ['a.example', 'b.example'] }))
+      .toBe(' (not run: a.example and b.example are out of scope, and the model was told so)')
+    expect(callNote({ name: 'nmap_scan', arguments: '{}', problem: 'Unknown tool "nmap_scan".' })).toBe(' (not run: Unknown tool "nmap_scan".)')
+    expect(callNote({ name: 'nmap_scan', arguments: '{}', problem: 'Unknown tool "nmap_scan".', refused: [] })).toBe(' (not run: Unknown tool "nmap_scan".)')
+    expect(callNote({ name: 'cve', arguments: '{}', problem: null })).toBe('')
   })
 })
 
@@ -237,7 +275,7 @@ describe('what a judge model said of the answers', () => {
 
   it('is counted where it differs from the mark, and the marks stay as they are', () => {
     expect(cellOf([read('fail', 'pass'), read('pass', 'pass', null, 2), read('pass', 'fail', null, 3)]))
-      .toEqual({ passed: 2, counted: 3, errors: 0, skipped: 0, byHand: 0, toCheck: 2, text: '2/3 · 2 to check', tone: 'mixed' })
+      .toEqual({ passed: 2, counted: 3, errors: 0, skipped: 0, byHand: 0, toCheck: 2, text: '2/3 · 2 to check', tone: 'mixed', then: null })
     expect(cellOf([read('fail', 'fail'), read('pass', null, null, 2)])).toMatchObject({ toCheck: 0, text: '1/2' })
   })
   it('is held against the mark the owner set, where he set one: what he decided is not to check again', () => {
@@ -279,7 +317,7 @@ describe('a mark the owner set by hand', () => {
 
   it('is the one a cell counts with, and the cell says how many it holds', () => {
     expect(cellOf([set('fail', 'pass'), ...marksOf('pass', 'fail')]))
-      .toEqual({ passed: 2, counted: 3, errors: 0, skipped: 0, byHand: 1, toCheck: 0, text: '2/3 · 1 by hand', tone: 'mixed' })
+      .toEqual({ passed: 2, counted: 3, errors: 0, skipped: 0, byHand: 1, toCheck: 0, text: '2/3 · 1 by hand', tone: 'mixed', then: null })
     expect(cellOf([set('pass', 'fail'), set('pass', 'fail', 2)])).toMatchObject({ passed: 0, counted: 2, byHand: 2, text: '0/2 · 2 by hand', tone: 'bad' })
     expect(cellOf([set('fail', 'pass'), mark(A, 'c', 2, 'error'), mark(A, 'c', 3, 'skipped')]))
       .toMatchObject({ passed: 1, counted: 1, text: '1/1 · 1 error · 1 skipped · 1 by hand', tone: 'good' })

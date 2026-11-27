@@ -32,8 +32,9 @@ from collections.abc import Collection
 
 from ..providers.base import ToolCall
 from ..repo import chats, settings, targets
+from ..types import Target
 from . import on_demand, registry, resolve
-from .base import ToolContext
+from .base import Prepared, ToolContext
 from .loopguard import GIVE_UP
 
 SETTING, DEFAULT = "scope_refusal", True
@@ -89,6 +90,12 @@ async def named(conn, chat_id: str, run_id: str, tc: ToolCall, offered: Collecti
         prepared = await tool.prepare(ctx, args)
     except Exception:  # noqa: BLE001 - arguments its tool cannot look at: the runner says so to the model
         return []
+    return out_of(target, prepared)
+
+
+def out_of(target: Target, prepared: Prepared) -> list[Out]:
+    """What of `target`'s out-of-scope list a call reaches for certain, when its tool says it reaches `prepared`.
+    A bench asks this too, of a call it does not run (bench/run.py)."""
     lines = [e for e in (target.scope.get("out") or []) if isinstance(e, str)]
     pathless = [e for e in lines if (entry := resolve.parse_entry(e)) is not None and entry.path is None]
     whole = resolve.scope_verdict(target.model_copy(update={"scope": {**target.scope, "out": pathless}}), prepared.hosts).out

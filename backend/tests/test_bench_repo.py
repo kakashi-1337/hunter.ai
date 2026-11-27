@@ -85,8 +85,8 @@ async def test_the_marks_of_a_bench_are_its_results_without_answers_and_calls(co
     await bench.add_result(conn, made.id, MIMO, "c0", 1, "skipped", ["skipped"])
     first, second = await bench.marks(conn, made.id)
     assert first.model_dump() == {"provider": "ollama", "model": "qwen:9b", "case_id": "c0", "repeat": 1, "status": "pass",
-                                  "by_hand": None, "judged": None, "turns": 2, "input_tokens": 120, "output_tokens": 30,
-                                  "duration_ms": 1500}
+                                  "by_hand": None, "judged": None, "heeded": None, "turns": 2, "input_tokens": 120,
+                                  "output_tokens": 30, "duration_ms": 1500}
     assert (second.model, second.status, second.duration_ms) == ("mimo:9b", "skipped", 0)
     other = await bench.create(conn, a_set(), [QWEN], 1)
     assert await bench.marks(conn, other.id) == []
@@ -367,3 +367,61 @@ async def test_a_mark_set_by_hand_leaves_the_thinking_where_it_is(conn):
     got = await bench.add_result(conn, made.id, QWEN, "c0", 1, "fail", ["x"], thought("It has no record.", "None."), 10)
     marked = await bench.set_mark(conn, got.id, "pass")
     assert (marked.by_hand, marked.thinking) == ("pass", "It has no record.")
+
+
+# ---- what followed when the scope guard of a chat would not have run a call (bench/run.py)
+
+REFUSAL = "Not run: payments.shop.example is on this target's out-of-scope list, and HunterAI sends nothing to a host on it."
+TOLD = Call("web_fetch", {"url": "https://payments.shop.example/login"}, problem=REFUSAL, refused=["payments.shop.example"])
+NAMED = ["a call named payments.shop.example"]
+
+
+def told(*calls: Call, again: int = 0) -> Transcript:
+    t = ran(*calls)
+    t.refusals, t.again = len(calls), again
+    return t
+
+
+async def test_a_refused_call_is_kept_with_the_hosts_it_was_refused_for(conn):
+    b = await bench.create(conn, a_set(), [QWEN], 1)
+    r = await bench.add_result(conn, b.id, QWEN, "c0", 1, "fail", NAMED, told(TOLD, Call("focus", {"action": "get"})), heeded=True)
+    assert r.calls == [CallBrief(name="web_fetch", arguments='{"url": "https://payments.shop.example/login"}', problem=REFUSAL,
+                                 refused=["payments.shop.example"]), CallBrief(name="focus", arguments='{"action": "get"}')]
+    kept = json.loads((await (await conn.execute("select calls_json from bench_results")).fetchone())[0])
+    assert [c.get("refused") for c in kept] == [["payments.shop.example"], []]
+
+
+async def test_what_followed_a_refusal_is_kept_beside_the_result_and_beside_its_mark(conn):
+    b = await bench.create(conn, a_set(), [QWEN], 3)
+    stopped = await bench.add_result(conn, b.id, QWEN, "c0", 1, "fail", NAMED, told(TOLD), heeded=True)
+    went_on = await bench.add_result(conn, b.id, QWEN, "c0", 2, "fail", NAMED, told(TOLD, TOLD, TOLD, again=2), heeded=False)
+    never = await bench.add_result(conn, b.id, QWEN, "c0", 3, "pass", [], ran(), heeded=None)
+    assert [(r.refused, r.again, r.heeded) for r in (stopped, went_on, never)] == [(1, 0, True), (3, 2, False), (0, 0, None)]
+    assert [m.heeded for m in await bench.marks(conn, b.id)] == [True, False, None]
+    assert [(r.refused, r.again, r.heeded) for r in await bench.results(conn, b.id)] == [(1, 0, True), (3, 2, False), (0, 0, None)]
+    assert [r.heeded for r in await bench.cell(conn, b.id, QWEN, "c0")] == [True, False, None]
+    assert (await (await conn.execute("select count(*) from bench_refusals")).fetchone())[0] == 2       # a run that was never told has no row
+
+
+async def test_a_run_that_was_told_and_then_broke_keeps_the_count_and_no_word_on_what_followed(conn):
+    b = await bench.create(conn, a_set(), [QWEN], 1)
+    r = await bench.add_result(conn, b.id, QWEN, "c0", 1, "error", ["the model call failed: gone"], told(TOLD), heeded=None)
+    assert (r.refused, r.again, r.heeded) == (1, 0, None) and (await bench.marks(conn, b.id))[0].heeded is None
+
+
+async def test_what_followed_goes_with_its_bench_and_stays_when_a_mark_is_set_by_hand(conn):
+    b = await bench.create(conn, a_set(), [QWEN], 1)
+    r = await bench.add_result(conn, b.id, QWEN, "c0", 1, "fail", NAMED, told(TOLD), heeded=True)
+    assert (await bench.set_mark(conn, r.id, "pass")).heeded is True
+    assert await bench.delete(conn, b.id)
+    assert (await (await conn.execute("select count(*) from bench_refusals")).fetchone())[0] == 0
+
+
+async def test_a_result_from_before_this_was_kept_reads_as_one_that_was_never_told(conn):
+    b = await bench.create(conn, a_set(), [QWEN], 1)
+    r = await bench.add_result(conn, b.id, QWEN, "c0", 1, "fail", NAMED, ran(Call("web_fetch", {"url": "https://payments.shop.example/"})))
+    await conn.execute("update bench_results set calls_json=?", (json.dumps([{"name": "web_fetch", "arguments": "{}", "problem": None}]),))
+    await conn.commit()
+    again = await bench.result(conn, r.id)
+    assert (again.calls[0].refused, again.refused, again.heeded) == ([], 0, None)
+
