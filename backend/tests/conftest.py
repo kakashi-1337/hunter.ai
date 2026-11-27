@@ -155,6 +155,10 @@ def machine_of_no_temperature(tmp_path, monkeypatch):
     monkeypatch.setattr(thermal, "HWMON", tmp_path / "no-hwmon")
     monkeypatch.setattr(thermal, "NVIDIA_SMI", "no-nvidia-smi-in-a-test")
     monkeypatch.setattr(thermal, "_gpu", None)
+    from hunterai import monitor
+    monkeypatch.setattr(monitor, "PROC", tmp_path / "no-proc")       # no test reads this machine's processes
+    monkeypatch.setattr(monitor, "_cpu", None)
+    monkeypatch.setattr(monitor, "_seen", None)
 
 
 @pytest.fixture

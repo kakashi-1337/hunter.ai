@@ -1,6 +1,6 @@
 import type { ProxyTest, Skill, SkillInspection } from './types'
 import type {
-  ActivitySummary, QueuedMessage, CaidoExchange, CaidoRow, CaidoStatus, Checkup, ColibriServer, FindingRow, LlamaFind, LlamaServer, LocalModel, SystemStatus,
+  ActivitySummary, QueuedMessage, CaidoExchange, CaidoRow, CaidoStatus, Checkup, ColibriServer, FindingRow, LlamaFind, LlamaServer, LocalModel, MonitorReading, SystemStatus,
   Memory, MemorySettings,
   Persona,
   McpCheck, McpInspection, McpReview, McpScan, McpServer,
@@ -226,6 +226,8 @@ export const putMemorySettings = (patch: Partial<Pick<MemorySettings, 'enabled' 
 export const memorizeChat = (chatId: string) => request<Job>('POST', `/api/chats/${chatId}/memorize`)
 
 export const systemStatus = () => request<SystemStatus>('GET', '/api/system/status')
+/** One reading for the Live monitor. Asked only while that panel is open. */
+export const systemMonitor = () => request<MonitorReading>('GET', '/api/system/monitor')
 export const systemCheckup = () => request<Checkup>('GET', '/api/system/checkup')
 /** The local model in use and its window: what a window costs for it, what the rules and tools take of it. */
 export const systemLocal = () => request<LocalModel>('GET', '/api/system/local')

@@ -2474,6 +2474,38 @@ target, with filters, and exports what is shown as Markdown (evidence included: 
 before you send it anywhere). A `swarm` call shows one line per subagent in the chat: its
 brief, whether it waits, works, or is finished, and whether its answer was verified.
 
+### Live monitor
+
+**Monitor**, beside that line, opens the live monitor above it: the machine as it is now,
+read every three seconds while it is open and the page is in view.
+
+| Row | What it shows |
+| --- | --- |
+| CPU | The share of the processors' time that was work since the last look. |
+| CPU temperature | The processor against its limit (`HUNTERAI_MAX_CPU_TEMP`). The bar turns yellow within ten degrees of the limit and red at it. |
+| RAM | Memory in use (what the system does not call available) of all there is. Under it, the four programs that hold the most for themselves, then what they leave ("other"), then what is free. |
+| VRAM | For each NVIDIA card, its memory in use of all it has. Under it, who holds it, as the card's driver tells it. |
+| GPU load, Temperature, Power | The card's load in percent, its temperature against its limit (`HUNTERAI_MAX_GPU_TEMP`), and what it draws in watts. |
+
+A program is named for the file it runs, and a Python process for what it was started to
+run (`python -m hunterai` is "hunterai"). The memory counted for a program is what it holds
+for itself. A file it has only mapped (a model file that llama.cpp maps, for one) is not
+counted: the system can give that memory to another program, and counts it as available.
+A process of another user is named by its short name.
+
+Nothing is read while the monitor is closed. Each look at a card starts `nvidia-smi` twice
+(once for the card, once for `pmon`, its table of processes), which keeps a card awake that
+a laptop would put to sleep: close the monitor when you do not need it. A machine without
+an NVIDIA card, or without `nvidia-smi`, shows the processor and the memory only. The
+processor's load and the memory are read from `/proc`, so they are there on Linux only.
+
+Seen on 27 November 2026 on a Linux machine without a card, with a stand-in for
+`nvidia-smi` that printed one card and three processes: the page asked nothing while the
+monitor was closed, twice in the first 3.6 seconds it was open, and nothing after it was
+closed. It was not run against a real card. What `nvidia-smi pmon` prints there, and
+whether a program that uses the card through Vulkan stands in its table, is first seen on
+your machine. A program the table leaves out is part of "other".
+
 ## Update
 
 ```sh
