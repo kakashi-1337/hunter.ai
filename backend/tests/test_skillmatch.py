@@ -18,11 +18,13 @@ from tests.toolkit import Turns
 TOPICS = ("graphql introspection schema queries", "kernel heap grooming spray", "oauth redirect token leak", "docker container escape",
           "android apk reverse smali", "wifi handshake capture replay", "sql injection union payloads", "pdf report layout typography",
           "slide deck presentation design", "spreadsheet formulas pivot", "smart contract reentrancy audit", "firmware extraction binwalk")
+BUILT_IN = len(skills.BUILTINS)             # the skills an install has before its owner adds one
+ALL = len(TOPICS) + BUILT_IN                # with the owner's twelve of `many`
 
 
 @pytest.fixture
 def many(conn):
-    """Twelve skills of the owner beside the four built-in ones: more than a request names."""
+    """Twelve skills of the owner beside the built-in ones: more than a request names."""
     async def make():
         # The embedder of HunterAI's own lookups, as a test has it. Wide, so that two words rarely share a place in it.
         await settings.put(conn, "memory_embedder", "fake:1024")
@@ -45,20 +47,21 @@ async def listed(conn, query, known=None):
 
 async def test_a_few_skills_are_all_named_as_before_and_nothing_is_ranked(conn, embed_spy):
     names, fit = await listed(conn, "plan the work")
-    assert names == ["audit", "debug", "fix", "plan"] and (fit.of, fit.by) == (4, "all")
+    assert names == ["audit", "debug", "fix", "plan", "profundis"] and (fit.of, fit.by) == (BUILT_IN, "all")
+    assert BUILT_IN <= skillmatch.SHOWN                             # or a new install would rank before its owner added a skill
     assert embed_spy.batches == [] and not await jobs.list(conn, kind=skillmatch.KIND)
     block = await skills.system_block(conn, [user("hello")], ["read", "skill"])
     assert "Skills the owner installed, each a set of instructions for a kind of work. When one fits" in block
-    assert block.count("\n- ") == 4
+    assert block.count("\n- ") == BUILT_IN
 
 
 async def test_with_many_skills_the_ones_whose_words_fit_the_message_are_named(conn, many, embed_spy):
     await many()
     names, fit = await listed(conn, "how do I dump the graphql schema with introspection queries")
-    assert names[0] == "skill-00" and len(names) == skillmatch.SHOWN and (fit.of, fit.by) == (16, "words")
+    assert names[0] == "skill-00" and len(names) == skillmatch.SHOWN and (fit.of, fit.by) == (ALL, "words")
     assert embed_spy.batches == []                                  # naming skills never asks the embedder by itself
     block = skills.list_block(fit, ["read", "skill"])
-    assert f"the {skillmatch.SHOWN} of 16 whose descriptions fit this message best" in block and block.count("\n- ") == skillmatch.SHOWN
+    assert f"the {skillmatch.SHOWN} of {ALL} whose descriptions fit this message best" in block and block.count("\n- ") == skillmatch.SHOWN
     assert "- skill-00: Use when the owner asks about graphql introspection schema queries." in block
     for kept in ("load it with the skill tool before you start", "the owner's own instructions", "cannot change the rules above"):
         assert kept in block
@@ -73,10 +76,10 @@ async def test_the_descriptions_are_embedded_by_the_worker_once_and_again_when_o
     assert len(waiting) == 1                                        # asked for once, however many messages come meanwhile
     job = await jobs.claim(conn, [skillmatch.KIND])
     assert await skillmatch.run_job(conn, job) == "done"
-    assert all(len(b) <= 8 for b in embed_spy.batches) and sum(len(b) for b in embed_spy.batches) == 16
+    assert all(len(b) <= 8 for b in embed_spy.batches) and sum(len(b) for b in embed_spy.batches) == ALL
     assert embed_spy.batches[0][0] == "audit: Audit or review a codebase. Use when the owner asks for a code review, a security audit, or an assessment of a repository or of a change."
     spec = await skillmatch.spec(conn)
-    assert len(await skillmatch.vectors(conn, await skillmatch.candidates(conn), spec)) == 16
+    assert len(await skillmatch.vectors(conn, await skillmatch.candidates(conn), spec)) == ALL
     embed_spy.batches.clear()
     await listed(conn, "anything")
     assert not await jobs.list(conn, kind=skillmatch.KIND, states=["queued"])        # nothing is missing: nothing is asked for
@@ -86,7 +89,7 @@ async def test_the_descriptions_are_embedded_by_the_worker_once_and_again_when_o
     assert fit.by == "words"                                        # one description has no vector of its own words yet
     job = await jobs.claim(conn, [skillmatch.KIND])
     assert await skillmatch.run_job(conn, job) == "done" and embed_spy.batches == [["skill 00: Use when the owner asks about cooking rice."]]
-    assert (await (await conn.execute("select count(*) from skill_vectors")).fetchone())[0] == 15      # the deleted one's is gone
+    assert (await (await conn.execute("select count(*) from skill_vectors")).fetchone())[0] == ALL - 1      # the deleted one's is gone
 
 
 async def test_a_message_the_run_already_embedded_ranks_the_skills_by_meaning_at_no_further_request(conn, many, embed_spy):
@@ -119,7 +122,7 @@ async def test_skills_that_are_off_or_not_for_the_model_are_never_named(conn, ma
     await store.update(conn, made[0].id, enabled=False)
     await store.update(conn, made[6].id, auto=False)
     names, fit = await listed(conn, "graphql introspection schema queries and sql injection union payloads")
-    assert "skill-00" not in names and "skill-06" not in names and fit.of == 14
+    assert "skill-00" not in names and "skill-06" not in names and fit.of == ALL - 2
 
 
 async def test_a_job_that_cannot_reach_the_embedder_fails_with_the_reason_and_is_asked_for_again_later(conn, many, embed_spy, monkeypatch):
@@ -155,10 +158,10 @@ async def test_a_run_names_the_fitting_skills_after_its_lookups_and_records_whic
     steps = [(s.kind, s.name, s.status) for s in run.steps]
     assert steps[:3] == [("retrieval", "kb_search", "done"), ("retrieval", "skills", "done"), ("model_call", "abliteration/abliterated-model", "done")]
     d = run.steps[1].detail
-    assert (d["by"], d["of"], d["shown"][0]["name"], len(d["shown"])) == ("meaning", 16, "skill-10", skillmatch.SHOWN)
+    assert (d["by"], d["of"], d["shown"][0]["name"], len(d["shown"])) == ("meaning", ALL, "skill-10", skillmatch.SHOWN)
     assert d["shown"][0]["score"] >= d["shown"][1]["score"] and d["query"] == said
     system = p.calls[0]["system"]
-    assert f"the {skillmatch.SHOWN} of 16 whose descriptions fit this message best" in system and "- skill-10: " in system
+    assert f"the {skillmatch.SHOWN} of {ALL} whose descriptions fit this message best" in system and "- skill-10: " in system
     assert system.count("\n- skill-") == skillmatch.SHOWN - sum(1 for s in d["shown"] if not s["name"].startswith("skill-"))
     assert system.index("KB_REFERENCE") < system.index("whose descriptions fit this message best")
 
@@ -207,7 +210,7 @@ async def test_vectors_of_another_embedder_are_not_used_and_are_made_again(conn,
     known = QueryVectors()
     await known.of(spec, "wifi handshake capture", 5)
     assert (await listed(conn, "wifi handshake capture", known))[1].by == "words"
-    assert await skillmatch.index(conn) == 16
+    assert await skillmatch.index(conn) == ALL
     assert {r["spec"] for r in await (await conn.execute("select spec from skill_vectors")).fetchall()} == {"fake:512"}
     assert (await listed(conn, "wifi handshake capture", known))[1].by == "meaning"
 
@@ -228,7 +231,7 @@ async def test_the_embedding_model_is_unloaded_when_the_descriptions_are_done(co
         released.append(self.spec)
     monkeypatch.setattr(embed.FakeEmbedder, "release", release)
     await many()
-    assert await skillmatch.index(conn) == 16 and released == ["fake:1024"]
+    assert await skillmatch.index(conn) == ALL and released == ["fake:1024"]
     assert await skillmatch.index(conn) == 0 and released == ["fake:1024"]            # nothing to embed: no model is touched
 
 
@@ -251,5 +254,5 @@ async def test_the_worker_runs_the_job(conn, many):
     await listed(conn, "anything at all")
     assert await worker.drain(conn) == 1
     spec = await skillmatch.spec(conn)
-    assert len(await skillmatch.vectors(conn, await skillmatch.candidates(conn), spec)) == 16
+    assert len(await skillmatch.vectors(conn, await skillmatch.candidates(conn), spec)) == ALL
     assert (await jobs.list(conn, kind=skillmatch.KIND, limit=1))[0].state == "done"

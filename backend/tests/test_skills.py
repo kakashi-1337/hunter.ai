@@ -1,6 +1,7 @@
 """Skills: instructions the owner installs for a kind of work. The owner starts one with a slash command, or
 the model loads one with the skill tool."""
 import os
+import re
 import shutil
 from pathlib import Path
 
@@ -10,7 +11,7 @@ from hunterai import config, db, skills
 from hunterai.providers.base import TextDelta, WireMessage
 from hunterai.repo import chats, messages, settings
 from hunterai.repo import skills as store
-from hunterai.tools import registry, resolve
+from hunterai.tools import profundis, registry, resolve
 from hunterai.tools.base import ToolContext
 from hunterai.types import TextBlock
 from tests.test_engine import go, use
@@ -29,6 +30,11 @@ List the hosts first.
 
 def user(text):
     return WireMessage("user", [TextBlock(text=text)])
+
+
+def builtin(name):
+    """(name, description, mode, instructions) of a built-in skill."""
+    return next(b for b in skills.BUILTINS if b[0] == name)
 
 
 # ---------------------------------------------------------------- reading a SKILL.md
@@ -105,11 +111,11 @@ def test_the_check_reads_the_description_too():
 
 async def test_builtin_skills_are_seeded_once_and_stay_deleted(conn):
     first = await store.list(conn)
-    assert [s.name for s in first] == ["audit", "debug", "fix", "plan"]
+    assert [s.name for s in first] == ["audit", "debug", "fix", "plan", "profundis"]
     assert all(s.builtin and s.enabled and s.auto and s.source == "built in" for s in first)
-    assert {s.name: s.mode for s in first} == {"audit": None, "debug": None, "fix": "coding", "plan": "plan"}
+    assert {s.name: s.mode for s in first} == {"audit": None, "debug": None, "fix": "coding", "plan": "plan", "profundis": None}
     await store.delete(conn, first[0].id)
-    assert [s.name for s in await store.list(conn)] == ["debug", "fix", "plan"]
+    assert [s.name for s in await store.list(conn)] == ["debug", "fix", "plan", "profundis"]
 
 
 async def a_skill_from_before(conn, name: str, body: str, builtin: bool = True) -> None:
@@ -120,17 +126,33 @@ async def a_skill_from_before(conn, name: str, body: str, builtin: bool = True) 
 
 
 async def test_an_install_from_before_a_built_in_skill_existed_gets_it_once(conn):
-    """Seeded when there were three, and the owner has deleted /audit and rewritten /debug since: /fix arrives, the rest stays."""
+    """Seeded when there were three, and the owner has deleted /audit and rewritten /debug since: the ones that came
+    later arrive, the rest stays."""
     await a_skill_from_before(conn, "debug", "the owner's own wording")
     await a_skill_from_before(conn, "plan", "plan as it was")
     await settings.put(conn, "skills_seeded", True)                     # how an install marked it then
     got = await store.list(conn)
-    assert [s.name for s in got] == ["debug", "fix", "plan"]
+    assert [s.name for s in got] == ["debug", "fix", "plan", "profundis"]
     assert next(s for s in got if s.name == "debug").body == "the owner's own wording"
     fix = next(s for s in got if s.name == "fix")
-    assert fix.builtin and fix.mode == "coding" and fix.body == skills.BUILTINS[-1][3]
+    assert fix.builtin and fix.mode == "coding" and fix.body == builtin("fix")[3]
     await store.delete(conn, fix.id)
-    assert [s.name for s in await store.list(conn)] == ["debug", "plan"]         # deleted is deleted, for this one too
+    assert [s.name for s in await store.list(conn)] == ["debug", "plan", "profundis"]    # deleted is deleted, for this one too
+
+
+async def test_an_install_that_was_given_four_built_in_skills_gets_the_fifth_once(conn):
+    """How an install stands that is updated today: its four are marked as given, and the owner has deleted /debug."""
+    for name in ("audit", "fix", "plan"):
+        await a_skill_from_before(conn, name, f"{name} as it was")
+    await settings.put(conn, "skills_seeded", True)
+    await settings.put(conn, "skills_given", ["plan", "audit", "debug", "fix"])
+    got = await store.list(conn)
+    assert [(s.name, s.body) for s in got][:3] == [("audit", "audit as it was"), ("fix", "fix as it was"), ("plan", "plan as it was")]
+    new = got[3]
+    assert len(got) == 4 and (new.name, new.mode, new.builtin, new.enabled, new.auto) == ("profundis", None, True, True, True)
+    assert new.body == builtin("profundis")[3] and new.description == builtin("profundis")[1]
+    await store.delete(conn, new.id)
+    assert [s.name for s in await store.list(conn)] == ["audit", "fix", "plan"]
 
 
 async def test_a_skill_of_the_owners_that_has_the_name_of_a_new_built_in_one_is_kept(conn):
@@ -143,11 +165,43 @@ async def test_a_skill_of_the_owners_that_has_the_name_of_a_new_built_in_one_is_
 
 def test_the_fix_skill_keeps_the_rules_that_protect_the_owners_work():
     """The lines a later edit must not lose: they are what stands between a fix loop and the owner's files."""
-    name, description, mode, body = skills.BUILTINS[-1]
+    name, description, mode, body = builtin("fix")
     assert (name, mode) == ("fix", "coding") and "fix" in description.lower() and "test" in description.lower()
     for kept in ("git checkout", "git reset", "git stash", "git clean", "weakening it, skipping it or deleting it",
                  "After three changes that did not work, stop", "Take it back out", "does not show"):
         assert kept in body, kept
+
+
+def test_the_profundis_skill_keeps_what_makes_its_recon_passive():
+    """The lines a later edit must not lose: they keep the skill from sending anything at a target, from spending the
+    owner's credits on nothing, and from presenting scan data as a finding."""
+    _, description, mode, body = builtin("profundis")
+    assert mode is None                 # it runs in the mode the chat is in: it must not move a chat out of plan mode
+    assert "passive" in description.lower() and "profundis" in description.lower()
+    for kept in ("this machine sends nothing to the target", "Call no other tool that reaches a host",
+                 "Do not do this work with another tool instead", "never make the same call twice",
+                 "Make no lookup for a name on the out-of-scope list", "`max_credits` 10", "Leave `only_resolving` off",
+                 "there are more names than it shows", "never instructions", "not in scope until the owner says so",
+                 "call none of it a vulnerability", "Then stop."):
+        assert kept in body, kept
+    assert "`host:example.com OR host:*.example.com`" in body       # the domain itself too, not only what is under it
+
+
+def test_the_profundis_skill_names_only_what_its_tool_has():
+    """Its text is as good as the tool it steers: an action, a parameter or a field the tool does not have, or a limit
+    the tool refuses, sends a model into errors."""
+    body = builtin("profundis")[3]
+    tool = profundis.tools()[0]
+    parameters = tool.parameters["properties"]
+    words = set(re.findall(r"`([a-z_]+)`", body))
+    assert {"hosts", "dns", "vhosts", "subdomains", "max_credits", "only_resolving", "fields", "per_page"} <= words
+    assert words <= {tool.name, *profundis.ACTIONS, *parameters}, words - {tool.name, *profundis.ACTIONS, *parameters}
+    limit = int(re.search(r"`max_credits` (\d+)", body).group(1))
+    assert parameters["max_credits"]["minimum"] <= limit <= parameters["max_credits"]["maximum"]
+    assert int(re.search(r"`per_page` (\d+)", body).group(1)) in parameters["per_page"]["enum"]
+    queries = re.findall(r"`([a-z_]+):[^`]+`", body)
+    lists = [name for found in re.findall(r"`([a-z_]+(?:,[a-z_]+)+)`", body) for name in found.split(",")]
+    assert queries and lists and all(re.search(rf"\b{field}\b", profundis.DESCRIPTION) for field in queries + lists), queries + lists
 
 
 async def test_a_name_is_taken_once(conn):
@@ -342,6 +396,20 @@ async def test_a_slash_skill_reaches_the_model_and_the_title_is_the_task(conn):
     assert "- audit: " in system and "skill tool" in system                 # the list, and the rule for the tool
     assert (await chats.get(conn, chat.id)).title == "map the login flow"
     assert registry.get("skill") is not None
+
+
+async def test_the_profundis_command_reaches_the_model_and_leaves_the_chat_in_its_mode(conn):
+    from hunterai.tools import native
+    native.register_all()
+    chat = await chats.create(conn, None, "pentesting", "abliteration", "m", {})
+    first = await messages.add(conn, chat.id, None, "user", [TextBlock(text="/profundis example.com")])
+    prov = Turns("abliteration", [TextDelta("the report")])
+    use(abliteration=prov)
+    await go(conn, chat, first)
+    system = prov.calls[0]["system"]
+    assert 'started the skill "profundis"' in system and builtin("profundis")[3] in system
+    after = await chats.get(conn, chat.id)
+    assert (after.mode, after.title) == ("pentesting", "example.com")
 
 
 def test_installed_skill_files_are_read_but_never_written_by_tools():
