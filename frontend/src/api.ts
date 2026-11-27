@@ -5,7 +5,7 @@ import type {
   Persona,
   McpCheck, McpInspection, McpReview, McpScan, McpServer,
   KbChunk,
-  ChatKb, Collection, Job, JobAction, KbDocument, KbHealth, KbHit, KbStatus, UploadResult,
+  ChatKb, Collection, Job, JobAction, KbDocument, KbGone, KbHealth, KbHit, KbStatus, UploadResult,
   Chat, Finding, Goal, Grant, McpStatus, Message, Mode, Options, PermissionDecision, PermissionRequest, ProcessInfo, ProviderInfo,
   BriefResult, RunDetail, RunSummary, ScopeAnswer, SearchHit, Settings, StartedRun, Target, ToolInfo, Upload,
   BenchDetail, BenchJudging, BenchListed, BenchResult, BenchRun, BenchSet, JudgeCheck, JudgeCheckDetail, ModelRef,
@@ -178,6 +178,9 @@ export const listChunks = (documentId: string, offset = 0) =>
 export const editChunk = (id: string, text: string) => request<KbChunk>('PATCH', `/api/kb/chunks/${id}`, { text })
 export const deleteChunk = (id: string) => request<void>('DELETE', `/api/kb/chunks/${id}`)
 export const deleteDocument = (id: string) => request<void>('DELETE', `/api/kb/documents/${id}`)
+/** The documents of a collection that were read from a folder of this machine and whose file is gone from it. */
+export const goneFiles = (id: string) => request<KbGone>('GET', `/api/kb/collections/${id}/gone`)
+export const removeGone = (id: string) => request<{ removed: number }>('POST', `/api/kb/collections/${id}/gone/remove`)
 export const addNote = (collectionId: string, title: string, text: string) =>
   request<KbDocument>('POST', `/api/kb/collections/${collectionId}/notes`, { title, text })
 export const reembed = (collectionId: string, embedder: string) =>

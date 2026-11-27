@@ -296,6 +296,16 @@ when the collection is created.
   another write keeps busy for longer than the worker waits does not end the worker: it
   says so on the console, tries again, and a job it could not close goes back into the queue.
   A worker that does not run is said on the page (see "When a part stops working").
+- **Files that are gone.** A folder that is ingested again takes in what is new and what
+  changed, and leaves the documents of the files that were deleted since. **Gone files**,
+  beside the filters of Documents, looks for them: the documents that were read from a
+  folder of this machine and whose file is not there now. It names the first twenty and
+  counts all of them, and **Remove them from the index** takes them out with their
+  passages; nothing on disk is touched. A document whose whole source is not there (a
+  drive that is not plugged in, a folder that was moved) is left alone, and so is one
+  whose folder stands in no queue entry any more: add that folder again and look once
+  more. A repository, an upload and a page have no file on this machine, and are not
+  looked at.
 - **Disk.** A job fails with a disk-floor error, and can be retried, once less than 10 GiB
   is free. A failed job keeps its staged files until it is retried, cancelled, or 7 days
   old. As a rule of thumb, 1.5 million chunks need about 6 GB of vector files plus the chunk

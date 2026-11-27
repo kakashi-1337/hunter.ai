@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { alreadyIngested, duplicateJobs, jobEmpty, jobRemovable, formatBytes, formatEta, formatRate, jobActions, jobProgress, jobSource, jobsKey, noKnowledgeLine, relPath, sourceLabel, uploadBatches } from '../kb'
-import type { Job } from '../types'
+import { alreadyIngested, duplicateJobs, goneLines, jobEmpty, jobRemovable, formatBytes, formatEta, formatRate, jobActions, jobProgress, jobSource, jobsKey, noKnowledgeLine, relPath, sourceLabel, uploadBatches } from '../kb'
+import type { Job, KbGone } from '../types'
 
 const job = (p: Partial<Job>): Job => ({
   id: 'j', kind: 'ingest', state: 'queued', payload: {}, checkpoint: {}, attempts: 0, error: null, progress_total: 0, progress_done: 0,
@@ -87,5 +87,30 @@ describe('a chat that reads no collection', () => {
     expect(noKnowledgeLine(1, 2)).toBeNull()
     expect(noKnowledgeLine(3, 3)).toBeNull()
     expect(noKnowledgeLine(0, 0)).toBeNull()
+  })
+})
+
+describe('what a look for gone files says', () => {
+  const found = (over: Partial<KbGone> = {}): KbGone => ({ checked: 12, gone: 0, first: [], away: 0, sources: [], unknown: 0, ...over })
+  it('says that every file is there', () => {
+    expect(goneLines(found())).toEqual(['Every file is still there: 12 documents were read from a folder of this machine.'])
+    expect(goneLines(found({ checked: 1 }))).toEqual(['Every file is still there: 1 document was read from a folder of this machine.'])
+  })
+  it('says that there is no file to look for in a collection without a folder', () => {
+    expect(goneLines(found({ checked: 0 }))).toEqual(['No document of this collection was read from a folder of this machine, so there is no file to look for.'])
+  })
+  it('counts the documents whose file is gone, and says when only the first are named', () => {
+    expect(goneLines(found({ gone: 3, first: ['/a', '/b', '/c'] }))).toEqual(['3 documents are of files that are gone from this machine:'])
+    expect(goneLines(found({ gone: 1, first: ['/a'] }))).toEqual(['1 document is of a file that is gone from this machine:'])
+    expect(goneLines(found({ gone: 25, first: Array<string>(20).fill('/x') }))).toEqual(['25 documents are of files that are gone from this machine. The first 20:'])
+  })
+  it('says what is left alone, and why', () => {
+    expect(goneLines(found({ away: 2, sources: ['/run/media/dave/1TB_HAI/notes'] }))).toEqual([
+      '2 documents come from a source that is not there now (/run/media/dave/1TB_HAI/notes): a drive that is not plugged in, or a folder that was moved. They are left alone.'])
+    expect(goneLines(found({ away: 1, sources: ['/a', '/b'] }))).toEqual([
+      '1 document comes from a source that is not there now (/a, /b): a drive that is not plugged in, or a folder that was moved. It is left alone.'])
+    expect(goneLines(found({ unknown: 4 }))).toEqual(['4 documents were not judged: the queue entry of their folder was removed. Add the folder again and look once more.'])
+    expect(goneLines(found({ unknown: 1 }))).toEqual(['1 document was not judged: the queue entry of its folder was removed. Add the folder again and look once more.'])
+    expect(goneLines(found({ gone: 1, first: ['/a'], away: 2, sources: ['/s'], unknown: 1 })).map((l) => l.slice(0, 12))).toEqual(['1 document i', '2 documents ', '1 document w'])
   })
 })

@@ -1,4 +1,4 @@
-import type { Job, JobAction, JobState } from './types'
+import type { Job, JobAction, JobState, KbGone } from './types'
 
 export const POLL_MS = 2000
 export const BATCH_FILES = 50
@@ -139,3 +139,18 @@ export const alreadyIngested = (message: string): boolean => message.startsWith(
 /** A finished ingest that brought nothing in (its source could not be fetched): worth trying again, not a record to keep. */
 export const jobEmpty = (job: Job): boolean =>
   job.kind === 'ingest' && job.state === 'done' && !(job.stats.ok ?? 0) && !(job.stats.unchanged ?? 0) && (job.stats.failed ?? 0) > 0
+
+/** What a look for gone files found, in lines for the owner. The documents whose file is gone are named under the
+ * first line; what is left alone is said with the reason. */
+export function goneLines(f: KbGone): string[] {
+  if (!f.checked) return ['No document of this collection was read from a folder of this machine, so there is no file to look for.']
+  const docs = (n: number, one: string, many: string) => `${n} document${n === 1 ? ` ${one}` : `s ${many}`}`
+  const lines: string[] = []
+  if (f.gone) lines.push(`${docs(f.gone, 'is of a file that is', 'are of files that are')} gone from this machine${f.gone > f.first.length ? `. The first ${f.first.length}:` : ':'}`)
+  if (f.away) {
+    lines.push(`${docs(f.away, 'comes', 'come')} from a source that is not there now (${f.sources.join(', ')}): a drive that is not plugged in, `
+      + `or a folder that was moved. ${f.away === 1 ? 'It is' : 'They are'} left alone.`)
+  }
+  if (f.unknown) lines.push(`${docs(f.unknown, 'was', 'were')} not judged: the queue entry of ${f.unknown === 1 ? 'its' : 'their'} folder was removed. Add the folder again and look once more.`)
+  return lines.length ? lines : [`Every file is still there: ${docs(f.checked, 'was', 'were')} read from a folder of this machine.`]
+}
