@@ -242,6 +242,7 @@ async def test_a_judging_on_its_way_counts_as_one_that_runs(conn):
     await asyncio.wait_for(reached.wait(), 20)
     try:
         assert judging.running() == run_id and judging.progress(run_id) is None
+        assert judging.checking() is None and judging.busy()                # it is a judging of a bench, and no check of a judge
         with pytest.raises(judging.Busy):
             await judging.start(db.connect, run_id, JUDGE)
     finally:

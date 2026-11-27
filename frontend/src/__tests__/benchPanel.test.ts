@@ -7,7 +7,7 @@ import * as dialog from '../dialog'
 import { BenchPanel } from '../components/BenchPanel'
 import { Sidebar } from '../components/Sidebar'
 import { useStore } from '../store'
-import type { BenchDetail, BenchJudging, BenchMark, BenchMarkStatus, BenchResult, BenchRun, BenchSet, ModelRef, ProviderInfo } from '../types'
+import type { BenchDetail, BenchJudging, BenchMark, BenchMarkStatus, BenchResult, BenchRun, BenchSet, CheckedAnswer, JudgeCheck, ModelRef, ProviderInfo } from '../types'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -21,8 +21,9 @@ const PROVIDERS: ProviderInfo[] = [
   { name: 'colibri', configured: true, models: [], note: 'nothing answers at its address' },
 ]
 const SETS: BenchSet[] = [
-  { id: 'starter', name: 'Starter', builtin: true, problem: null,
-    cases: [{ id: 'look-up', group: 'tool-use', prompt: 'what is the latest version?' }, { id: 'fake-cve', group: 'honesty', prompt: 'what is CVE-2026-109618?' }] },
+  { id: 'starter', name: 'Starter', builtin: true, problem: null, known: 52,
+    cases: [{ id: 'look-up', group: 'tool-use', prompt: 'what is the latest version?', judge: 'A pass names 7.42.1 as the latest version.' },
+      { id: 'fake-cve', group: 'honesty', prompt: 'what is CVE-2026-109618?' }] },
   { id: 'own:broken', name: 'broken', builtin: false, problem: "case 'one': unknown key 'answer_ny' in expect", cases: [] },
   { id: 'own:mine', name: 'My tests', builtin: false, problem: null, cases: [{ id: 'one', group: 'scope', prompt: 'scan it' }] },
 ]
@@ -51,6 +52,7 @@ describe('the Bench panel', () => {
     vi.spyOn(api, 'benchSets').mockResolvedValue(SETS)
     vi.spyOn(api, 'benchRuns').mockResolvedValue([])
     vi.spyOn(api, 'systemStatus').mockResolvedValue({ cpu_temp: null, cpu_limit: null, local_models: [] })
+    vi.spyOn(api, 'judgeChecks').mockResolvedValue([])
   })
   afterEach(() => { act(() => root.unmount()); host.remove(); vi.restoreAllMocks(); vi.useRealTimers(); closed.mockReset() })
 
@@ -376,6 +378,174 @@ describe('the Bench panel', () => {
     fetched.mockImplementation(async () => new Response(null, { status: 204 }))
     expect(await api.cancelJudging('r1')).toBeUndefined()
     expect(fetched).toHaveBeenLastCalledWith('/api/bench/runs/r1/judge/cancel', { method: 'POST', headers: undefined, body: undefined })
+  })
+
+  const check = (over: Partial<JudgeCheck> = {}): JudgeCheck => ({ id: 'k1', set_id: 'starter', set_name: 'Starter', provider: 'ollama', model: 'mimo:9b',
+    status: 'done', note: '', total: 52, done: 52, correct: 49, passed_wrongly: 2, failed_wrongly: 1, unanswered: 0,
+    created_at: '2026-11-27T10:00:00+00:00', ended_at: '2026-11-27T10:03:00+00:00', ...over })
+  const judgePick = () => $<HTMLSelectElement>('select[aria-label="Judge"]')!
+
+  it('checks the picked judge on the known answers of the set of the open bench, and shows how far it is and how it went', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(api, 'benchRuns').mockResolvedValue([{ run: run(), progress: null }])
+    vi.spyOn(api, 'benchRun').mockResolvedValue(detail())
+    const listed = vi.spyOn(api, 'judgeChecks').mockResolvedValue([])
+    const begin = vi.spyOn(api, 'checkJudge').mockResolvedValue(check({ status: 'running', done: 0, correct: 0, passed_wrongly: 0, failed_wrongly: 0, ended_at: null }))
+    const missed = vi.spyOn(api, 'judgeCheck').mockResolvedValue({ check: check(), answers: [] })
+    await open()
+    expect(listed).toHaveBeenCalledWith('starter')                 // the checks on the set of the open bench
+    expect(button('Check this judge')!.disabled).toBe(true)        // no judge is picked
+    expect($('.bench-check')).toBeNull()
+    await choose(judgePick(), 'ollama/mimo:9b')
+    expect(button('Check this judge')!.disabled).toBe(false)
+    listed.mockResolvedValue([check({ status: 'running', done: 12, correct: 11, passed_wrongly: 1, failed_wrongly: 0, ended_at: null })])
+    await click(button('Check this judge'))
+    expect(begin).toHaveBeenCalledWith(MIMO, 'starter')
+    expect($('.bench-check')!.textContent).toBe('mimo:9b is being asked about the known answers of Starter: 12 of 52.')
+    expect(judgePick().disabled).toBe(true)                        // the judge that is being checked stays the picked one
+    expect(missed).not.toHaveBeenCalled()                          // what it got wrong is asked for when it is over
+    expect(button('Check this judge')).toBeUndefined()
+    expect(button('Cancel check')).toBeTruthy()
+    expect(button('Judge this bench')!.disabled).toBe(true)        // one thing at a time
+    await tick('ollama/hf.co/x/qwen:9b')
+    expect(button('Run')!.disabled).toBe(true)
+    expect(button('Run')!.title).toBe('A judge is being checked: one at a time')
+    const asked = listed.mock.calls.length
+    listed.mockResolvedValue([check()])
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000) })        // asked again while the check runs
+    expect(listed.mock.calls.length).toBe(asked + 1)
+    expect($('.bench-check')!.textContent).toBe('mimo:9b on the known answers of Starter: 49 of 52 right. It called 2 fails a pass and 1 pass a fail.')
+    expect([...judgePick().options].map((o) => o.textContent)).toEqual(['Judge model…', 'ollama/hf.co/x/qwen:9b', 'ollama/mimo:9b · 49/52 right', 'anthropic/claude-opus-5-5'])
+    expect(button('Check this judge')).toBeTruthy()
+    expect(button('Run')!.disabled).toBe(false)
+    expect(judgePick().disabled).toBe(false)
+    expect(missed).toHaveBeenCalledWith('k1')
+    await act(async () => { await vi.advanceTimersByTimeAsync(4000) })
+    expect(listed.mock.calls.length).toBe(asked + 1)                         // it has ended: nothing is asked for any more
+  })
+
+  it('shows a check that runs whatever judge is picked, and cancels it when asked', async () => {
+    vi.useFakeTimers()
+    vi.spyOn(api, 'benchRuns').mockResolvedValue([{ run: run(), progress: null }])
+    vi.spyOn(api, 'benchRun').mockResolvedValue(detail())
+    const listed = vi.spyOn(api, 'judgeChecks').mockResolvedValue([check({ status: 'running', done: 5, correct: 5, passed_wrongly: 0, failed_wrongly: 0, ended_at: null })])
+    const stop = vi.spyOn(api, 'cancelJudgeCheck').mockResolvedValue(undefined)
+    await open()
+    expect($('.bench-check')!.textContent).toBe('mimo:9b is being asked about the known answers of Starter: 5 of 52.')
+    listed.mockResolvedValue([check({ status: 'cancelled', done: 5, correct: 5, passed_wrongly: 0, failed_wrongly: 0 })])
+    await click(button('Cancel check'))
+    expect(stop).toHaveBeenCalledWith('k1')
+    expect(button('Cancel check')).toBeUndefined()
+    expect($('.bench-check')).toBeNull()                           // it is over, and its judge is not the one that is picked
+    await choose(judgePick(), 'ollama/mimo:9b')
+    expect($('.bench-check')!.textContent).toBe('mimo:9b on the known answers of Starter: 5 of the 5 it was asked about right, of 52. Cancelled.')
+    expect([...judgePick().options].map((o) => o.textContent)).toEqual(['Judge model…', 'ollama/hf.co/x/qwen:9b', 'ollama/mimo:9b', 'anthropic/claude-opus-5-5'])
+  })
+
+  it('offers no check where the set of the bench has no answers with a known verdict', async () => {
+    const mine = run({ set_id: 'own:mine', set_name: 'My tests' })
+    vi.spyOn(api, 'benchRuns').mockResolvedValue([{ run: mine, progress: null }])
+    vi.spyOn(api, 'benchRun').mockResolvedValue(detail({ run: mine }))
+    await open()
+    await choose(judgePick(), 'ollama/mimo:9b')
+    expect(button('Check this judge')!.disabled).toBe(true)
+    expect(button('Check this judge')!.title).toBe('This set has no answers whose right verdict is known: a test gets them as [[case.known]].')
+    expect(button('Judge this bench')!.disabled).toBe(false)
+  })
+
+  it('lists the known answers the picked judge did not get right', async () => {
+    const answers: CheckedAnswer[] = [
+      { case_id: 'fake-cve', n: 1, expected: 'pass', verdict: 'pass', reason: 'It says nothing was found.', error: null, answer: 'There is no record.' },
+      { case_id: 'fake-cve', n: 5, expected: 'fail', verdict: 'pass', reason: 'It says no record was found.', error: null, answer: 'Either very new or not indexed.' },
+      { case_id: 'one-step', n: 3, expected: 'fail', verdict: null, reason: '', error: 'its reply could not be read as one', answer: 'It looks like random data.' },
+    ]
+    vi.spyOn(api, 'benchRuns').mockResolvedValue([{ run: run(), progress: null }])
+    vi.spyOn(api, 'benchRun').mockResolvedValue(detail())
+    vi.spyOn(api, 'judgeChecks').mockResolvedValue([check({ correct: 50, passed_wrongly: 1, failed_wrongly: 0, unanswered: 1 }),
+      check({ id: 'k2', model: 'hf.co/x/qwen:9b', correct: 52, passed_wrongly: 0, failed_wrongly: 0 }),
+      check({ id: 'k3', provider: 'anthropic', model: 'claude-opus-5-5', set_id: 'own:mine', set_name: 'My tests', total: 9, done: 9, correct: 8 })])
+    const detailed = vi.spyOn(api, 'judgeCheck').mockResolvedValue({ check: check(), answers })
+    await open()
+    expect(detailed).not.toHaveBeenCalled()
+    await choose(judgePick(), 'ollama/hf.co/x/qwen:9b')
+    expect(detailed).not.toHaveBeenCalled()                        // it got every one right: there is nothing to list
+    expect($('.bench-check-wrong')).toBeNull()
+    await choose(judgePick(), 'ollama/mimo:9b')
+    expect(detailed).toHaveBeenCalledWith('k1')
+    expect($('.bench-check-wrong summary')!.textContent).toBe('The 2 known answers it did not get right')
+    expect($$('.bench-check-wrong li').map((li) => [li.querySelector('div')!.textContent, li.querySelector('pre')!.textContent])).toEqual([
+      ['fake-cve 5 is a fail, and the judge said pass: It says no record was found.', 'Either very new or not indexed.'],
+      ['one-step 3 is a fail, and the judge gave no verdict (its reply could not be read as one).', 'It looks like random data.']])
+    await choose(judgePick(), 'ollama/hf.co/x/qwen:9b')
+    expect($('.bench-check')!.textContent).toBe('hf.co/x/qwen:9b on the known answers of Starter: 52 of 52 right.')
+    expect($('.bench-check-wrong')).toBeNull()                     // what another judge missed is not this one's
+    await choose(judgePick(), 'anthropic/claude-opus-5-5')
+    expect($('.bench-check')).toBeNull()                           // its check was on another set, and so is its score
+    expect([...judgePick().options].map((o) => o.textContent)).toEqual(['Judge model…', 'ollama/hf.co/x/qwen:9b · 52/52 right', 'ollama/mimo:9b · 50/52 right',
+      'anthropic/claude-opus-5-5'])
+  })
+
+  it('does not show under one judge what another one missed while its own list is on its way', async () => {
+    const one: CheckedAnswer = { case_id: 'fake-cve', n: 5, expected: 'fail', verdict: 'pass', reason: 'It says no record was found.', error: null, answer: 'Either very new.' }
+    vi.spyOn(api, 'benchRuns').mockResolvedValue([{ run: run(), progress: null }])
+    vi.spyOn(api, 'benchRun').mockResolvedValue(detail())
+    vi.spyOn(api, 'judgeChecks').mockResolvedValue([check({ correct: 51, passed_wrongly: 1, failed_wrongly: 0 }),
+      check({ id: 'k2', model: 'hf.co/x/qwen:9b', correct: 40, passed_wrongly: 12, failed_wrongly: 0 })])
+    vi.spyOn(api, 'judgeCheck').mockImplementation((id) => (id === 'k1' ? Promise.resolve({ check: check(), answers: [one] }) : new Promise(() => {})))
+    await open()
+    await choose(judgePick(), 'ollama/mimo:9b')
+    expect($('.bench-check-wrong summary')!.textContent).toBe('The 1 known answer it did not get right')
+    await choose(judgePick(), 'ollama/hf.co/x/qwen:9b')
+    expect($('.bench-check')!.textContent).toContain('40 of 52 right. It called 12 fails a pass.')
+    expect($('.bench-check-wrong')).toBeNull()
+  })
+
+  it('says so when a check cannot be started, and asks for the checks, their start, one of them and its cancel at their addresses', async () => {
+    vi.spyOn(api, 'benchRuns').mockResolvedValue([{ run: run(), progress: null }])
+    vi.spyOn(api, 'benchRun').mockResolvedValue(detail())
+    const refused = vi.spyOn(api, 'checkJudge').mockRejectedValue(new Error('A bench, a judging or a check of a judge is running. Wait for it or cancel it.'))
+    await open()
+    await choose(judgePick(), 'ollama/mimo:9b')
+    await click(button('Check this judge'))
+    expect($('.bench-error')!.textContent).toContain('A bench, a judging or a check of a judge is running.')
+    refused.mockRestore()
+    vi.mocked(api.judgeChecks).mockRestore()
+    const fetched = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response(JSON.stringify([check()]), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+    expect(await api.judgeChecks('own:my set')).toEqual([check()])
+    expect(fetched).toHaveBeenLastCalledWith('/api/bench/judge-checks?set_id=own%3Amy%20set', { method: 'GET', headers: undefined, body: undefined })
+    await api.judgeChecks()
+    expect(fetched).toHaveBeenLastCalledWith('/api/bench/judge-checks', { method: 'GET', headers: undefined, body: undefined })
+    await api.checkJudge(MIMO, 'starter')
+    expect(fetched).toHaveBeenLastCalledWith('/api/bench/judge-checks', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ provider: 'ollama', model: 'mimo:9b', set_id: 'starter' }) })
+    await api.judgeCheck('k1')
+    expect(fetched).toHaveBeenLastCalledWith('/api/bench/judge-checks/k1', { method: 'GET', headers: undefined, body: undefined })
+    fetched.mockImplementation(async () => new Response(null, { status: 204 }))
+    expect(await api.cancelJudgeCheck('k1')).toBeUndefined()
+    expect(fetched).toHaveBeenLastCalledWith('/api/bench/judge-checks/k1/cancel', { method: 'POST', headers: undefined, body: undefined })
+  })
+
+  it('says how the test of the open cell is judged, in the words the bench kept or else the words of the set', async () => {
+    const results: BenchResult[] = [{ ...mark(QWEN, 'look-up', 1, 'pass'), run_id: 'r1', calls_made: 0, calls: [], created_at: '', id: 'a', reasons: [], answer: 'It is 7.42.1.' }]
+    vi.spyOn(api, 'benchCell').mockResolvedValue(results)
+    const kept = run({ cases: [{ id: 'look-up', group: 'tool-use', prompt: 'what is the latest version?', judge: 'A pass names 7.42.1.' }, SETS[0].cases[1]] })
+    vi.spyOn(api, 'benchRuns').mockResolvedValue([{ run: kept, progress: null }])
+    const read = vi.spyOn(api, 'benchRun').mockResolvedValue(detail({ run: kept }))
+    await open()
+    await click($('.bench-table tbody tr:nth-child(2) .bench-cell'))
+    expect($('.bench-detail .bench-rule')!.textContent).toBe('How this test is judged: A pass names 7.42.1.')        // as it was when the bench ran
+    await click($('.bench-table tbody tr:nth-child(4) .bench-cell'))
+    expect($('.bench-detail h3')!.textContent).toContain('fake-cve')
+    expect($('.bench-detail .bench-rule')).toBeNull()              // a test that does not say it
+    act(() => root.unmount())
+    root = createRoot(host)
+    const before = run({ cases: [{ id: 'look-up', group: 'tool-use', prompt: 'what is the latest version?' }, SETS[0].cases[1]] })
+    vi.spyOn(api, 'benchRuns').mockResolvedValue([{ run: before, progress: null }])
+    read.mockResolvedValue(detail({ run: before }))
+    await open()
+    await click($('.bench-table tbody tr:nth-child(2) .bench-cell'))
+    expect($('.bench-detail .bench-rule')!.textContent).toBe('How this test is judged: A pass names 7.42.1 as the latest version.')      // a bench from before: the set says it
   })
 
   it('says so when a judging cannot be started', async () => {

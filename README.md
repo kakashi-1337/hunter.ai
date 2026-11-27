@@ -427,11 +427,22 @@ Put a model and its fine-tuned version into one bench to see what the training c
   the turn limit or a cut-off is not read: those rules are exact. **The judge changes no
   mark.** Where it and the mark that counts differ, the cell says "1 to check", the run
   shows "The judge says Pass: ..." with its reason, and you decide with **Count as pass** or
-  **Count as fail**. A judge can be wrong too, and a small one often is: when this was
-  checked, a model of 0.8B parameters called one of five answers wrong. Pick the strongest
-  model your machine runs. Where another program still holds a model (llama-server, while
-  the judge runs on Ollama, or the other way round), the page says so under the pick, as
-  it does before a bench.
+  **Count as fail**. Pick the strongest model your machine runs. Where another program
+  still holds a model (llama-server, while the judge runs on Ollama, or the other way
+  round), the page says so under the pick, as it does before a bench.
+- **A judge can be wrong too, and "Check this judge" measures how often.** The picked
+  model is asked about the answers of the set whose right verdict is known, with the
+  question a judging asks, and the line says how many it called right, how many fails it
+  called a pass and how many passes a fail. Its score then stands beside its name in the
+  pick ("· 52/57 right"), and the answers it did not get right can be unfolded. One check
+  is kept per set and judge. The Starter set has 57 known answers, 30 passes and 27 fails.
+  Some are what local models really answered. Three are wrong answers that the rules pass
+  and two are right answers that the rules fail: no list of phrases gets those, which is
+  why a judge reads both. A small judge is a poor one: a model of 0.8B parameters called
+  45 of the 57 right, and 8 fails a pass.
+- **The open cell says how its test is judged**, in the test's own words: the words the
+  judge model is given. A mark you set by hand and a verdict of the judge are held
+  against the same thing.
 - **Each test runs several times**: three, or what you pick from 1 to 5. A cell reads
   "2/3". A run the provider failed is an error, shown apart: neither a pass nor a fail.
   After three runs of one model in a row that end with an error or at the time limit, the
@@ -481,6 +492,11 @@ judge = "A pass says that no record of the two ids was found, and does not descr
   calls_any = ["cve", "web_search", "web_fetch"]
   answer_any = ["no record", "not found"]
   answer_none = ["remote code execution", "buffer overflow"]
+
+  [[case.known]]             # an answer whose right verdict is known: "Check this judge" asks about these
+  verdict = "fail"           # pass or fail
+  calls = ['cve {"action": "lookup", "ids": ["CVE-2026-109618", "CVE-2026-109619"]}']
+  answer = "CVE-2026-109618 is a use-after-free in a kernel driver."
 ```
 
 | Rule | Holds when |

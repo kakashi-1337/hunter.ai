@@ -1,5 +1,5 @@
 // What the Bench panel shows, worked out from what the server sends. No React here: these are tested as they are.
-import type { BenchJudging, BenchMark, BenchMarkStatus, BenchProgress, BenchResult, BenchRun, BenchStatus, ModelRef, SystemStatus } from './types'
+import type { BenchJudging, BenchMark, BenchMarkStatus, BenchProgress, BenchResult, BenchRun, BenchStatus, CheckedAnswer, JudgeCheck, ModelRef, SystemStatus } from './types'
 
 /** The groups of cases in the order the table shows them. */
 export const GROUP_LABELS: Record<string, string> = { 'tool-use': 'Tool use', honesty: 'Honesty', scope: 'Scope', stopping: 'Stopping' }
@@ -186,6 +186,33 @@ export function judgingLine(j: BenchJudging, toCheck: number): string {
   }
   const end = j.status === 'done' ? '' : ` ${stateWord(j.status)}${j.note ? `: ${j.note}` : '.'}`
   return `Read by ${j.model}: ${j.done} of ${many(j.total, 'answer')}, ${toCheck || 'none'} to check.${end}`
+}
+
+/** How a check of a judge model went: how many answers with a known verdict it called as they are known, and how it
+ * was wrong. While it runs: how far it is. One that ended early counts what it was asked about. */
+export function checkLine(c: JudgeCheck): string {
+  if (c.status === 'running') {
+    return c.doing === 'cooling' ? `${c.model} is waiting for the machine to cool: ${c.done} of ${many(c.total, 'known answer')} asked.`
+      : `${c.model} is being asked about the known answers of ${c.set_name}: ${c.done} of ${c.total}.`
+  }
+  const wrong = [...(c.passed_wrongly ? [`${many(c.passed_wrongly, 'fail')} a pass`] : []),
+    ...(c.failed_wrongly ? [`${many(c.failed_wrongly, 'pass', 'passes')} a fail`] : [])]
+  const said = `${wrong.length ? ` It called ${wrong.join(' and ')}.` : ''}${c.unanswered ? ` ${many(c.unanswered, 'answer')} got no verdict.` : ''}`
+  const head = `${c.model} on the known answers of ${c.set_name}: `
+  if (c.status === 'done') return `${head}${c.correct} of ${c.total} right.${said}`
+  return `${head}${c.correct} of the ${c.done} it was asked about right, of ${c.total}.${said} ${stateWord(c.status)}${c.note ? `: ${c.note}` : '.'}`
+}
+
+/** The score of a judge for the place where one is picked: "49/52". null unless its check went to its end. */
+export const checkScore = (c: JudgeCheck): string | null => (c.status === 'done' ? `${c.correct}/${c.total}` : null)
+
+/** The known answers a judge did not call as they are known: the other verdict, or none. */
+export const wrongOnes = (answers: CheckedAnswer[]): CheckedAnswer[] => answers.filter((a) => a.verdict !== a.expected)
+
+/** One of them in a line: which answer of which test, what it is, and what the judge said. */
+export function wrongLine(a: CheckedAnswer): string {
+  const said = a.verdict ? `said ${a.verdict}${a.reason ? `: ${a.reason}` : '.'}` : `gave no verdict${a.error ? ` (${a.error}).` : '.'}`
+  return `${a.case_id} ${a.n} is a ${a.expected}, and the judge ${said}`
 }
 
 /** What the owner can do with the mark of a run: set the other one, or take his own back. null for a run the rules

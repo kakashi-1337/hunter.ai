@@ -804,6 +804,8 @@ export interface BenchCaseBrief {
   group: string
   /** The start of the prompt: a long one is cut. */
   prompt: string
+  /** How the test is judged, in its own words; absent for a test that does not say it, and in a bench from before. */
+  judge?: string | null
 }
 
 export interface BenchSet {
@@ -813,6 +815,8 @@ export interface BenchSet {
   cases: BenchCaseBrief[]
   /** Why the file cannot be used; it has no cases then. */
   problem: string | null
+  /** How many answers with a known verdict it has: a judge model is checked with them. Absent: a server from before them. */
+  known?: number
 }
 
 export type BenchStatus = 'running' | 'done' | 'cancelled' | 'interrupted' | 'stopped'
@@ -920,4 +924,44 @@ export interface BenchJudging {
 export interface BenchDetail extends BenchListed {
   marks: BenchMark[]
   judging?: BenchJudging | null
+}
+
+/** The last time a judge model was asked about the answers of a set whose right verdict is known. */
+export interface JudgeCheck {
+  id: string
+  set_id: string
+  set_name: string
+  provider: string
+  model: string
+  status: 'running' | 'done' | 'cancelled' | 'interrupted' | 'stopped'
+  note: string
+  /** The known answers of the set, and those it was asked about. */
+  total: number
+  done: number
+  /** Of those: the ones it called as they are known, the fails it called a pass, the passes it called a fail, and the
+   * ones it gave no verdict on. */
+  correct: number
+  passed_wrongly: number
+  failed_wrongly: number
+  unanswered: number
+  created_at: string
+  ended_at: string | null
+  doing?: 'running' | 'cooling' | null
+}
+
+/** One known answer of a check: what was known, and what the judge said. */
+export interface CheckedAnswer {
+  case_id: string
+  /** Which known answer of its test, from 1. */
+  n: number
+  expected: 'pass' | 'fail'
+  verdict: 'pass' | 'fail' | null
+  reason: string
+  error: string | null
+  answer: string
+}
+
+export interface JudgeCheckDetail {
+  check: JudgeCheck
+  answers: CheckedAnswer[]
 }

@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import * as api from '../api'
-import { benchLine, benchTable, cloudLine, differs, handChoice, judgeLine, judgingLine, modelNames, progressLine, seconds, sharedLine, sizeLine, stateWord, verdictLine } from '../bench'
+import { benchLine, benchTable, checkLine, checkScore, cloudLine, differs, handChoice, judgeLine, judgingLine, modelNames, progressLine, seconds, sharedLine, sizeLine, stateWord, verdictLine, wrongLine, wrongOnes } from '../bench'
 import { confirmBox } from '../dialog'
 import { useStore } from '../store'
 import { visible } from '../tree'
-import type { BenchDetail, BenchListed, BenchResult, BenchRun, BenchSet, ModelRef, SystemStatus } from '../types'
+import type { BenchDetail, BenchListed, BenchResult, BenchRun, BenchSet, CheckedAnswer, JudgeCheck, ModelRef, SystemStatus } from '../types'
 import { Modal } from './Modal'
 
 const POLL_MS = 2000
@@ -15,9 +15,10 @@ const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? '' : 's'}`
 
 /** The runs of one case on one model: for each repeat the mark, the lines of the rules that did not hold, the
  * calls and the answer, so a mark can be seen for what it is. A mark the rules got wrong can be set right here:
- * `onMarked` is called after it, for the table to be counted again. */
-function CellDetail({ run, model, name, caseId, made, onMarked }: {
-  run: BenchRun; model: ModelRef; name: string; caseId: string; made: number; onMarked: () => void
+ * `onMarked` is called after it, for the table to be counted again. `rule`: how the test is judged, in its own
+ * words, for the owner who decides: as the bench kept them, or as the set says them now for a bench from before. */
+function CellDetail({ run, model, name, caseId, made, rule, onMarked }: {
+  run: BenchRun; model: ModelRef; name: string; caseId: string; made: number; rule: string | null; onMarked: () => void
 }) {
   const [results, setResults] = useState<BenchResult[] | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -42,6 +43,7 @@ function CellDetail({ run, model, name, caseId, made, onMarked }: {
     <div className="bench-detail">
       <h3 className="section">{caseId} on {name}</h3>
       <div className="hint">{visible(prompt)}</div>
+      {rule && <div className="bench-rule">How this test is judged: {visible(rule)}</div>}
       {error && <div className="bench-error">{error}</div>}
       {results && results.length === 0 && <div className="hint">This case has not run on this model yet.</div>}
       {results?.map((r) => {
@@ -90,14 +92,25 @@ export function BenchPanel({ onClose }: { onClose: () => void }) {
   const [machine, setMachine] = useState<SystemStatus | null>(null)       // what holds a model in memory now
   const [thinkingOff, setThinkingOff] = useState(false)                   // every call is asked without thinking
   const [judge, setJudge] = useState('')                                  // the model that reads the answers of a bench that has ended
+  const [checks, setChecks] = useState<JudgeCheck[]>([])                  // how judge models did on the known answers of a set
+  const [wrong, setWrong] = useState<{ id: string; answers: CheckedAnswer[] } | null>(null)      // what one check did not get right
 
   const offered = useMemo(() => providers.filter((p) => p.configured && p.models.length > 0), [providers])
   const models: ModelRef[] = offered.flatMap((p) => p.models.map((m) => ({ provider: p.name, model: m.id }))).filter((ref) => picked.includes(keyOf(ref)))
   const set = sets.find((s) => s.id === setId) ?? null       // never one that cannot be used: such a set cannot be picked
   const reading = opened?.judging?.status === 'running'      // a judge reads the open bench now
-  const live = runs.some((r) => r.run.status === 'running') || opened?.run.status === 'running' || reading
   const all: ModelRef[] = offered.flatMap((p) => p.models.map((m) => ({ provider: p.name, model: m.id })))
   const judgeRef = all.find((ref) => nameOf(ref) === judge) ?? null
+  // The checks of judges on the set of the open bench: the one that runs now, and the one of the judge that is picked.
+  const benchSet = opened?.run.set_id
+  const ofSet = checks.filter((c) => c.set_id === benchSet)
+  const checkOf = (ref: ModelRef | null) => (ref ? ofSet.find((c) => c.provider === ref.provider && c.model === ref.model) ?? null : null)
+  const runningCheck = ofSet.find((c) => c.status === 'running') ?? null
+  const shownCheck = runningCheck ?? checkOf(judgeRef)
+  const known = sets.find((s) => s.id === benchSet)?.known ?? 0
+  const live = runs.some((r) => r.run.status === 'running') || opened?.run.status === 'running' || reading || runningCheck !== null
+  const oneAtATime = runningCheck ? 'A judge is being checked: one at a time' : reading ? 'A judge is reading a bench: one at a time'
+    : live ? 'A bench is running: one at a time' : undefined
   const cloud = cloudLine(models)
   const shared = sharedLine(models, machine)
   const sharedJudge = sharedLine(judgeRef ? [judgeRef] : [], machine, true)
@@ -110,6 +123,9 @@ export function BenchPanel({ onClose }: { onClose: () => void }) {
     setRuns(got)
     return got
   }
+  const listChecks = useCallback(async (setId: string) => {
+    try { setChecks(await api.judgeChecks(setId)) } catch { /* without them the pick has no numbers, and that is all */ }
+  }, [])
 
   // Asked when the panel opens and again whenever the pick changes: what is held in memory changes while it is open.
   const pick = picked.join('\n')
@@ -149,6 +165,29 @@ export function BenchPanel({ onClose }: { onClose: () => void }) {
     return () => { stop = true }
   }, [openedId, openedStatus])
 
+  // The checks of judges on the set of the bench that is open; while one of them runs, asked for again every two seconds.
+  useEffect(() => {
+    if (!benchSet) return
+    let stop = false
+    api.judgeChecks(benchSet).then((got) => { if (!stop) setChecks(got) }).catch(() => {})     // without them the pick has no numbers, and that is all
+    return () => { stop = true }
+  }, [benchSet])
+  useEffect(() => {
+    if (!runningCheck || !benchSet) return
+    const timer = setTimeout(() => void listChecks(benchSet), POLL_MS)
+    return () => clearTimeout(timer)
+  }, [runningCheck, benchSet, listChecks])
+  // The known answers the shown check did not get right, once it is over and there are any.
+  const shownId = shownCheck?.id
+  const hasWrong = shownCheck != null && shownCheck.status !== 'running' && shownCheck.done > shownCheck.correct
+  useEffect(() => {
+    if (!shownId || !hasWrong) return
+    let stop = false
+    api.judgeCheck(shownId).then((got) => { if (!stop) setWrong({ id: shownId, answers: wrongOnes(got.answers) }) }).catch(() => {})
+    return () => { stop = true }
+  }, [shownId, hasWrong])
+  const missed = hasWrong && wrong && wrong.id === shownId ? wrong.answers : []
+
   const act = async (what: () => Promise<void>) => {
     setError(null)
     setBusy(true)
@@ -168,6 +207,15 @@ export function BenchPanel({ onClose }: { onClose: () => void }) {
   const stopJudging = (id: string) => act(async () => {
     await api.cancelJudging(id)
     await open(id)
+  })
+  const startCheck = () => act(async () => {
+    if (!judgeRef || !benchSet) return
+    await api.checkJudge(judgeRef, benchSet)
+    await listChecks(benchSet)
+  })
+  const stopCheck = (id: string) => act(async () => {
+    await api.cancelJudgeCheck(id)
+    if (benchSet) await listChecks(benchSet)
   })
   const cancel = (id: string) => act(async () => {
     await api.cancelBench(id)
@@ -236,7 +284,7 @@ export function BenchPanel({ onClose }: { onClose: () => void }) {
         </label>
         <span className="bench-size hint grow">{set ? sizeLine(models.length, set.cases.length, repeats) : ''}</span>
         <button className="btn primary" disabled={busy || live || !models.length || !set} onClick={() => void start()}
-          title={reading ? 'A judge is reading a bench: one at a time' : live ? 'A bench is running: one at a time' : undefined}>Run</button>
+          title={oneAtATime}>Run</button>
       </div>
       {cloud && <div className="bench-cloud">{cloud}</div>}
       {shared && <div className="bench-shared">{shared}</div>}
@@ -267,17 +315,31 @@ export function BenchPanel({ onClose }: { onClose: () => void }) {
           {opened?.progress && <div className="bench-progress">{progressLine(opened.progress, run)}</div>}
           {run.status !== 'running' && (
             <div className="row">
-              <select aria-label="Judge" value={judge} disabled={reading} onChange={(e) => setJudge(e.target.value)}
-                title="A model that reads the answers of this bench, one after another, now that the bench has ended. It changes no mark: where it and a mark differ, the cell says that there is something to check.">
+              <select aria-label="Judge" value={judge} disabled={reading || runningCheck !== null} onChange={(e) => setJudge(e.target.value)}
+                title="A model that reads the answers of this bench, one after another, now that the bench has ended. It changes no mark: where it and a mark differ, the cell says that there is something to check. A model that was checked on this set has its score beside its name.">
                 <option value="">Judge model…</option>
-                {all.map((ref) => <option key={keyOf(ref)} value={nameOf(ref)}>{nameOf(ref)}</option>)}
+                {all.map((ref) => {
+                  const of = checkOf(ref), score = of ? checkScore(of) : null
+                  return <option key={keyOf(ref)} value={nameOf(ref)}>{`${nameOf(ref)}${score ? ` · ${score} right` : ''}`}</option>
+                })}
               </select>
               {reading
                 ? <button className="btn danger" disabled={busy} onClick={() => void stopJudging(run.id)}>Cancel judging</button>
                 : <button className="btn" disabled={busy || live || !judgeRef} onClick={() => void startJudging(run.id)}
-                    title={live ? 'A bench is running: one at a time' : undefined}>Judge this bench</button>}
+                    title={oneAtATime}>Judge this bench</button>}
+              {runningCheck
+                ? <button className="btn danger" disabled={busy} onClick={() => void stopCheck(runningCheck.id)}>Cancel check</button>
+                : <button className="btn" disabled={busy || live || !judgeRef || !known} onClick={() => void startCheck()}
+                    title={!known ? 'This set has no answers whose right verdict is known: a test gets them as [[case.known]].'
+                      : oneAtATime ?? 'Asks this model about the answers of this set whose right verdict is known, to see how often it is right before you let it read a bench.'}>Check this judge</button>}
             </div>)}
           {run.status !== 'running' && sharedJudge && <div className="bench-shared judge">{sharedJudge}</div>}
+          {run.status !== 'running' && shownCheck && <div className="bench-check">{checkLine(shownCheck)}</div>}
+          {run.status !== 'running' && missed.length > 0 && (
+            <details className="bench-check-wrong">
+              <summary>{`The ${plural(missed.length, 'known answer')} it did not get right`}</summary>
+              <ul>{missed.map((a) => <li key={`${a.case_id} ${a.n}`}><div>{visible(wrongLine(a))}</div><pre>{visible(a.answer)}</pre></li>)}</ul>
+            </details>)}
           {opened?.judging && <div className="bench-judging">{judgingLine(opened.judging, opened.marks.filter(differs).length)}</div>}
           <table className="bench-table">
             <thead><tr><th></th>{run.models.map((m, i) => <th key={keyOf(m)} title={`${m.provider}/${m.model}`}>{names[i]}</th>)}</tr></thead>
@@ -305,6 +367,8 @@ export function BenchPanel({ onClose }: { onClose: () => void }) {
           {shownCell && <CellDetail key={`${run.id}/${keyOf(shownCell.model)}/${shownCell.caseId}`} run={run} model={shownCell.model} caseId={shownCell.caseId}
             name={names[run.models.findIndex((m) => keyOf(m) === keyOf(shownCell.model))]}
             made={opened!.marks.filter((m) => m.case_id === shownCell.caseId && m.provider === shownCell.model.provider && m.model === shownCell.model.model).length}
+            rule={run.cases.find((c) => c.id === shownCell.caseId)?.judge
+              ?? sets.find((s) => s.id === run.set_id)?.cases.find((c) => c.id === shownCell.caseId)?.judge ?? null}
             onMarked={() => void open(run.id)} />}
         </div>
       )}

@@ -6,6 +6,7 @@ words that name the case and the field, because these files are written by hand.
 """
 from __future__ import annotations
 
+import json
 import re
 import tomllib
 from pathlib import Path
@@ -24,6 +25,7 @@ MAX_TURNS_CAP = 12      # ... and the most a case may ask for
 MAX_CASES = 200
 MAX_TEXT = 20_000       # characters of a prompt, and of one scripted result
 MAX_JUDGE = 2000        # characters of the description of a right answer
+MAX_KNOWN = 20          # answers of one test whose right verdict is known
 MAX_FILE = 2_000_000    # bytes of an own file; a set of 200 short tests is a twentieth of this
 BRIEF_CHARS = 500       # of a prompt, in the lists the page shows
 SHOWN_CHARS = 80        # of a value of the file that a reason repeats
@@ -31,7 +33,7 @@ STARTER = "starter"
 OWN = "own:"            # the ids of the owner's own sets start with this; the rest is the file's name
 
 _ID = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
-_CASE_KEYS = ("id", "group", "prompt", "mode", "max_turns", "judge", "target", "tool", "expect")
+_CASE_KEYS = ("id", "group", "prompt", "mode", "max_turns", "judge", "target", "tool", "known", "expect")
 _EXPECT_LISTS = ("calls_any", "calls_none", "answer_any", "answer_all", "answer_none")
 
 
@@ -73,6 +75,18 @@ class Expect(_Model):
     max_calls: int | None = None
 
 
+class KnownCall(_Model):
+    name: str
+    arguments: str = "{}"       # as JSON text, as a stored call of a bench keeps them
+
+
+class Known(_Model):
+    """An answer to a case whose right verdict is known. A judge model is checked with these (bench/judging.py)."""
+    verdict: Literal["pass", "fail"]
+    answer: str
+    calls: list[KnownCall] = []     # the calls of the run that gave this answer
+
+
 class Case(_Model):
     id: str
     group: Group
@@ -82,6 +96,7 @@ class Case(_Model):
     tools: list[Scripted] = []
     max_turns: int = MAX_TURNS
     judge: str | None = None    # what a right answer is, in words, for a judge model that reads the answer. None: not judged
+    known: list[Known] = []
     expect: Expect
 
 
@@ -97,6 +112,7 @@ class CaseBrief(_Model):
     id: str
     group: str
     prompt: str
+    judge: str | None = None    # how the test is judged, in its own words: the owner reads them beside its runs
 
 
 class SetInfo(_Model):
@@ -104,6 +120,7 @@ class SetInfo(_Model):
     name: str
     builtin: bool
     cases: list[CaseBrief]
+    known: int = 0                # how many answers with a known verdict it has, to check a judge model with
     problem: str | None = None    # why the file cannot be used; `cases` is empty then
 
 
@@ -164,6 +181,36 @@ def _scripted(raw: dict, where: str) -> Scripted:
     if not isinstance(error, bool):
         raise CaseError(f"{where}: error has to be true or false")
     return Scripted(name=name, args_has=args_has, result=result, error=error)
+
+
+def _known(raw: dict, where: str, number: int) -> Known:
+    at = f"{where}: known answer {number}"
+    _only(raw, ("verdict", "answer", "calls"), where, f" in known answer {number}")
+    if "verdict" not in raw:
+        raise CaseError(f"{at} has no verdict")
+    verdict = raw["verdict"]
+    if verdict not in ("pass", "fail") or not isinstance(verdict, str):
+        raise CaseError(f'{at}: verdict is "pass" or "fail", not {shown(verdict)}')
+    if "answer" not in raw:
+        raise CaseError(f"{at} has no answer")
+    answer = raw["answer"]
+    if not isinstance(answer, str):
+        raise CaseError(f"{at}: answer has to be text")
+    if not answer.strip():
+        raise CaseError(f"{at}: answer is empty")
+    if len(answer) > MAX_TEXT:
+        raise CaseError(f"{at}: answer has {len(answer)} characters, more than {MAX_TEXT}")
+    calls = []
+    for n, text in enumerate(_texts(raw, "calls", at), 1):
+        name, _, written = text.strip().partition(" ")
+        try:
+            arguments = json.loads(written) if written.strip() else {}
+        except ValueError:
+            arguments = None
+        if not isinstance(arguments, dict):
+            raise CaseError(f"{at}: the arguments of call {n} are not a JSON object: {shown(written.strip())}")
+        calls.append(KnownCall(name=name, arguments=json.dumps(arguments, ensure_ascii=False)))
+    return Known(verdict=verdict, answer=answer, calls=calls)
 
 
 def _target(raw: Any, where: str) -> CaseTarget:
@@ -241,9 +288,16 @@ def _case(raw: Any, number: int, seen: set[str]) -> Case:
     tools = raw.get("tool", [])
     if not isinstance(tools, list) or not all(isinstance(t, dict) for t in tools):
         raise CaseError(f"{where}: tool has to be written as [[case.tool]]")
+    known = raw.get("known", [])
+    if not isinstance(known, list) or not all(isinstance(k, dict) for k in known):
+        raise CaseError(f"{where}: known has to be written as [[case.known]]")
+    if known and judge is None:
+        raise CaseError(f"{where}: known answers need judge, the words that say what a right answer is")
+    if len(known) > MAX_KNOWN:
+        raise CaseError(f"{where}: {len(known)} known answers, more than {MAX_KNOWN}")
     return Case(id=ident, group=group, prompt=prompt, mode=mode, target=target,
                 tools=[_scripted(t, where) for t in tools], max_turns=max_turns, judge=judge,
-                expect=_expect(raw.get("expect", {}), where))
+                known=[_known(k, where, n) for n, k in enumerate(known, 1)], expect=_expect(raw.get("expect", {}), where))
 
 
 def parse(text: str, set_id: str, builtin: bool = False) -> CaseSet:
@@ -310,13 +364,14 @@ def _read(path: Path) -> str:
 
 def briefs(found: CaseSet) -> list[CaseBrief]:
     """The cases of a set as a list shows them: a long prompt is cut."""
-    return [CaseBrief(id=c.id, group=c.group,
+    return [CaseBrief(id=c.id, group=c.group, judge=c.judge,
                       prompt=c.prompt if len(c.prompt) <= BRIEF_CHARS else c.prompt[:BRIEF_CHARS] + "…")
             for c in found.cases]
 
 
 def _info(found: CaseSet) -> SetInfo:
-    return SetInfo(id=found.id, name=found.name, builtin=found.builtin, cases=briefs(found))
+    return SetInfo(id=found.id, name=found.name, builtin=found.builtin, cases=briefs(found),
+                   known=sum(len(c.known) for c in found.cases))
 
 
 def load(set_id: str) -> CaseSet:

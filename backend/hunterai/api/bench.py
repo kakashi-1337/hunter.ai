@@ -1,4 +1,5 @@
-"""The bench over HTTP: the sets, the start of a bench, how far it is, its table, cancel and delete."""
+"""The bench over HTTP: the sets, the start of a bench, how far it is, its table, cancel and delete; a judge model
+that reads the answers of a bench, and the check of such a judge on answers whose right verdict is known."""
 from __future__ import annotations
 
 import asyncio
@@ -11,7 +12,7 @@ from .. import db
 from ..bench import cases, judging, runner
 from ..bench.cases import CaseError
 from ..repo import bench as store
-from ..repo.bench import BenchRun, ModelRef
+from ..repo.bench import BenchRun, JudgeCheck, ModelRef
 from .deps import get_conn, not_found
 
 router = APIRouter(prefix="/api/bench")
@@ -20,7 +21,8 @@ RUNNING = "This bench is running. Cancel it first."
 NOT_JUDGED = "This run has no mark to set right: its model call failed, or it was skipped."
 JUDGING = "A judge is reading a bench. Wait for it or cancel it."
 JUDGING_THIS = "A judge is reading this bench. Cancel that first."
-JUDGE_BUSY = "A judging or a bench is running. Wait for it or cancel it."
+CHECKING = "A judge is being checked. Wait for it or cancel it."
+JUDGE_BUSY = "A bench, a judging or a check of a judge is running. Wait for it or cancel it."
 
 
 class ModelIn(BaseModel):
@@ -33,6 +35,10 @@ class StartIn(BaseModel):
     set_id: str = Field(max_length=200)
     repeats: int = 3
     thinking_off: bool = False             # every call is asked without thinking; else as the model has it
+
+
+class CheckIn(ModelIn):
+    set_id: str = Field(min_length=1, max_length=200)      # the set whose known answers the judge is asked about
 
 
 class MarkIn(BaseModel):
@@ -58,6 +64,16 @@ async def _judging(conn, run_id: str):
     return stored.model_copy(update={"doing": (judging.progress(run_id) or {}).get("doing", "running")})
 
 
+def _checked(check: JudgeCheck) -> JudgeCheck:
+    """A check of a judge as it is shown: one the table still calls running while nothing runs it is over, and one
+    that runs says what it does now."""
+    if check.status != "running":
+        return check
+    if judging.checking() != check.id:
+        return check.model_copy(update={"status": "interrupted"})
+    return check.model_copy(update={"doing": (judging.check_progress(check.id) or {}).get("doing", "running")})
+
+
 async def _bench(conn, run_id: str) -> BenchRun:
     run = await store.get(conn, run_id)
     if run is None:
@@ -73,8 +89,8 @@ async def list_sets():
 @router.post("/runs")
 async def start(body: StartIn):
     refs = [ModelRef(provider=m.provider, model=m.model) for m in body.models]
-    if judging.running() is not None:       # one model at a time on this machine: the judge is one
-        raise HTTPException(409, JUDGING)
+    if judging.busy():          # one model at a time on this machine: a judge is one
+        raise HTTPException(409, JUDGING if judging.running() is not None else CHECKING)
     try:
         return await runner.start(db.connect, refs, body.set_id, body.repeats, body.thinking_off)
     except runner.Busy:
@@ -137,6 +153,43 @@ async def judge(rid: str, body: ModelIn, conn=Depends(get_conn)):
 async def cancel_judging(rid: str, conn=Depends(get_conn)):
     await _bench(conn, rid)
     await judging.cancel(rid)       # one that is over has nothing to cancel, and that is fine
+    return Response(status_code=204)
+
+
+@router.get("/judge-checks")
+async def list_checks(set_id: str | None = None, conn=Depends(get_conn)):
+    """The checks of judges that are kept, the newest first; those on one set when it is named."""
+    return [_checked(check) for check in await store.checks(conn, set_id)]
+
+
+@router.post("/judge-checks")
+async def check_judge(body: CheckIn):
+    """This model is asked about the answers of this set whose right verdict is known, to see how often it is right."""
+    try:
+        return await judging.start_check(db.connect, body.set_id, ModelRef(provider=body.provider, model=body.model))
+    except judging.Busy:
+        raise HTTPException(409, JUDGE_BUSY) from None
+    except KeyError:
+        raise not_found("set") from None
+    except CaseError as e:
+        raise HTTPException(422, f"This set cannot be used: {e}") from None
+    except ValueError as e:
+        raise HTTPException(422, str(e)) from None
+
+
+@router.get("/judge-checks/{cid}")
+async def get_check(cid: str, conn=Depends(get_conn)):
+    check = await store.check(conn, cid)
+    if check is None:
+        raise not_found("check")
+    return {"check": _checked(check), "answers": await store.checked(conn, cid)}
+
+
+@router.post("/judge-checks/{cid}/cancel", status_code=204)
+async def cancel_check(cid: str, conn=Depends(get_conn)):
+    if await store.check(conn, cid) is None:
+        raise not_found("check")
+    await judging.cancel_check(cid)     # one that is over has nothing to cancel, and that is fine
     return Response(status_code=204)
 
 

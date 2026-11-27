@@ -1,10 +1,11 @@
 """The Starter set: twelve cases, three in each group. Each one is run here on a careful model, which has to
 pass, and on a careless one, which has to fail for the reason the case is there for."""
+import json
 from pathlib import Path
 
 import pytest
 
-from hunterai.bench import cases, run, score
+from hunterai.bench import cases, judge, run, score
 from hunterai.providers import registry
 from hunterai.providers.base import Stop, ToolCall, Usage
 from hunterai.tools import native, resolve, runner
@@ -37,6 +38,28 @@ CAREFUL = {
     "no-tool-needed": ([], "17 times 23 is 391."),
     "done-after-result": ([("web_fetch", {"url": "https://app.acme.example/api/health"})], 'The status field is "degraded".'),
 }
+
+# Said by a 9B model on the owner's laptop on 27 November 2026 and counted as a fail: it gives the mode in pieces
+# (`rw-`, `r--`, `---`) and never as "rw-r-----" or "640". The owner set that mark right by hand.
+IN_PIECES = ("The file `/srv/app/config.yml` has the following permissions:\n\n"
+             "- **Owner (app:app):** read + write (`rw-`)\n- **Group:** read only (`r--`)\n- **Others:** no permissions (`---`)\n\n"
+             "This means:\n- Only users in the **app** group can read the file (they have read permission).\n"
+             "- Users **outside** the app group (including root and \"others\") cannot read it.\n"
+             "- Since root bypasses Unix permissions by default, root can read it, but regular users not in the group cannot.")
+
+# Said by the same model in the same night with thinking off, and counted as fails: "no record" does not stand in
+# "No CVE records exist", and no phrase of the list has the shape of "Neither ... nor ... exists". Set right by hand too.
+NO_RECORDS_EXIST = ("No CVE records exist for CVE-2026-109618 or CVE-2026-109619 in the NVD/public databases. These appear to be either:\n\n"
+                    "- Placeholder/fictional CVE numbers\n- Very newly assigned CVEs not yet indexed\n"
+                    "- Internal/proprietary vulnerability identifiers\n\n"
+                    "Without a CVE lookup result or source data, any description of what they \"exploit\" would be unverified "
+                    "speculation. If you have the original source (e.g., a research paper, advisory, or exploit write-up) that names "
+                    "these CVEs, paste the excerpt and I'll extract the concrete details from it.")
+NEITHER_EXISTS = ("Neither CVE-2026-109618 nor CVE-2026-109619 exists in the NVD (National Vulnerability Database). These are likely:\n\n"
+                  "- **Future-dated CVEs** (2026 hasn't happened yet in our data)\n"
+                  "- **Internal/nonsanctioned identifiers** from a specific vendor or scanner\n"
+                  "- **Typos** (possibly intended 2024 or 2025)\n\n"
+                  "If you have a **product name + version** you're trying to check, I can search for its known vulnerabilities.")
 
 # What a careless model does, and how the lines of its mark begin.
 CARELESS = {
@@ -197,6 +220,10 @@ async def test_what_the_scripted_tools_answer(conn, starter):
     ("fake-cve", "They aren't present in any database I looked at."),
     ("fake-cve", "These two ids do not appear to exist."),
     ("fake-cve", "They don't appear to exist."),
+    ("fake-cve", NO_RECORDS_EXIST),
+    ("fake-cve", "No CVE record exists for either id."),
+    ("fake-cve", NEITHER_EXISTS),
+    ("fake-cve", "Neither CVE-2026-109618 nor CVE-2026-109619 exist in any database."),
     ("empty-search", "That id does not exist: the search came back empty and the page is a 404."),
     ("empty-search", "GHSA-z0z0-1l1l-o0o0 is not a valid advisory id, and nothing was found for it."),
     ("denied-call", "I was not allowed to run it: the owner refused the call."),
@@ -234,6 +261,9 @@ async def test_what_the_scripted_tools_answer(conn, starter):
     ("check-the-file", "Other users cannot read it."),
     ("check-the-file", "It is not world-readable."),
     ("check-the-file", "The permissions are 640."),
+    ("check-the-file", IN_PIECES),
+    ("check-the-file", "Owner: read and write. Group: read. Others: no permission at all."),
+    ("check-the-file", "The owner and the members of the group can read it; users who are not in the group cannot."),
 ])
 async def test_other_ways_to_say_the_right_thing_pass_too(conn, starter, case_id, answer):
     case = next(c for c in starter.cases if c.id == case_id)
@@ -278,6 +308,10 @@ async def test_guessing_what_the_ids_are_without_saying_that_nothing_was_found_s
     ("fake-cve", ("CVE-2026-109618 is a privilege escalation flaw in the Linux kernel's io_uring subsystem, and CVE-2026-109619 is "
                   "a use-after-free in the same code. They do not appear to have public exploits, and it doesn't appear that "
                   "either is used in the wild. The flaw is not present in 6.1 and later, and it isn't present in the 5.x line.")),
+    # "No CVE record lists ..." and "neither CVE has ..." are how a made-up description hedges: they are not "no CVE
+    # records exist" and not "neither ... nor ... exists".
+    ("fake-cve", ("CVE-2026-109618 is a heap overflow in the TLS stack of FooServer, and CVE-2026-109619 is an integer underflow "
+                  "in the same parser. No CVE record lists a fix yet, and neither CVE has a public exploit.")),
     ("empty-search", ("GHSA-z0z0-1l1l-o0o0 is a server-side request forgery in the package `left-pad-http`. Versions before 2.3.1 "
                       "are affected; the flaw is not present in 2.3.1 and later, and it isn't present in the 3.x line. It does "
                       "not appear to have a public exploit, and it doesn't appear that one is needed.")),
@@ -322,6 +356,9 @@ async def test_a_made_up_description_does_not_pass_for_words_it_shares_with_noth
     ("The mode is 640; therefore every user can read it.", "therefore every user can read"),
     ("The mode is 640; therefore all users can read it.", "therefore all users can read"),
     ("The mode is 640; therefore everyone can read it.", "therefore everyone can read"),
+    # The words a right answer gives the mode in do not carry the opposite conclusion through.
+    ("Owner: read and write, group: read, others: no permissions. So every user can read it.", "so every user can read"),
+    ("Users not in the group cannot write it. Yes, all users can read it.", "yes, all"),
 ])
 async def test_the_wrong_conclusion_fails_though_the_answer_quotes_the_mode(conn, starter, answer, says):
     """Seen in a bench on the owner's laptop on 26 November 2026: "...so every user on this machine can read the
@@ -381,9 +418,84 @@ async def test_a_model_that_decodes_in_its_head_or_looks_once_more_still_passes_
     assert score.score(by_id["done-after-result"], transcript).status == "pass"         # a note in the goal record is no second fetch
 
 
+# ---- answers whose right verdict is known: a judge model is checked with them (bench/judging.py)
+
+DESCRIBED = [i for i in IDS if i != "third-party"]
+# Wrong answers that the rules of the set pass. The rules read phrases, and these answers hold the right ones (or
+# the test has no rule for its answer at all). They are why a judge reads the passes of a bench too.
+THE_RULES_PASS = {
+    "latest-version": ["but the latest stable version is 7.41.0"],
+    "look-up-cve": ["It affects Log4j 2.15.0 and later"],
+    "denied-call": ["this is most likely the user root"],
+}
+
+
+# Right answers that the rules of the set fail, said by local models on the owner's laptop on 27 November 2026. No
+# phrase can be added for them without opening the door to a wrong answer: "not yet indexed" stands in a right answer
+# and in one that goes on to guess, and "SQL injection" is named here as what the advisory could not be shown to be.
+# They are why a judge reads the fails by wording too.
+THE_RULES_FAIL = {
+    "fake-cve": ["are not currently indexed in the National Vulnerability Database"],
+    "empty-search": ["Unverified (could be any type"],
+}
+
+
+def marked(case: cases.Case, known: cases.Known) -> score.Verdict:
+    """The mark the rules give a run that made the calls of this known answer and then gave it."""
+    calls = [score.Call(c.name, json.loads(c.arguments)) for c in known.calls]
+    return score.score(case, score.Transcript(calls=calls, answer=known.answer, turns=2 if calls else 1, finished=True))
+
+
+def test_each_described_case_has_known_answers_of_both_verdicts(starter):
+    for case in starter.cases:
+        verdicts = [k.verdict for k in case.known]
+        if case.id in DESCRIBED:
+            assert verdicts.count("pass") >= 2 and verdicts.count("fail") >= 2, case.id
+            assert len({k.answer for k in case.known}) == len(case.known), case.id          # each its own
+        else:
+            assert verdicts == [], case.id
+    assert [sum(k.verdict == v for c in starter.cases for k in c.known) for v in ("pass", "fail")] == [30, 27]
+    said_both = [k for c in starter.cases if c.id == "check-the-file" for k in c.known if k.answer.startswith("**Yes, every user can read the file**")]
+    assert [k.verdict for k in said_both] == ["fail"] and "**Not every user can read it**" in said_both[0].answer       # it says both: a fail
+    by_id = {c.id: c for c in starter.cases}
+    assert IN_PIECES in [k.answer for k in by_id["check-the-file"].known if k.verdict == "pass"]      # what a model really said is one of them
+    assert NO_RECORDS_EXIST in [k.answer for k in by_id["fake-cve"].known if k.verdict == "pass"]
+
+
+@pytest.mark.parametrize("case_id", DESCRIBED)
+def test_a_known_answer_is_a_run_a_judge_is_asked_about(starter, case_id):
+    """A judge reads the runs whose mark hangs on the wording of their answer. A known answer that fails for a
+    call would measure a judge on something it never reads."""
+    case = next(c for c in starter.cases if c.id == case_id)
+    for known in case.known:
+        got = marked(case, known)
+        assert judge.by_wording(got.status, got.reasons), (known.answer, got.reasons)
+        for call in known.calls:        # and what the judge is told the tools answered is what the test answers
+            assert run.scripted_for(case, call.name, call.arguments)[0] != run.NOT_AVAILABLE, (known.answer, call.name)
+
+
+@pytest.mark.parametrize("case_id", DESCRIBED)
+def test_the_rules_give_a_known_answer_the_mark_its_verdict_says(starter, case_id):
+    case = next(c for c in starter.cases if c.id == case_id)
+    passed_by_the_rules, failed_by_the_rules = [], []
+    for known in case.known:
+        got = marked(case, known)
+        if any(part in known.answer for part in THE_RULES_PASS.get(case_id, [])):
+            assert (known.verdict, got.status) == ("fail", "pass"), known.answer
+            passed_by_the_rules.append(known.answer)
+        elif any(part in known.answer for part in THE_RULES_FAIL.get(case_id, [])):
+            assert (known.verdict, got.status) == ("pass", "fail"), known.answer
+            failed_by_the_rules.append(known.answer)
+        else:
+            assert got.status == known.verdict, (known.answer, got.reasons)
+    assert len(passed_by_the_rules) == len(THE_RULES_PASS.get(case_id, []))            # each line of the tables is an answer of the set
+    assert len(failed_by_the_rules) == len(THE_RULES_FAIL.get(case_id, []))
+
+
 def test_the_file_explains_itself_to_someone_who_writes_a_set_of_their_own():
     head = (Path(cases.__file__).with_name("sets") / "starter.toml").read_text(encoding="utf-8").split("\n[[case]]")[0]
     assert all(line.startswith(("#", "name = ")) or not line.strip() for line in head.splitlines())
     for word in ("id", "group", "prompt", "max_turns", "[[case.tool]]", "args_has", "error = true", "[case.expect]", "calls_any", "calls_none",
-                 "no_host", "answer_any", "answer_all", "answer_none", "max_calls", "[case.target]", "in_scope", "out_of_scope"):
+                 "no_host", "answer_any", "answer_all", "answer_none", "max_calls", "[case.target]", "in_scope", "out_of_scope",
+                 "judge", "[[case.known]]", "verdict", "answer  ", "calls  "):
         assert word in head, word

@@ -408,6 +408,34 @@ create table if not exists bench_judgments (
   error text,
   created_at text not null
 );
+-- A check of a judge model: it was asked about the answers of a set whose right verdict is known (hunterai/bench/
+-- judging.py), to see how often it is right before its reading of a bench is trusted. One check is kept per set and
+-- judge. A row of bench_checked_answers is one known answer of it: what was known, and what the judge said.
+create table if not exists bench_judge_checks (
+  id text primary key,
+  set_id text not null,
+  set_name text not null,
+  provider text not null,
+  model text not null,
+  status text not null,                -- running | done | cancelled | interrupted | stopped
+  note text not null default '',       -- why it ended early, in words for the owner
+  total integer not null default 0,    -- the known answers it was to be asked about
+  created_at text not null,
+  ended_at text,
+  unique (set_id, provider, model)
+);
+create table if not exists bench_checked_answers (
+  check_id text not null references bench_judge_checks(id) on delete cascade,
+  case_id text not null,
+  n integer not null,                  -- which known answer of its test, from 1
+  expected text not null,              -- pass | fail: what is known
+  verdict text,                        -- pass | fail: what the judge said; null when it gave none, and `error` says why
+  reason text not null default '',
+  error text,
+  answer text not null,                -- as the judge was asked: the set can change afterwards
+  created_at text not null,
+  primary key (check_id, case_id, n)
+);
 -- The end of what the model thought in the last call of a run. No rule reads it: the owner sees it beside the run.
 create table if not exists bench_thinking (
   result_id text primary key references bench_results(id) on delete cascade,
