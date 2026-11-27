@@ -1837,7 +1837,10 @@ Its data is in `~/.hunterai/caido`, its output in `~/.hunterai/caido.log`.
   text whatever its content type says, a certificate is read out (subject, issuer,
   validity, names), another binary body is one line that says what it looks like (a zip
   archive, a PDF, a serialized Java object) with the words found in it, and media is one
-  line. The Caido panel reads the same list and the same bodies.
+  line. The Caido panel reads the same list and the same bodies. (Until 27 November 2026 a
+  request with a long address in that list moved the panel to the side of the screen, or
+  past its edge, where only the dark page was left to see: the place a dialog stands in
+  was as wide as the longest line in it that cannot be broken.)
 - `caido_send` (a network call, asked about and checked against the target's scope like
   `web_fetch`): one raw HTTP request, sent by Caido, answered with the raw response. The
   model reads a recorded request, edits the text, and sends it.
