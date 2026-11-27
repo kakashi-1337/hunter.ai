@@ -68,6 +68,12 @@ async def list(conn, kind: str | None = None, states: builtins.list[str] | None 
     return [_row(r) for r in await (await conn.execute(sql, args)).fetchall()]
 
 
+async def waiting(conn, kinds: builtins.list[str]) -> int:
+    """How many jobs of these kinds are queued: nobody has taken them up yet."""
+    marks = ",".join("?" * len(kinds))
+    return (await (await conn.execute(f"select count(*) from jobs where state='queued' and kind in ({marks})", kinds)).fetchone())[0]
+
+
 async def delete(conn, job_id: str) -> None:
     """Drop a job's row and its item list. Documents keep the id of the job that made them."""
     await conn.execute("delete from kb_job_items where job_id=?", (job_id,))

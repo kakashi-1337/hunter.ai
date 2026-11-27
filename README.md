@@ -295,6 +295,7 @@ when the collection is created.
   start continues the job: finished documents are not embedded again. A database that
   another write keeps busy for longer than the worker waits does not end the worker: it
   says so on the console, tries again, and a job it could not close goes back into the queue.
+  A worker that does not run is said on the page (see "When a part stops working").
 - **Disk.** A job fails with a disk-floor error, and can be retried, once less than 10 GiB
   is free. A failed job keeps its staged files until it is retried, cancelled, or 7 days
   old. As a rule of thumb, 1.5 million chunks need about 6 GB of vector files plus the chunk
@@ -2376,7 +2377,7 @@ scripts/dev.sh     # development: hot reload on http://127.0.0.1:5173
 The server listens on 127.0.0.1 only. Set `HUNTERAI_PORT` to use another port.
 
 On a start with no model to talk to (no API key, and no chat model in Ollama) the interface
-opens a **setup check**: one line per part (a model, Ollama, colibri and llama.cpp when they have an address, the embedding model, Qdrant,
+opens a **setup check**: one line per part (a model, Ollama, colibri and llama.cpp when they have an address, the embedding model, Qdrant, the worker,
 SearXNG, Caido, Camoufox, your tool folder, the MCP servers) with what was found and the
 command or place that fixes it. Only the model is required; each other line switches one
 feature on. It is under Settings → "Setup check" at any time.
@@ -2385,12 +2386,19 @@ feature on. It is under Settings → "Setup check" at any time.
 
 A part that was in use and does not run now is said on the page, above the machine line at
 the bottom of the sidebar: **Not working: SearXNG (web_search)**, with a button that opens
-the setup check, where the line of that part says how to start it again. Two kinds of parts
+the setup check, where the line of that part says how to start it again. Three kinds of parts
 are watched:
 
 - **Ollama, Qdrant and SearXNG**, the services that run beside HunterAI. One of them counts
   as in use when it answered within the last seven days, so a service you never set up stays
   "optional, missing" and is not announced. They are looked at once a minute.
+- **The worker**, the process beside the server that reads documents in, writes memory and
+  matches skills. It writes a sign of life every two seconds. When none came for ten
+  seconds it counts as not running: its line in the setup check says for how long, and how
+  many jobs wait for it ("no sign of it for 5 min; 2 jobs wait for it"). It is started with
+  HunterAI, so the way to start it again is to stop HunterAI (Ctrl+C) and run
+  `scripts/start.sh`. Why it ended stands in the terminal it ran in. Like the services, it
+  is looked at once a minute, and announced only when it ran within the last seven days.
 - **MCP servers** that are switched on and gave up starting. The model then works with fewer
   tools than you think it has. The reason stands in Settings → "Manage MCP servers".
 

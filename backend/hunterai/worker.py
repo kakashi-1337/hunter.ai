@@ -44,6 +44,12 @@ def _say(text: str) -> None:
     print(f"HunterAI worker: {text}", file=sys.stderr)
 
 
+async def since(conn) -> float | None:
+    """Seconds since the worker's last sign of life. None when the store holds none it can read."""
+    age = _age(await settings.get(conn, "worker_heartbeat"))
+    return None if age == float("inf") else age
+
+
 async def alive(conn) -> bool:
     return _age(await settings.get(conn, "worker_heartbeat")) < ALIVE_SECONDS
 

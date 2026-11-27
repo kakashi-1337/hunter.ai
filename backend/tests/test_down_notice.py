@@ -1,13 +1,14 @@
 """A service beside HunterAI that answered before and does not answer now is said on the page, not only
 in the terminal the start script ran in; and the state of the install can be copied as text for a report."""
 import re
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
-from hunterai import config, db, diagnostics, envfile, mcp_manager
+from hunterai import config, db, diagnostics, envfile, mcp_manager, worker
 from hunterai.api import system
-from hunterai.repo import settings
+from hunterai.repo import jobs, settings
 from hunterai.tools.base import Tool
 from tests.test_api import client  # noqa: F401 (client is a fixture)
 
@@ -48,6 +49,15 @@ async def item(client, name) -> dict:
 
 async def stopped(client) -> list[dict]:
     return (await client.get("/api/system/status")).json()["stopped"]
+
+
+async def heartbeat(seconds_ago: float) -> None:
+    """The worker's last sign of life in the store: that long ago."""
+    conn = await db.connect()
+    try:
+        await settings.put(conn, "worker_heartbeat", (datetime.now(timezone.utc) - timedelta(seconds=seconds_ago)).isoformat())
+    finally:
+        await conn.close()
 
 
 # ---- what stopped
@@ -121,6 +131,89 @@ async def test_check_again_in_the_setup_check_is_what_the_status_says_next(clien
 
 
 # ---- MCP servers
+
+# ---- the worker
+
+WORKER = "The worker (reads documents in, writes memory)"
+
+
+async def test_the_setup_check_says_whether_the_worker_runs(client, monkeypatch):
+    services(monkeypatch)
+    never = await item(client, "worker")
+    assert (never["ok"], never["stopped"], never["required"], never["detail"]) == (False, False, False, "no sign of it")
+    assert never["label"] == WORKER and "start it again (scripts/start.sh)" in never["fix"]
+    await heartbeat(1)
+    runs = await item(client, "worker")
+    assert (runs["ok"], runs["stopped"], runs["detail"], runs["fix"]) == (True, False, "runs", "")
+
+
+async def test_a_worker_that_ran_and_gives_no_sign_of_life_has_stopped_and_the_page_says_so(client, monkeypatch):
+    services(monkeypatch)
+    await heartbeat(1)
+    await item(client, "worker")                                       # it ran when the server looked
+    await heartbeat(300)
+    down = await item(client, "worker")
+    assert (down["ok"], down["stopped"], down["detail"]) == (False, True, "no sign of it for 5 min")
+    assert await stopped(client) == [{"id": "worker", "label": WORKER}]
+    await heartbeat(1)                                                 # it was started again
+    assert (await item(client, "worker"))["stopped"] is False and await stopped(client) == []
+
+
+async def test_the_worker_runs_for_as_long_as_its_sign_of_life_is_fresh(client, monkeypatch):
+    services(monkeypatch)
+    await heartbeat(worker.ALIVE_SECONDS - 3)
+    assert (await item(client, "worker"))["ok"] is True
+    await heartbeat(worker.ALIVE_SECONDS + 1)
+    late = await item(client, "worker")
+    assert (late["ok"], late["detail"]) == (False, "no sign of it for 11 s")
+
+
+async def test_the_jobs_that_wait_for_a_worker_that_does_not_run_are_counted(client, monkeypatch):
+    services(monkeypatch)
+    await heartbeat(300)
+    conn = await db.connect()
+    try:
+        await jobs.enqueue(conn, "ingest", {"path": "/a"})
+        assert (await item(client, "worker"))["detail"] == "no sign of it for 5 min; 1 job waits for it"
+        await jobs.enqueue(conn, "memory", {"chat": "c"})
+        await jobs.enqueue(conn, "a kind the worker does not do", {})
+        taken = await jobs.claim(conn, ["a kind nobody queued"])
+        assert taken is None
+        assert (await item(client, "worker"))["detail"] == "no sign of it for 5 min; 2 jobs wait for it"
+        assert await jobs.claim(conn, ["ingest"]) is not None          # one that was taken up is not waiting
+        assert (await item(client, "worker"))["detail"] == "no sign of it for 5 min; 1 job waits for it"
+    finally:
+        await conn.close()
+    await heartbeat(1)
+    assert (await item(client, "worker"))["detail"] == "runs"         # of a worker that runs, the jobs are its own business
+
+
+async def test_how_many_jobs_wait_is_counted_by_kind(client):
+    conn = await db.connect()
+    try:
+        assert await jobs.waiting(conn, ["ingest", "memory"]) == 0 and await jobs.waiting(conn, []) == 0
+        for kind in ("ingest", "ingest", "memory", "reembed"):
+            await jobs.enqueue(conn, kind, {})
+        assert [await jobs.waiting(conn, kinds) for kinds in (["ingest"], ["ingest", "memory"], ["reembed"], ["other"], [])] == [2, 3, 1, 0, 0]
+    finally:
+        await conn.close()
+
+
+async def test_how_long_ago_the_worker_gave_a_sign_of_life(client):
+    conn = await db.connect()
+    try:
+        assert await worker.since(conn) is None                        # there never was one
+        await settings.put(conn, "worker_heartbeat", "not a time")
+        assert await worker.since(conn) is None
+    finally:
+        await conn.close()
+    await heartbeat(42)
+    conn = await db.connect()
+    try:
+        assert 42 <= await worker.since(conn) < 50
+    finally:
+        await conn.close()
+
 
 async def test_an_mcp_server_that_gave_up_is_not_working(client, monkeypatch):
     """It is switched on and does not run: the model works with fewer tools than the owner thinks it has."""

@@ -64,7 +64,7 @@ async def test_the_checkup_says_what_is_missing_and_how_to_get_it(client, monkey
     got = (await client.get("/api/system/checkup")).json()
     items = {i["id"]: i for i in got["items"]}
     assert got["ready"] is False
-    assert set(items) == {"model", "ollama", "embedder", "qdrant", "searxng", "caido", "browser", "toolbox", "rea", "mcp"}
+    assert list(items) == ["model", "ollama", "embedder", "qdrant", "worker", "searxng", "caido", "browser", "toolbox", "rea", "mcp"]
     assert items["model"]["required"] and not items["model"]["ok"] and ".env" in items["model"]["fix"]
     assert all(not i["ok"] and i["fix"] for k, i in items.items() if k != "mcp")
     assert items["mcp"]["ok"] and not items["mcp"]["fix"]       # no MCP server is switched on and not running
