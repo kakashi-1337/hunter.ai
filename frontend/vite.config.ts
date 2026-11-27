@@ -15,5 +15,6 @@ export default defineConfig({
     strictPort: true,
     proxy: { '/api': { target: `http://127.0.0.1:${process.env.HUNTERAI_PORT || 8790}`, changeOrigin: false } },
   },
-  test: { environment: 'node', include: ['src/__tests__/**/*.test.ts'] },
+  // The tests read no style sheet but the page's own, and that one as text: a test holds a declaration of it.
+  test: { environment: 'node', include: ['src/__tests__/**/*.test.ts'], css: { include: [/theme\.css/] } },
 })

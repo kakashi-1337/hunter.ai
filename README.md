@@ -1837,7 +1837,10 @@ Its data is in `~/.hunterai/caido`, its output in `~/.hunterai/caido.log`.
   text whatever its content type says, a certificate is read out (subject, issuer,
   validity, names), another binary body is one line that says what it looks like (a zip
   archive, a PDF, a serialized Java object) with the words found in it, and media is one
-  line. The Caido panel reads the same list and the same bodies.
+  line. The Caido panel reads the same list and the same bodies. (Until 27 November 2026 a
+  request with a long address in that list moved the panel to the side of the screen, or
+  past its edge, where only the dark page was left to see: the place a dialog stands in
+  was as wide as the longest line in it that cannot be broken.)
 - `caido_send` (a network call, asked about and checked against the target's scope like
   `web_fetch`): one raw HTTP request, sent by Caido, answered with the raw response. The
   model reads a recorded request, edits the text, and sends it.
@@ -2378,7 +2381,10 @@ server compares its own code on disk with what it loaded at its start, and the b
 sidebar then says **Restart HunterAI** until you do. The same notice appears after you edit
 one of its files, and goes away when the edit is undone. A part of the page that cannot be
 drawn (a dialog that needs something the old server does not send) shows what went wrong in
-its own place, with a way to draw it again; the rest of the page stays as it is.
+its own place, with a way to draw it again; the rest of the page stays as it is. A dialog
+opened from the sidebar (Findings, Caido, Bench, Activity, a new chat, a target) that fails
+this way says so in a dialog of its own name with a Close button; until 27 November 2026
+the whole sidebar was replaced by the message, and the dialog was gone.
 
 ## Configuration
 

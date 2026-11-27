@@ -214,6 +214,11 @@ export const APPROVE_DELAY_MS = 800
 /** The Allow buttons stay disabled briefly, so a double click cannot land on the next request. */
 export const canApprove = (shownAtMs: number, nowMs: number): boolean => nowMs - shownAtMs >= APPROVE_DELAY_MS
 
+export const BEHIND_DELAY_MS = 500
+/** A press on the page behind a dialog closes it, but not in the first moment after the dialog appeared: the second
+ * press of a double click on the button that opened it lands there, and the dialog would be gone as soon as it came. */
+export const pressBehindCloses = (shownAtMs: number, nowMs: number): boolean => nowMs - shownAtMs >= BEHIND_DELAY_MS
+
 /** One entry per line: trimmed, blanks and duplicates dropped. */
 export function parseLines(text: string): string[] {
   return [...new Set(text.split('\n').map((l) => l.trim()).filter(Boolean))]
