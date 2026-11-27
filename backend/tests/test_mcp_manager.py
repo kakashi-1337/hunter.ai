@@ -219,6 +219,127 @@ async def test_a_call_is_not_repeated_on_a_tool_the_restarted_server_no_longer_o
     await back(m, 1)
     assert registry.get("fake_die_once") is None
 
+# ---- what HunterAI saw of a server's end is kept: its log held only what the server itself printed
+
+def own_lines() -> list[str]:
+    """HunterAI's own lines in the log of the server "fake", each without its time."""
+    log = config.logs_dir() / "mcp-fake.log"
+    lines = [line for line in (log.read_text().splitlines() if log.exists() else []) if line.startswith("[HunterAI ")]
+    assert all(re.match(r"\[HunterAI \d{4}-\d\d-\d\d \d\d:\d\d:\d\d\] ", line) for line in lines), lines
+    return [line.split("] ", 1)[1] for line in lines]
+
+
+async def test_what_hunterai_saw_of_a_server_that_stopped_under_a_call_is_said_and_kept(fake, tmp_path):
+    """Seen on the owner's machine: the error named the server's log, the server had printed nothing, and the file was
+    empty. What HunterAI itself saw of the end stood in the server's status only until the server was back."""
+    m = await fake()
+    assert own_lines() == []
+    with pytest.raises(ToolError) as e:
+        await m.call_tool("fake", "die_once", {"marker": str(tmp_path / "m")})
+    said = str(e.value)
+    assert "MCP server fake stopped while it ran this call (MCPError: Connection closed). It is being started again." in said
+    assert f"What HunterAI saw of it is in {config.logs_dir() / 'mcp-fake.log'}, with anything the server printed." in said
+    await back(m, 1)
+    assert m.status()[0].error is None                                   # back: its status says nothing of the end any more
+    assert own_lines() == ["The server stopped under a call of die_once: MCPError: Connection closed. It is started again."]
+
+
+async def test_the_second_stop_under_a_call_of_a_read_only_server_says_what_was_seen_too(fake):
+    m = await fake(risk="read")
+    with pytest.raises(ToolError) as e:
+        await m.call_tool("fake", "die", {})
+    assert "stopped twice while it ran this call (MCPError: Connection closed): once more after it was started again" in str(e.value)
+    await back(m, 2)
+    assert own_lines() == ["The server stopped under a call of die: MCPError: Connection closed. It is started again."] * 2
+
+
+async def test_a_stop_while_nobody_called_is_not_laid_to_the_call_before_it(fake, tmp_path, monkeypatch):
+    monkeypatch.setattr(mcp_manager, "ALIVE_EVERY", 0.05)
+    m = await fake()
+    with pytest.raises(ToolError): await m.call_tool("fake", "die_once", {"marker": str(tmp_path / "m")})
+    await back(m, 1)
+    os.kill(pid_of(m), signal.SIGKILL)
+    await back(m, 2)
+    assert own_lines()[1] == "The server stopped: its process ended while nobody called it. It is started again."
+
+
+async def test_a_server_that_ended_while_nobody_called_it_leaves_a_line(fake, monkeypatch):
+    monkeypatch.setattr(mcp_manager, "ALIVE_EVERY", 0.05)
+    m = await fake()
+    os.kill(pid_of(m), signal.SIGKILL)
+    await back(m, 1)
+    assert own_lines() == ["The server stopped: its process ended while nobody called it. It is started again."]
+
+
+async def test_a_server_that_is_left_alone_says_so_in_its_log(fake, monkeypatch):
+    monkeypatch.setattr(mcp_manager, "MAX_RESTARTS", 1)
+    m = await fake()
+    with pytest.raises(ToolError): await m.call_tool("fake", "die", {})
+    await back(m, 1)
+    with pytest.raises(ToolError): await m.call_tool("fake", "die", {})
+    await eventually(lambda: m.status()[0].state == "dead")
+    assert own_lines() == [
+        "The server stopped under a call of die: MCPError: Connection closed. It is started again.",
+        "The server stopped under a call of die: MCPError: Connection closed. It is not started again: it stopped 2 times within 10 minutes."]
+    assert m.status()[0].error == "it stopped 2 times within 10 minutes and was not started again; the last time: MCPError: Connection closed"
+
+
+async def test_a_server_that_does_not_come_up_leaves_a_line_for_each_try(fake):
+    m = await fake(args=["-c", "import sys; sys.exit(3)"])
+    assert m.status()[0].state == "dead"
+    first, second = own_lines()
+    assert first.startswith("The server did not start: ") and first.endswith(". It is tried once more.")
+    assert second.startswith("The server did not start: ") and second.endswith(". It is not tried again.")
+    assert m.status()[0].error in first                                  # the reason the status gives, word for word
+
+
+async def test_a_server_that_hunterai_ends_says_why_in_its_log(fake, monkeypatch):
+    monkeypatch.setattr(mcp_manager, "CANCEL_GRACE", 0.2)
+    m = await fake()
+    with pytest.raises(ToolError, match="timed out"): await m.call_tool("fake", "slow", {"seconds": 30}, timeout=0.2)
+    await eventually(lambda: m.status()[0].state == "ready" and m.status()[0].forced_restarts == 1)
+    assert own_lines() == ["HunterAI ended the server: a call of slow did not come back within 0.2 s. It is started again."]
+    task = asyncio.create_task(m.call_tool("fake", "slow", {"seconds": 30}))
+    await asyncio.sleep(0.3)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await eventually(lambda: m.status()[0].state == "ready" and m.status()[0].forced_restarts == 2)
+    assert own_lines()[1:] == ["HunterAI ended the server: a call of slow was cancelled and the server stayed busy. It is started again."]
+
+
+async def test_a_server_that_hunterai_no_longer_starts_after_ending_it_says_so(fake, monkeypatch):
+    monkeypatch.setattr(mcp_manager, "MAX_FORCED_RESTARTS", 1)
+    m = await fake()
+    with pytest.raises(ToolError, match="timed out"): await m.call_tool("fake", "slow", {"seconds": 30}, timeout=0.2)
+    await eventually(lambda: m.status()[0].state == "ready" and m.status()[0].forced_restarts == 1)
+    with pytest.raises(ToolError, match="timed out"): await m.call_tool("fake", "slow", {"seconds": 30}, timeout=0.2)
+    await eventually(lambda: m.status()[0].state == "dead")
+    assert own_lines() == [
+        "HunterAI ended the server: a call of slow did not come back within 0.2 s. It is started again.",
+        "HunterAI ended the server: a call of slow did not come back within 0.2 s. It is not started again: HunterAI has had to end it 2 times."]
+
+
+async def test_a_server_that_hunterai_stops_leaves_no_line(fake):
+    m = await fake()
+    await m.stop()
+    assert own_lines() == []
+
+
+def test_a_line_of_hunterais_own_stays_one_line():
+    """The name of a tool and the words of an error come from the server: neither can start a line of its own."""
+    mcp_manager._note("fake", "The server stopped under a call of a\n[HunterAI 2020-01-01 00:00:00] It is fine\x1b[0m: x\r\ny")
+    assert own_lines() == ["The server stopped under a call of a [HunterAI 2020-01-01 00:00:00] It is fine [0m: x  y"]
+    assert (config.logs_dir() / "mcp-fake.log").read_text().count("\n") == 1
+
+
+def test_a_log_that_cannot_be_written_is_no_reason_to_fail(monkeypatch):
+    def gone():
+        raise OSError("no such folder")
+    monkeypatch.setattr(config, "logs_dir", gone)
+    mcp_manager._note("fake", "a line")                                  # raises nothing: the server comes back all the same
+
+
 async def test_stop_ends_the_server_and_its_children(fake):
     m = await fake()
     child = int((await m.call_tool("fake", "spawn_child", {})).text)

@@ -342,7 +342,22 @@ def _alive(pidfile: Path) -> bool:
 
 
 class _Gone(Exception):
-    """The session ended under a call. The task that owns the server has been told to start it again."""
+    """The session ended under a call: what was seen of it. The task that owns the server has been told to start it again."""
+
+
+OWN = "[HunterAI "        # how a line begins that HunterAI wrote into the log of a server
+
+
+def _note(name: str, text: str) -> None:
+    """A line of HunterAI's own in the log of a server. That log holds what the server printed, so a server that ends
+    without a word leaves it empty, and what HunterAI saw of the end stands in the server's status only until the
+    server is back: an owner who was sent to the log found nothing in it."""
+    text = "".join(c if c.isprintable() else " " for c in text)     # a tool's name and an error's words are the server's
+    try:
+        with open(config.logs_dir() / f"mcp-{name}.log", "a", encoding="utf-8") as f:
+            f.write(f"{OWN}{time.strftime('%Y-%m-%d %H:%M:%S')}] {text}\n")
+    except OSError:
+        pass
 
 
 class ServerStatus(BaseModel):
@@ -365,6 +380,8 @@ class _Server:
         self.error: str | None = None
         self.restarts = 0
         self.forced = 0
+        self.forced_why = ""              # why HunterAI ended it the last time it did
+        self.during = ""                  # the tool whose call its session ended under, for the line in its log
         self.ended: list[float] = []      # when it stopped after it had come up, within RESTART_WINDOW
         self.failed_starts = 0            # in a row
         self.session: ClientSession | None = None
@@ -535,11 +552,20 @@ class Manager:
                     _kill_group(self._pidfile(cfg))
             if self._stopping:
                 break
+            # What HunterAI saw of this end goes into the server's log before anything else: the next start clears it
+            # from the status.
+            saw = f": {srv.error}" if srv.error else ""
+            under, srv.during = (f" under a call of {srv.during}" if srv.during else ""), ""
             if srv.force:
-                if srv.forced > MAX_FORCED_RESTARTS:
+                again = srv.forced <= MAX_FORCED_RESTARTS
+                _note(cfg.name, f"HunterAI ended the server: {srv.forced_why or 'a call kept it busy'}. "
+                      + ("It is started again." if again else f"It is not started again: HunterAI has had to end it {srv.forced} times."))
+                if not again:
                     break
             elif not came_up:
-                if srv.failed_starts >= MAX_FAILED_STARTS:
+                again = srv.failed_starts < MAX_FAILED_STARTS
+                _note(cfg.name, f"The server did not start{saw}. " + ("It is tried once more." if again else "It is not tried again."))
+                if not again:
                     break
                 srv.failed_starts += 1
                 srv.restarts += 1
@@ -549,10 +575,12 @@ class Manager:
                 # starting it over and over would only hide that it does not work.
                 now = time.monotonic()
                 srv.ended = [t for t in srv.ended if now - t < RESTART_WINDOW] + [now]
+                again = len(srv.ended) <= MAX_RESTARTS
+                often = f"it stopped {len(srv.ended)} times within {RESTART_WINDOW / 60:.0f} minutes"
+                _note(cfg.name, f"The server stopped{under}{saw}. " + ("It is started again." if again else f"It is not started again: {often}."))
                 srv.error = srv.error or "the server stopped"
-                if len(srv.ended) > MAX_RESTARTS:
-                    srv.error = (f"it stopped {len(srv.ended)} times within {RESTART_WINDOW / 60:.0f} minutes and was not "
-                                 f"started again; the last time: {srv.error}")
+                if not again:
+                    srv.error = f"{often} and was not started again; the last time: {srv.error}"
                     break
                 srv.restarts += 1
             srv.state = "restarting"
@@ -678,25 +706,27 @@ class Manager:
         srv = self._servers.get(server)
         return srv is not None and srv.state == "ready" and srv.session is not None
 
-    def _force_restart(self, srv: _Server) -> None:
+    def _force_restart(self, srv: _Server, why: str) -> None:
         """The server is still busy in a tool: end it (its process group dies with the
-        transport) and start it again."""
+        transport) and start it again. `why` is for the server's log."""
         if srv.session is None or srv.force:
             return
         srv.forced += 1
+        srv.forced_why = why
         srv.force = True
         srv.session = None
         srv.state = "restarting"
         srv.wake.set()
 
     @staticmethod
-    def _broken(srv: _Server, session: ClientSession | None, why: str) -> None:
+    def _broken(srv: _Server, session: ClientSession | None, why: str, during: str = "") -> None:
         """The session is gone (child exit, EOF, transport error): have the task that owns the server start it
-        again. Nothing when that was said already."""
+        again. Nothing when that was said already. `during`: the tool whose call it ended under."""
         if session is not None and srv.session is session:
             srv.session = None
             srv.state = "restarting"
             srv.error = why
+            srv.during = during
             srv.settled.clear()
             srv.wake.set()
 
@@ -724,20 +754,21 @@ class Manager:
             raise ToolError(f"MCP server {server} is not available" + (f": {why}" if why else ""))
         try:
             return await self._call(srv, tool, arguments, timeout)
-        except _Gone:
-            pass
-        printed = f"What the server printed is in {config.logs_dir() / f'mcp-{server}.log'}."
+        except _Gone as gone:
+            saw = str(gone)
+        # The server's log has what it printed, which may be nothing: what HunterAI saw is said here, and written there.
+        printed = f"What HunterAI saw of it is in {config.logs_dir() / f'mcp-{server}.log'}, with anything the server printed."
         if srv.cfg.risk != "read":
-            raise ToolError(f"MCP server {server} stopped while it ran this call. It is being started again. The call was "
-                            f"not repeated: it may have done part of its work. Call it again if that is safe. {printed}")
+            raise ToolError(f"MCP server {server} stopped while it ran this call ({saw}). It is being started again. The call "
+                            f"was not repeated: it may have done part of its work. Call it again if that is safe. {printed}")
         if not (await self._back(srv) and tool_name(server, tool) in srv.tools):
-            raise ToolError(f"MCP server {server} stopped while it ran this call, and the call could not be made again: "
-                            f"the server did not come up, or no longer offers this tool. {printed}")
+            raise ToolError(f"MCP server {server} stopped while it ran this call ({saw}), and the call could not be made "
+                            f"again: the server did not come up, or no longer offers this tool. {printed}")
         try:
             return await self._call(srv, tool, arguments, timeout)
-        except _Gone:
-            raise ToolError(f"MCP server {server} stopped twice while it ran this call: once more after it was started "
-                            f"again. The call seems to be what stops it. {printed}") from None
+        except _Gone as gone:
+            raise ToolError(f"MCP server {server} stopped twice while it ran this call ({gone}): once more after it was "
+                            f"started again. The call seems to be what stops it. {printed}") from None
 
     async def _call(self, srv: _Server, tool: str, arguments: dict, timeout: float) -> ToolResult:
         """One call on the session the server has now. _Gone when the session ends under it."""
@@ -751,7 +782,7 @@ class Manager:
                 if not fut.done():
                     fut.cancel()
                     if srv.session is session:
-                        self._force_restart(srv)
+                        self._force_restart(srv, f"a call of {tool} was cancelled and the server stayed busy")
                 elif not fut.cancelled():
                     fut.exception()      # retrieved, so it is not reported as never read
             srv_task = asyncio.ensure_future(watch())
@@ -760,7 +791,7 @@ class Manager:
         if not done:
             fut.cancel()
             if srv.session is session:
-                self._force_restart(srv)
+                self._force_restart(srv, f"a call of {tool} did not come back within {timeout:g} s")
             raise ToolError(f"MCP server {server} timed out after {timeout:g} s")
         try:
             return _text(fut.result())
@@ -771,11 +802,13 @@ class Manager:
                 # The server answered, with an error of its own in place of a result: it runs, and is left running.
                 return ToolResult(f"The server answered with an error instead of a result: {str(e.message)[:2000]} "
                                   f"(code {e.code})", is_error=True)
-            self._broken(srv, session, f"{type(e).__name__}: {str(e)[:300]}")
-            raise _Gone from None
+            saw = f"{type(e).__name__}: {str(e)[:300]}"
+            self._broken(srv, session, saw, tool)
+            raise _Gone(saw) from None
         except Exception as e:
-            self._broken(srv, session, f"{type(e).__name__}: {str(e)[:300]}")
-            raise _Gone from None
+            saw = f"{type(e).__name__}: {str(e)[:300]}"
+            self._broken(srv, session, saw, tool)
+            raise _Gone(saw) from None
 
 
 manager: Manager | None = None
