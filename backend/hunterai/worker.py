@@ -9,6 +9,7 @@ import asyncio
 import fcntl
 import os
 import signal
+import sqlite3
 import sys
 from collections.abc import Callable
 from datetime import datetime, timezone
@@ -32,6 +33,15 @@ def _age(stamp: str | None) -> float:
         return (datetime.now(timezone.utc) - datetime.fromisoformat(stamp)).total_seconds()
     except ValueError:
         return float("inf")
+
+
+def busy(error: sqlite3.Error) -> bool:
+    """SQLite's answer that another connection kept the database for longer than this one waits."""
+    return getattr(error, "sqlite_errorcode", 0) & 0xFF == sqlite3.SQLITE_BUSY
+
+
+def _say(text: str) -> None:
+    print(f"HunterAI worker: {text}", file=sys.stderr)
 
 
 async def alive(conn) -> bool:
@@ -100,13 +110,27 @@ async def main(once: bool = False) -> int:
                     pass
                 await asyncio.sleep(HEARTBEAT_SECONDS)
         beat = asyncio.create_task(heartbeat())
+        waiting = False                            # a busy database ended the last pass
         while not stopping.is_set():
             try:
                 await memory.schedule(conn)        # chats that went quiet get their notes taken
             except Exception:  # noqa: BLE001 - scheduling must never stop the worker
                 pass
-            await drain(conn, stop=stopping.is_set)
-            if once and not await jobs.list(conn, states=["queued"], limit=1):
+            try:
+                if waiting:                        # a job it could not close goes back, as after a crash
+                    await jobs.requeue_running(conn, list(HANDLERS))
+                    waiting = False
+                    _say("the database answers again.")
+                await drain(conn, stop=stopping.is_set)
+            except sqlite3.OperationalError as e:
+                if not busy(e):
+                    raise
+                await conn.rollback()              # an open transaction would keep its old view for good
+                if not waiting:
+                    _say("the database is busy with another write. No job is lost: "
+                         "the worker waits and tries again.")
+                waiting = True
+            if once and not waiting and not await jobs.list(conn, states=["queued"], limit=1):
                 break
             try:
                 await asyncio.wait_for(stopping.wait(), POLL_SECONDS)

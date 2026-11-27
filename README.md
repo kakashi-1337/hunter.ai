@@ -292,7 +292,9 @@ when the collection is created.
 - **The worker.** Ingest runs in its own process (`python -m hunterai.worker`, started by
   the scripts), one job at a time, one embedding request at a time. Pause, resume, cancel,
   and retry work from the queue. If the worker or the machine dies mid-ingest, the next
-  start continues the job: finished documents are not embedded again.
+  start continues the job: finished documents are not embedded again. A database that
+  another write keeps busy for longer than the worker waits does not end the worker: it
+  says so on the console, tries again, and a job it could not close goes back into the queue.
 - **Disk.** A job fails with a disk-floor error, and can be retried, once less than 10 GiB
   is free. A failed job keeps its staged files until it is retried, cancelled, or 7 days
   old. As a rule of thumb, 1.5 million chunks need about 6 GB of vector files plus the chunk
