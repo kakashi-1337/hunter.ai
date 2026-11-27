@@ -646,6 +646,18 @@ export interface FindingRow extends Finding {
   chat_title: string | null
 }
 
+/** A program and the memory it holds, in bytes. */
+export interface Holder { name: string; bytes: number }
+
+/** The machine as it is now, for the Live monitor. What could not be read is null, and a machine without an NVIDIA
+ * card has no cards. Memory is in bytes, `load` in percent, `temp` and `limit` in °C, `power` in watts. */
+export interface MonitorReading {
+  cpu: { load: number | null; temp: number | null; limit: number | null }
+  ram: { used: number; total: number; holders: Holder[] } | null
+  cards: { name: string; load: number | null; temp: number | null; limit: number | null; power: number | null
+    used: number | null; total: number | null; holders: Holder[] }[]
+}
+
 export interface SystemStatus {
   cpu_temp: number | null
   cpu_limit: number | null

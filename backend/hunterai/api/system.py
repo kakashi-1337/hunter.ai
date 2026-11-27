@@ -12,7 +12,7 @@ import time
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from .. import activity, caido, config, diagnostics, engine, llamafind, mcp_manager, rea_tools, stale, thermal, toolbox
+from .. import activity, caido, config, diagnostics, engine, llamafind, mcp_manager, monitor, rea_tools, stale, thermal, toolbox
 from . import providers as providers_api
 from . import settings as settings_api
 from .deps import get_conn
@@ -238,6 +238,14 @@ async def status(request: Request, conn=Depends(get_conn)):
     return {"cpu_temp": thermal.cpu_temp(), "cpu_limit": thermal.limit(), "gpu_temp": card, "gpu_limit": thermal.gpu_limit(),
             "local_models": models, "colibri": held, "llamacpp": served,
             "restart_needed": stale.restart_needed(), "stopped": request.app.state.stopped, "page": page_script()}
+
+
+@router.get("/system/monitor")
+async def monitor_now():
+    """The machine as it is now, for the Live monitor: the processor, the memory and each graphics card. The page
+    asks only while that panel is open: a look at the cards starts two programs, and keeps a card awake that a
+    laptop would put to sleep."""
+    return await monitor.read()
 
 
 def _browser_installed() -> bool:

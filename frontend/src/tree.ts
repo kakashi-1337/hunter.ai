@@ -533,7 +533,7 @@ export function swarmMembers(steps: Step[], callId: string, result: string | nul
   })
 }
 
-const NEAR_LIMIT = 10   // degrees under the limit at which the line turns yellow
+export const NEAR_LIMIT = 10   // degrees under the limit at which the line turns yellow
 
 /** One line about the machine: how hot the processor and the graphics card are, and which local models hold memory. */
 const whole = (n: number) => n.toLocaleString('en-US')
