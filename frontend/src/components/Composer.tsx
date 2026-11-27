@@ -90,6 +90,7 @@ export function Composer() {
   const perform = async (r: SlashResult): Promise<string | null> => {
     const store = useStore.getState()
     if (r.kind === 'refused') { setSaid(r.message); return null }
+    if (r.kind === 'said') { setText(''); setSaid(r.message); return null }
     if (r.kind === 'skill' || r.kind === 'go') {
       const now = chat?.mode ?? 'pentesting'
       // A skill with a mode moves the chat there first (/plan: nothing can be changed), and /go moves it back.

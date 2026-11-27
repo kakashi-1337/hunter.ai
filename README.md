@@ -633,6 +633,7 @@ Tab to complete, Enter to take the highlighted row, Escape to close the list.
 | `/stop` | Stops the run. |
 | `/go`, `/go coding` | Approves a plan: puts the chat back in the mode the work is done in and tells the model to carry it out. |
 | `/skills` | Opens the list of skills. |
+| `/help` | Says which commands there are, and which skills are switched on. |
 | `/plan <task>`, `/audit <what>`, `/debug <what>`, `/fix <what>`, `/profundis <domain>`, and every skill you add | Starts the skill: the line goes to the model together with the skill's instructions. See [Skills](#skills). |
 
 A value that fits nothing, or more than one thing, is not sent: the line under the
@@ -640,6 +641,13 @@ composer says what there is. While the agent works, only `/new` and `/stop` run.
 that starts with a slash but not with a command word (`/etc/passwd is readable`) is an
 ordinary message, a command that takes no value is a message as soon as more follows it
 (`/new endpoint is broken`), and a space in front of the slash always makes it a message.
+
+A word that is a slip away from a command or a skill is not sent either: `/modle haiku`
+gets "There is no command /modle. Did you mean /mode or /model?", and the line stays in
+the composer to be set right. A slip is a letter left out, put in or changed, or two
+neighbours swapped. A name of four or five letters is allowed one slip and a longer one
+two; `/go` and `/new` are too short to guess at. Until 28 November 2026 such a line went
+to the model as a message.
 
 ### Skills
 
