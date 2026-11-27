@@ -34,11 +34,12 @@ from ..providers.base import ToolCall
 from ..repo import chats, settings, targets
 from ..types import Target
 from . import on_demand, registry, resolve
-from .base import Prepared, ToolContext
+from .base import Prepared, Tool, ToolContext
 from .loopguard import GIVE_UP
 
 SETTING, DEFAULT = "scope_refusal", True
 REACH_OUT = ("network", "execute")      # the risk classes of tools whose `prepare` names the hosts a call reaches
+SERVER = "mcp:"                         # how the source of a tool begins that an MCP server brought
 
 
 Out = tuple[str, str | None]     # a host, and the line with a path under which this call's address is out (None: the whole host is)
@@ -90,7 +91,23 @@ async def named(conn, chat_id: str, run_id: str, tc: ToolCall, offered: Collecti
         prepared = await tool.prepare(ctx, args)
     except Exception:  # noqa: BLE001 - arguments its tool cannot look at: the runner says so to the model
         return []
-    return out_of(target, prepared)
+    return reached(tool, target, prepared, args)
+
+
+def reached(tool: Tool, target: Target, prepared: Prepared, args: dict) -> list[Out]:
+    """What of `target`'s out-of-scope list a call reaches for certain: what its tool says it reaches, and for a tool
+    of an MCP server every host among its arguments besides.
+
+    HunterAI cannot look into a tool of a server. It reads whole addresses off its arguments (mcp_manager.
+    generic_prepare) and no bare name, so a scanner that was given `payments.shop.example` named no host, and was
+    run. Here its arguments are read as a command is read by the tool for commands: a name counts wherever it stands.
+    A bare name says no path, so only a host that is out as a whole is refused for it. This is for the guard alone:
+    what the permission rules are told of such a call stays what its `prepare` says."""
+    outs = out_of(target, prepared)
+    if tool.source.startswith(SERVER):
+        told = {host for host, _ in outs}
+        outs += [out for out in out_of(target, Prepared(hosts=tuple(resolve.hosts_in(args)))) if out[0] not in told]
+    return outs
 
 
 def out_of(target: Target, prepared: Prepared) -> list[Out]:

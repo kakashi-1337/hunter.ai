@@ -147,8 +147,8 @@ async def _scope(request: Request, tc: ToolCall) -> tuple[list[scopeguard.Out], 
 
     - A tool of HunterAI's own that reaches out says where the call goes, and the rest of its arguments is not read
       for hosts: a web search goes to a search engine, a CVE lookup to the NVD, a fetch to the host of its address. A
-      tool of an MCP server cannot be looked into (HunterAI reads whole addresses off its arguments, and no bare
-      name), so it is never said to go nowhere. Neither is a tool that reaches out and has nothing that says where.
+      tool of an MCP server cannot be looked into: the guard reads its arguments for names, and it is never said to
+      go nowhere. Neither is a tool that reaches out and has nothing that says where.
     - A tool that could not read the call is read for it: every host in the arguments is one the call reaches, which
       is how the tool for commands reads a command. A command is not read by its tool here at all unless it names a
       folder that is there, because nothing is run in a bench and its working folder is never made."""
@@ -164,12 +164,9 @@ async def _scope(request: Request, tc: ToolCall) -> tuple[list[scopeguard.Out], 
     try:
         prepared = await tool.prepare(ctx, tc.arguments)
     except Exception:  # noqa: BLE001 - arguments its tool cannot look at
-        prepared = Prepared(hosts=tuple(score.hosts_in(tc.arguments)))
-    own = not tool.source.startswith("mcp:")
-    if not prepared.hosts:
-        return [], own
-    outs = scopeguard.out_of(target, prepared)
-    if outs or not own:
+        prepared = Prepared(hosts=tuple(resolve.hosts_in(tc.arguments)))
+    outs = scopeguard.reached(tool, target, prepared, tc.arguments)
+    if outs or tool.source.startswith(scopeguard.SERVER):
         return outs, False
     # A tool of HunterAI's own said where the call goes. It goes to no host of the list when the permission rules of a
     # chat see none there either: they see one where the guard leaves a call to the owner (a command, and a line with
