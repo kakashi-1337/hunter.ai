@@ -62,6 +62,13 @@ async function type(el: HTMLInputElement, value: string): Promise<void> {
   })
 }
 
+/** A number field takes what is typed when its owner is done with it: here by leaving the field. */
+async function number(el: HTMLInputElement, value: string): Promise<void> {
+  await act(async () => { el.focus() })
+  await type(el, value)
+  await act(async () => { el.blur() })
+}
+
 describe('the names of the sampling options', () => {
   it('are the seven the local servers take', () => {
     expect([...SAMPLING]).toEqual(['top_k', 'min_p', 'repeat_penalty', 'repeat_last_n', 'presence_penalty', 'frequency_penalty', 'seed'])
@@ -97,14 +104,14 @@ describe('the sampling options of a chat', () => {
 
   it('saves each one with the chat as it is set', async () => {
     await open()
-    await type(input('Top K'), '20')
+    await number(input('Top K'), '20')
     expect(saved.pop()).toEqual({ top_k: 20 })
     await type(input('Min P'), '0.1')
     await type(input('Repeat penalty'), '1.15')
-    await type(input('Repeat last N (tokens)'), '128')
+    await number(input('Repeat last N (tokens)'), '128')
     await type(input('Presence penalty'), '0.5')
     await type(input('Frequency penalty'), '-0.3')
-    await type(input('Seed'), '42')
+    await number(input('Seed'), '42')
     expect(saved.pop()).toEqual({ top_k: 20, min_p: 0.1, repeat_penalty: 1.15, repeat_last_n: 128, presence_penalty: 0.5, frequency_penalty: -0.3, seed: 42 })
     expect(useStore.getState().chat!.options.repeat_penalty).toBe(1.15)
     expect(host.querySelector('button[aria-expanded]')!.textContent).toBe('Options · 7')
@@ -112,26 +119,25 @@ describe('the sampling options of a chat', () => {
 
   it('keeps a seed of 0, and takes a Top K or a look-back below 1 as not set', async () => {
     await open()
-    await type(input('Seed'), '0')
+    await number(input('Seed'), '0')
     expect(saved.pop()).toEqual({ seed: 0 })
-    await type(input('Seed'), '-1')
+    await number(input('Seed'), '-1')
     expect(saved.pop()).toEqual({})
-    await type(input('Top K'), '0')
-    expect(saved.pop()).toEqual({})
-    await type(input('Top K'), '40')
-    await type(input('Repeat last N (tokens)'), '0')
+    await number(input('Top K'), '0')
+    expect([saved.length, input('Top K').value]).toEqual([0, ''])        // not set before and not set now: there is nothing to save
+    await number(input('Top K'), '40')
     expect(saved.pop()).toEqual({ top_k: 40 })
-    await type(input('Top K'), '')
+    await number(input('Repeat last N (tokens)'), '0')
+    expect([saved.length, input('Repeat last N (tokens)').value]).toEqual([0, ''])
+    await number(input('Top K'), '0')
     expect(saved.pop()).toEqual({})
-    expect(input('Seed').min).toBe('0')
-    expect(input('Top K').min).toBe('1')
   })
 
   it('takes a seed back when its field is emptied, and does not make it 0', async () => {
     await open()
-    await type(input('Seed'), '7')
+    await number(input('Seed'), '7')
     expect(saved.pop()).toEqual({ seed: 7 })
-    await type(input('Seed'), '')
+    await number(input('Seed'), '')
     expect(saved.pop()).toEqual({})
   })
 

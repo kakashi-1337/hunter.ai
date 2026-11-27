@@ -11,3 +11,14 @@ export function effortChoices(efforts: string[] | undefined, current: string | u
   const offered = efforts?.length ? [...efforts] : [...EFFORTS]
   return current && !offered.includes(current) ? [...offered, current] : offered
 }
+
+/** What a number field of the options holds once its owner is done with it: a whole number of `least` or more, or
+ * nothing, which leaves the option unset (the model's default). Commas or spaces between thousands are how a large
+ * number is written ("16,000") and do not count; anything else that is not a digit makes it no number. */
+export function typedNumber(text: string, least = 1): number | undefined {
+  const t = text.trim()
+  const digits = /^\d{1,3}(?:[, ]\d{3})+$/.test(t) ? t.replace(/[, ]/g, '') : t
+  if (!/^\d+$/.test(digits)) return undefined
+  const n = Number(digits)
+  return Number.isSafeInteger(n) && n >= least ? n : undefined
+}
