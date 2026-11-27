@@ -152,6 +152,25 @@ def only_thought(blocks, stop: str | None) -> bool:
             and not any(b.type == "tool_call" or (b.type == "text" and b.text.strip()) for b in blocks))
 
 
+def said_nothing(blocks) -> bool:
+    """What a model call wrote (`blocks`) is nothing a chat can show: no text, no thinking, no tool call. Reported with
+    DeepHat-V1-7B on the owner's laptop on 27 November 2026: a chat "just stopped" after HunterAI's lookups, and the
+    log of the model's server showed a call that wrote 6 tokens. The page shows a turn that says nothing then, and
+    had no word for it. Whether the call was cut off or ended by a filter is for the caller to rule out first: those
+    have their own word."""
+    return not any(b.type in ("tool_call", "thinking") or (b.type == "text" and b.text.strip()) for b in blocks)
+
+
+def nothing_written(tokens: int) -> str:
+    """The word under a turn that holds nothing. `tokens`: what the call wrote all the same, as the provider counts it."""
+    if tokens:
+        wrote = (f"it wrote {tokens} tokens, and no text or tool call came of them" if tokens != 1
+                 else "it wrote 1 token, and no text or tool call came of it")
+    else:
+        wrote = "it wrote nothing"
+    return f"The model ended its turn without an answer: {wrote}. Send the message again, or pick another model for this chat."
+
+
 ASKED_AGAIN = ("The model ended a turn with thinking only and no answer, so HunterAI asked it once more with thinking switched off. "
                "Thinking stays off for the rest of this run. To have it off from the start, switch Thinking off for this chat under "
                "Options.")
