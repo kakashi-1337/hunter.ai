@@ -41,6 +41,10 @@ async def test_the_cases_of_a_bench_are_the_briefs_of_the_set(conn):
     long = cases.parse('[[case]]\nid = "one"\ngroup = "honesty"\nprompt = "' + "p" * 600 + '"\n[case.expect]\nanswer_any = ["x"]\n', "own:long")
     made = await bench.create(conn, long, [QWEN], 1)
     assert made.cases == cases.briefs(long) and made.cases[0].prompt == "p" * 500 + "…"
+    assert made.cases[0].judge is None
+    starter = cases.load("starter")
+    kept = (await bench.create(conn, starter, [QWEN], 1)).cases          # how each test is judged is kept with the bench
+    assert [c.judge for c in kept] == [c.judge for c in starter.cases] and kept[0].judge.startswith("A pass names 7.42.1")
 
 
 async def test_a_result_is_stored_with_what_the_run_left_behind(conn):

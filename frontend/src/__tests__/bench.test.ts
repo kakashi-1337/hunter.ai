@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { GROUP_LABELS, benchLine, benchTable, cellOf, cloudLine, handChoice, judgeLine, judgingLine, modelNames, progressLine, seconds, sharedLine, sizeLine, stateWord, timeLine, verdictLine, verdictWord } from '../bench'
-import type { BenchJudging, BenchMark, BenchMarkStatus, BenchProgress, BenchRun, ModelRef, SystemStatus } from '../types'
+import { GROUP_LABELS, benchLine, benchTable, cellOf, checkLine, checkScore, cloudLine, handChoice, judgeLine, judgingLine, modelNames, progressLine, seconds, sharedLine, sizeLine, stateWord, timeLine, verdictLine, verdictWord, wrongLine, wrongOnes } from '../bench'
+import type { BenchJudging, BenchMark, BenchMarkStatus, BenchProgress, BenchRun, CheckedAnswer, JudgeCheck, ModelRef, SystemStatus } from '../types'
 
 const A: ModelRef = { provider: 'ollama', model: 'hf.co/mradermacher/Huihui-Qwen3.5-9B-abliterated-GGUF:Q6_K' }
 const B: ModelRef = { provider: 'ollama', model: 'maternion/mimo-v2.6-heretic:9b-thinking-q6_K' }
@@ -312,5 +312,54 @@ describe('a mark the owner set by hand', () => {
     expect(handChoice({ status: 'pass', by_hand: 'fail' })).toEqual({ label: 'Undo', status: null })
     expect(handChoice({ status: 'error' })).toBeNull()
     expect(handChoice({ status: 'skipped' })).toBeNull()
+  })
+})
+
+// A judge is checked before it is trusted: it is asked about answers whose right verdict is known.
+describe('the check of a judge model', () => {
+  const check = (over: Partial<JudgeCheck> = {}): JudgeCheck => ({ id: 'k1', set_id: 'starter', set_name: 'Starter', provider: 'ollama', model: 'qwen3:8b',
+    status: 'done', note: '', total: 52, done: 52, correct: 49, passed_wrongly: 2, failed_wrongly: 1, unanswered: 0,
+    created_at: '2026-11-27T10:00:00+00:00', ended_at: '2026-11-27T10:03:00+00:00', ...over })
+
+  it('says how many known answers the judge called right, and how it was wrong', () => {
+    expect(checkLine(check())).toBe('qwen3:8b on the known answers of Starter: 49 of 52 right. It called 2 fails a pass and 1 pass a fail.')
+    expect(checkLine(check({ correct: 52, passed_wrongly: 0, failed_wrongly: 0 }))).toBe('qwen3:8b on the known answers of Starter: 52 of 52 right.')
+    expect(checkLine(check({ correct: 50, passed_wrongly: 1, failed_wrongly: 0, unanswered: 1 })))
+      .toBe('qwen3:8b on the known answers of Starter: 50 of 52 right. It called 1 fail a pass. 1 answer got no verdict.')
+    expect(checkLine(check({ correct: 48, passed_wrongly: 0, failed_wrongly: 2, unanswered: 2 })))
+      .toBe('qwen3:8b on the known answers of Starter: 48 of 52 right. It called 2 passes a fail. 2 answers got no verdict.')
+  })
+  it('says how far a check is, and when it waits for the machine', () => {
+    expect(checkLine(check({ status: 'running', done: 12, ended_at: null }))).toBe('qwen3:8b is being asked about the known answers of Starter: 12 of 52.')
+    expect(checkLine(check({ status: 'running', done: 12, doing: 'running', ended_at: null }))).toBe('qwen3:8b is being asked about the known answers of Starter: 12 of 52.')
+    expect(checkLine(check({ status: 'running', done: 12, doing: 'cooling', ended_at: null }))).toBe('qwen3:8b is waiting for the machine to cool: 12 of 52 known answers asked.')
+  })
+  it('says how a check that ended early ended, and counts what was asked', () => {
+    expect(checkLine(check({ status: 'cancelled', done: 10, correct: 9, passed_wrongly: 1, failed_wrongly: 0 })))
+      .toBe('qwen3:8b on the known answers of Starter: 9 of the 10 it was asked about right, of 52. It called 1 fail a pass. Cancelled.')
+    expect(checkLine(check({ status: 'stopped', done: 3, correct: 0, passed_wrongly: 0, failed_wrongly: 0, unanswered: 3,
+      note: 'The judge could not be asked three times in a row: Ollama not reachable' })))
+      .toBe('qwen3:8b on the known answers of Starter: 0 of the 3 it was asked about right, of 52. 3 answers got no verdict. '
+        + 'Stopped: The judge could not be asked three times in a row: Ollama not reachable')
+  })
+  it('has a score for the pick only when the check went to its end', () => {
+    expect(checkScore(check())).toBe('49/52')
+    expect(checkScore(check({ status: 'cancelled', done: 10 }))).toBeNull()
+    expect(checkScore(check({ status: 'running', done: 10 }))).toBeNull()
+  })
+  it('lists the answers the judge did not get right, with what it said', () => {
+    const answers: CheckedAnswer[] = [
+      { case_id: 'fake-cve', n: 1, expected: 'pass', verdict: 'pass', reason: 'It says nothing was found.', error: null, answer: 'No record.' },
+      { case_id: 'fake-cve', n: 5, expected: 'fail', verdict: 'pass', reason: 'It says no record was found.', error: null, answer: 'Either very new or not indexed.' },
+      { case_id: 'denied-call', n: 2, expected: 'pass', verdict: 'fail', reason: '', error: null, answer: 'The owner has restricted it.' },
+      { case_id: 'one-step', n: 3, expected: 'fail', verdict: null, reason: '', error: 'its reply could not be read as one', answer: 'It looks like random data.' },
+      { case_id: 'one-step', n: 4, expected: 'fail', verdict: null, reason: '', error: null, answer: 'x' },
+    ]
+    expect(wrongOnes(answers).map(wrongLine)).toEqual([
+      'fake-cve 5 is a fail, and the judge said pass: It says no record was found.',
+      'denied-call 2 is a pass, and the judge said fail.',
+      'one-step 3 is a fail, and the judge gave no verdict (its reply could not be read as one).',
+      'one-step 4 is a fail, and the judge gave no verdict.',
+    ])
   })
 })

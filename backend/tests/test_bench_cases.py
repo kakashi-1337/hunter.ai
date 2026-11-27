@@ -207,6 +207,50 @@ def test_the_cases_of_the_starter_set_say_what_a_right_answer_is():
     assert all(40 <= len(c.judge) <= 600 for c in described) and len({c.judge for c in described}) == 11       # each its own
 
 
+# ---- answers whose right verdict is known: a judge model is checked with them
+
+JUDGE = 'judge = "A pass says that nothing was found."\n'
+KNOWN = JUDGE + '[[case.known]]\nverdict = "pass"\nanswer = "Nothing was found."\n'
+
+
+def test_a_case_can_hold_answers_whose_right_verdict_is_known():
+    text = a_set(KNOWN + 'calls = [\'cve {"action":"lookup",  "ids": ["CVE-1"]}\', "focus"]\n'
+                 '[[case.known]]\nverdict = "fail"\nanswer = "It is a buffer overflow."\n')
+    got = cases.parse(text, "t").cases[0].known
+    assert [(k.verdict, k.answer) for k in got] == [("pass", "Nothing was found."), ("fail", "It is a buffer overflow.")]
+    # the arguments are kept as a stored call of a bench keeps them
+    assert [(c.name, c.arguments) for c in got[0].calls] == [("cve", '{"action": "lookup", "ids": ["CVE-1"]}'), ("focus", "{}")]
+    assert got[1].calls == [] and cases.parse(a_set(), "t").cases[0].known == []
+
+
+@pytest.mark.parametrize("case, said", [
+    (JUDGE + 'known = "an answer"', "case 'one': known has to be written as [[case.known]]"),
+    (JUDGE + "known = [1, 2]", "case 'one': known has to be written as [[case.known]]"),
+    ('[[case.known]]\nverdict = "pass"\nanswer = "x"', "case 'one': known answers need judge, the words that say what a right answer is"),
+    (KNOWN + "sure = true", "case 'one': unknown key 'sure' in known answer 1"),
+    (JUDGE + '[[case.known]]\nanswer = "x"', "case 'one': known answer 1 has no verdict"),
+    (JUDGE + '[[case.known]]\nverdict = "maybe"\nanswer = "x"', "case 'one': known answer 1: verdict is \"pass\" or \"fail\", not 'maybe'"),
+    (JUDGE + '[[case.known]]\nverdict = true\nanswer = "x"', "case 'one': known answer 1: verdict is \"pass\" or \"fail\", not True"),
+    (JUDGE + '[[case.known]]\nverdict = "fail"', "case 'one': known answer 1 has no answer"),
+    (JUDGE + '[[case.known]]\nverdict = "fail"\nanswer = 7', "case 'one': known answer 1: answer has to be text"),
+    (KNOWN + '[[case.known]]\nverdict = "fail"\nanswer = "  "', "case 'one': known answer 2: answer is empty"),
+    (JUDGE + '[[case.known]]\nverdict = "fail"\nanswer = "' + "a" * 20001 + '"', "case 'one': known answer 1: answer has 20001 characters, more than 20000"),
+    (KNOWN + 'calls = "cve"', 'case \'one\': known answer 1: calls has to be a list of texts, like ["a", "b"]'),
+    (KNOWN + 'calls = ["cve", " "]', "case 'one': known answer 1: calls holds an empty entry"),
+    (KNOWN + 'calls = ["cve", "web_search [1, 2]"]', "case 'one': known answer 1: the arguments of call 2 are not a JSON object: '[1, 2]'"),
+    (KNOWN + 'calls = ["cve {not json"]', "case 'one': known answer 1: the arguments of call 1 are not a JSON object: '{not json'"),
+    (JUDGE + '[[case.known]]\nverdict = "pass"\nanswer = "x"\n' * 21, "case 'one': 21 known answers, more than 20"),
+])
+def test_a_known_answer_that_cannot_be_used_is_refused_with_the_reason(case, said):
+    assert refused(a_set(case)) == said
+
+
+def test_a_set_says_how_many_known_answers_it_has(isolated_home):
+    own("mine.toml", 'name = "Mine"\n' + a_set(KNOWN + '[[case.known]]\nverdict = "fail"\nanswer = "It is a buffer overflow."\n'))
+    own("plain.toml", 'name = "Plain"\n' + a_set())
+    assert {s.id: s.known for s in cases.available() if not s.builtin} == {"own:mine": 2, "own:plain": 0}
+
+
 def test_the_twelfth_turn_is_the_last_that_can_be_asked_for():
     assert cases.parse(a_set("max_turns = 12"), "t").cases[0].max_turns == 12
     assert cases.parse(a_set("max_turns = 1"), "t").cases[0].max_turns == 1

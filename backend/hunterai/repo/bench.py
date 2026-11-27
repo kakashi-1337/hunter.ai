@@ -19,6 +19,7 @@ CALLS_KEPT = 50          # calls of one run; how many were made is kept beside t
 REASONS_KEPT = 40        # lines of one mark
 INTERRUPTED = "HunterAI stopped while this bench was running."
 JUDGING_INTERRUPTED = "HunterAI stopped while this judging was running."
+CHECK_INTERRUPTED = "HunterAI stopped while this check was running."
 # A bench with what it was started with beside it, when that was more than its models, set and repeats
 RUNS = "select b.*, o.options_json from bench_runs b left join bench_options o on o.run_id = b.id"
 # A result with the mark its owner set by hand beside it, when he set one
@@ -108,6 +109,37 @@ class Judging(BaseModel):
     created_at: str
     ended_at: str | None
     doing: Literal["running", "cooling"] | None = None      # while it runs: reading, or waiting for the machine. Not kept
+
+
+class JudgeCheck(BaseModel):
+    """The last time a judge model was asked about the answers of a set whose right verdict is known."""
+    id: str
+    set_id: str
+    set_name: str
+    provider: str
+    model: str
+    status: Literal["running", "done", "cancelled", "interrupted", "stopped"]
+    note: str
+    total: int              # the known answers it was to be asked about
+    done: int               # those it was asked about, whether it gave a verdict or not
+    correct: int            # ... and gave the verdict that is known
+    passed_wrongly: int     # fails it called a pass
+    failed_wrongly: int     # passes it called a fail
+    unanswered: int         # asked, and no verdict came
+    created_at: str
+    ended_at: str | None
+    doing: Literal["running", "cooling"] | None = None      # while it runs: asking, or waiting for the machine. Not kept
+
+
+class CheckedAnswer(BaseModel):
+    """One known answer of a check: what was known, and what the judge said."""
+    case_id: str
+    n: int                  # which known answer of its test, from 1
+    expected: Literal["pass", "fail"]
+    verdict: Literal["pass", "fail"] | None
+    reason: str
+    error: str | None
+    answer: str
 
 
 def _cut(text: str, most: int) -> str:
@@ -284,6 +316,65 @@ async def interrupt_judgings(conn) -> int:
     """At HunterAI's start: a judging that is still marked as running was cut off by the stop before. How many."""
     cur = await conn.execute("update bench_judgings set status='interrupted', note=?, ended_at=? where status='running'",
                              (JUDGING_INTERRUPTED, now()))
+    await conn.commit()
+    return cur.rowcount
+
+
+_ASKED = "(select count(*) from bench_checked_answers a where a.check_id = k.id"
+CHECKS = (f"select k.*, {_ASKED}) as done, {_ASKED} and a.verdict = a.expected) as correct,"
+          f" {_ASKED} and a.verdict = 'pass' and a.expected = 'fail') as passed_wrongly,"
+          f" {_ASKED} and a.verdict = 'fail' and a.expected = 'pass') as failed_wrongly,"
+          f" {_ASKED} and a.verdict is null) as unanswered from bench_judge_checks k")
+
+
+async def start_check(conn, set_: CaseSet, ref: ModelRef, total: int, check_id: str | None = None) -> JudgeCheck:
+    """A check of this judge on this set begins, under this id when one is given. The one before of the same judge on
+    the same set is gone."""
+    await conn.execute("delete from bench_judge_checks where set_id=? and provider=? and model=?", (set_.id, ref.provider, ref.model))
+    check_id = check_id or new_id()
+    await conn.execute(
+        "insert into bench_judge_checks(id,set_id,set_name,provider,model,status,note,total,created_at,ended_at)"
+        " values(?,?,?,?,?,'running','',?,?,null)", (check_id, set_.id, set_.name, ref.provider, ref.model, total, now()))
+    await conn.commit()
+    return await check(conn, check_id)
+
+
+async def add_checked(conn, check_id: str, case_id: str, n: int, expected: str, answer: str, verdict: str | None,
+                      reason: str = "", error: str | None = None) -> None:
+    await conn.execute(
+        "insert into bench_checked_answers(check_id,case_id,n,expected,verdict,reason,error,answer,created_at) values(?,?,?,?,?,?,?,?,?)",
+        (check_id, case_id, n, expected, verdict, reason, error, _cut(answer, ANSWER_CHARS), now()))
+    await conn.commit()
+
+
+async def finish_check(conn, check_id: str, status: str, note: str = "") -> None:
+    await conn.execute("update bench_judge_checks set status=?, note=?, ended_at=? where id=?", (status, note, now(), check_id))
+    await conn.commit()
+
+
+async def check(conn, check_id: str) -> JudgeCheck | None:
+    r = await (await conn.execute(f"{CHECKS} where k.id=?", (check_id,))).fetchone()
+    return JudgeCheck(**dict(r)) if r else None
+
+
+async def checks(conn, set_id: str | None = None) -> builtins.list[JudgeCheck]:
+    """The checks that are kept, the newest first; of one set when it is named."""
+    where, values = (" where k.set_id=?", (set_id,)) if set_id is not None else ("", ())
+    rows = await (await conn.execute(f"{CHECKS}{where} order by k.created_at desc, k.rowid desc", values)).fetchall()
+    return [JudgeCheck(**dict(r)) for r in rows]
+
+
+async def checked(conn, check_id: str) -> builtins.list[CheckedAnswer]:
+    """The known answers of a check in the order they were asked about."""
+    rows = await (await conn.execute("select case_id,n,expected,verdict,reason,error,answer from bench_checked_answers"
+                                     " where check_id=? order by rowid", (check_id,))).fetchall()
+    return [CheckedAnswer(**dict(r)) for r in rows]
+
+
+async def interrupt_checks(conn) -> int:
+    """At HunterAI's start: a check that is still marked as running was cut off by the stop before. How many."""
+    cur = await conn.execute("update bench_judge_checks set status='interrupted', note=?, ended_at=? where status='running'",
+                             (CHECK_INTERRUPTED, now()))
     await conn.commit()
     return cur.rowcount
 
