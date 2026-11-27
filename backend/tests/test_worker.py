@@ -3,6 +3,7 @@ import fcntl
 import hashlib
 import os
 import signal
+import sqlite3
 import subprocess
 import sys
 from collections import Counter
@@ -156,3 +157,100 @@ async def test_drain_cleans_a_job_cancelled_while_paused(conn, col, tmp_path, em
     assert (doc.status, doc.reason) == ("failed", "ingest cancelled") and await get_store().count(kb.vector_name(col.id)) == 0
     assert not sources._root(job.payload["staging_id"]).exists()
     assert (await (await conn.execute("select count(*) from kb_job_items")).fetchone())[0] == 0 and await pipeline.cleanup(conn) == 0
+
+
+class OtherWriter:
+    """Another connection that keeps the database to itself and then commits: a write that got slow."""
+
+    def __init__(self):
+        self.conn, self.holds = sqlite3.connect(config.db_path(), isolation_level=None), False
+
+    def hold(self):
+        self.conn.execute("begin immediate")
+        self.conn.execute("insert or replace into settings(key, value_json) values('slow_write', '1')")
+        self.holds = True
+
+    def let_go(self):
+        if self.holds:
+            self.conn.execute("commit"); self.holds = False
+
+
+@pytest.fixture
+def busy_database(monkeypatch):
+    """The worker gives up on a held database after 50 ms and looks again at once; `free_at`
+    says in which of its passes the other writer lets go."""
+    connect, other, box = db.connect, OtherWriter(), {"passes": 0, "free_at": 0}
+
+    async def quick():
+        c = await connect()
+        await c.execute("pragma busy_timeout=50")
+        return c
+
+    async def one_pass(conn):                     # stands in for the scheduling, which reads as well
+        box["passes"] += 1
+        if box["passes"] == box["free_at"]:
+            other.let_go()
+        await jobs.list(conn, limit=1)
+    monkeypatch.setattr(db, "connect", quick); monkeypatch.setattr(worker, "POLL_SECONDS", 0.01)
+    monkeypatch.setattr(worker.memory, "schedule", one_pass)
+    box["other"] = other
+    yield box
+    other.let_go(); other.conn.close()
+
+
+async def test_a_busy_database_does_not_end_the_worker(conn, busy_database, monkeypatch, capsys):
+    busy_database["free_at"] = 5; ran = []
+
+    async def probe(c, job, *, stop):
+        ran.append(job.id)
+        await jobs.finish(c, job.id, "done")
+        if len(ran) == 1:
+            busy_database["other"].hold()             # from here on the worker cannot write
+    monkeypatch.setitem(worker.HANDLERS, "probe", probe)
+    first, second = await jobs.enqueue(conn, "probe", {}), await jobs.enqueue(conn, "probe", {})
+    assert await asyncio.wait_for(worker.main(once=True), 20) == 0
+    assert ran == [first.id, second.id] and busy_database["passes"] == 5
+    assert [(await jobs.get(conn, j.id)).state for j in (first, second)] == ["done", "done"]
+    said = capsys.readouterr().err
+    assert said.count("the database is busy") == 1 and said.count("the database answers again") == 1
+    assert said.index("the database is busy") < said.index("the database answers again") and "Traceback" not in said
+
+
+async def test_a_job_the_worker_could_not_close_is_run_again(conn, busy_database, monkeypatch):
+    busy_database["free_at"] = 3; attempts = []
+
+    async def probe(c, job, *, stop):
+        attempts.append(job.attempts)
+        if len(attempts) == 1:
+            busy_database["other"].hold()
+            raise RuntimeError("boom")                # and the worker cannot write down that it failed
+        await jobs.finish(c, job.id, "done")
+    monkeypatch.setitem(worker.HANDLERS, "probe", probe)
+    job = await jobs.enqueue(conn, "probe", {})
+    assert await asyncio.wait_for(worker.main(once=True), 20) == 0
+    job = await jobs.get(conn, job.id)
+    assert (job.state, job.attempts, job.error, attempts) == ("done", 2, None, [1, 2])
+
+
+def test_busy_is_sqlites_answer_that_another_connection_holds_the_database(tmp_path):
+    a, b = (sqlite3.connect(tmp_path / "x.db", isolation_level=None, timeout=0) for _ in range(2))
+    a.execute("pragma journal_mode=wal"); a.execute("create table t(x)")
+    b.execute("begin"); b.execute("select * from t").fetchall()         # what b has seen of the database
+    a.execute("insert into t values(1)")                                 # and a write that came after it
+    with pytest.raises(sqlite3.OperationalError) as stale:
+        b.execute("insert into t values(2)")
+    b.execute("rollback"); a.execute("begin immediate")
+    with pytest.raises(sqlite3.OperationalError) as held:
+        b.execute("insert into t values(3)")
+    with pytest.raises(sqlite3.OperationalError) as missing:
+        b.execute("select * from nowhere")
+    assert (stale.value.sqlite_errorname, held.value.sqlite_errorname) == ("SQLITE_BUSY_SNAPSHOT", "SQLITE_BUSY")
+    assert worker.busy(stale.value) and worker.busy(held.value) and not worker.busy(missing.value)
+
+
+async def test_another_database_error_still_ends_the_worker(conn, monkeypatch):
+    async def claim(c, kinds):
+        raise sqlite3.OperationalError("no such table: jobs")
+    monkeypatch.setattr(jobs, "claim", claim)
+    with pytest.raises(sqlite3.OperationalError, match="no such table"):
+        await asyncio.wait_for(worker.main(once=True), 20)
