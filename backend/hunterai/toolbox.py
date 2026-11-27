@@ -94,6 +94,13 @@ def installed() -> list[dict]:
     return sorted(out, key=lambda t: t["name"])
 
 
+def where(name: str) -> Path | None:
+    """The file a program of the tool folder runs as; None when the folder has no such program."""
+    if not any(t["name"] == name for t in installed()):
+        return None
+    return next((root / name for root in folders() if (root / name).is_file()), None)
+
+
 def prompt_line() -> str:
     """What the model is told about the folder; "" when it holds nothing."""
     tools = installed()
