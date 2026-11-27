@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { answer, useDialog } from '../dialog'
+import { pressBehindCloses } from '../tree'
 
 /** Shows the question that confirmBox() or promptBox() asked. Mounted once, above every other dialog. */
 export function DialogHost() {
@@ -8,9 +9,11 @@ export function DialogHost() {
   const ok = useRef<HTMLButtonElement>(null)
   const field = useRef<HTMLInputElement>(null)
   const typed = useRef(false)      // a press on the page behind does not throw away an answer that was started
+  const shownAt = useRef(0)        // nor does it answer a question that has only just been asked (see Modal)
   useEffect(() => {
     if (!current) return
     typed.current = false
+    shownAt.current = Date.now()
     setValue(current.initial)
     // Focus after paint: Enter then answers, and Escape cancels, without reaching the dialog underneath.
     const t = setTimeout(() => (current.kind === 'prompt' ? field.current : ok.current)?.focus(), 0)
@@ -22,7 +25,7 @@ export function DialogHost() {
   const cancel = () => answer(current.kind === 'prompt' ? null : false)
   const accept = () => answer(current.kind === 'prompt' ? value : true)
   return (
-    <div className="overlay dialog-host" onMouseDown={(e) => e.target === e.currentTarget && !typed.current && cancel()}>
+    <div className="overlay dialog-host" onMouseDown={(e) => e.target === e.currentTarget && !typed.current && pressBehindCloses(shownAt.current, Date.now()) && cancel()}>
       <form className="modal dialog" role="alertdialog" aria-modal="true" aria-label={current.message} onInput={() => { typed.current = true }}
         onSubmit={(e) => { e.preventDefault(); accept() }}>
         <div className="body">

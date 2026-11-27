@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  withAuto, applyEvent, branchLabel, callDurations, canApprove, cardStatus, formatDuration, messageText, pendingAsks, pruneOptions, renderItems,
+  withAuto, applyEvent, BEHIND_DELAY_MS, branchLabel, callDurations, canApprove, cardStatus, formatDuration, messageText, pendingAsks, pressBehindCloses, pruneOptions, renderItems,
   appendTail, commandLine, parseArgs, windowStepLine, scanSummary, scanToolLine, citedNumbers, unknownCitations, decisionSummary, keywordsOnlyNote, sourcesNote, sourcesOf, triageFacts, gateLine, parseLines, runningCalls, siblingPosition, stepSummary, stepsFromEvents, toolCards, visible, type ToolCard,
 } from '../tree'
 import type { Message, PermissionRequest, RunEvent, Step } from '../types'
@@ -195,6 +195,13 @@ describe('tool rounds', () => {
   it('holds the Allow buttons for 800 ms', () => {
     expect(canApprove(1000, 1799)).toBe(false)
     expect(canApprove(1000, 1800)).toBe(true)
+  })
+  it('lets a press behind a dialog close it only after the dialog has been there for half a second', () => {
+    expect(BEHIND_DELAY_MS).toBe(500)                     // as long as a system waits for the second press of a double click
+    expect(pressBehindCloses(1000, 1000)).toBe(false)
+    expect(pressBehindCloses(1000, 1499)).toBe(false)
+    expect(pressBehindCloses(1000, 1500)).toBe(true)
+    expect(pressBehindCloses(1000, 900)).toBe(false)      // a clock that was set back: no sooner than it would have been
   })
 })
 

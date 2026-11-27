@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import * as api from '../api'
 import { useStore } from '../store'
 import type { Chat, Target } from '../types'
-import { Modal } from './Modal'
+import { DialogGuard, Modal } from './Modal'
 import { ActivityPanel } from './ActivityPanel'
 import { BenchPanel } from './BenchPanel'
 import { CaidoPanel } from './CaidoPanel'
@@ -170,12 +170,13 @@ export function Sidebar({ onSettings, onSetup }: { onSettings: () => void; onSet
           <button className="btn" onClick={onSettings}>Settings</button>
         </div>
       </div>
-      {panel === 'findings' && <FindingsPanel onClose={() => setPanel(null)} />}
-      {panel === 'caido' && <CaidoPanel onClose={() => setPanel(null)} />}
-      {panel === 'bench' && <BenchPanel onClose={() => setPanel(null)} />}
-      {panel === 'activity' && <ActivityPanel onClose={() => setPanel(null)} />}
-      {editing && <TargetDialog target={editing} onClose={() => setEditing(null)} />}
-      {starting && <NewChatDialog onClose={() => setStarting(false)} />}
+      {/* Each dialog in a guard of its own: one that fails to draw says so in a dialog of its name, and this sidebar stays. */}
+      {panel === 'findings' && <DialogGuard title="Findings" onClose={() => setPanel(null)}><FindingsPanel onClose={() => setPanel(null)} /></DialogGuard>}
+      {panel === 'caido' && <DialogGuard title="Caido" onClose={() => setPanel(null)}><CaidoPanel onClose={() => setPanel(null)} /></DialogGuard>}
+      {panel === 'bench' && <DialogGuard title="Bench" onClose={() => setPanel(null)}><BenchPanel onClose={() => setPanel(null)} /></DialogGuard>}
+      {panel === 'activity' && <DialogGuard title="Activity" onClose={() => setPanel(null)}><ActivityPanel onClose={() => setPanel(null)} /></DialogGuard>}
+      {editing && <DialogGuard title="Edit target" onClose={() => setEditing(null)}><TargetDialog target={editing} onClose={() => setEditing(null)} /></DialogGuard>}
+      {starting && <DialogGuard title="New chat" onClose={() => setStarting(false)}><NewChatDialog onClose={() => setStarting(false)} /></DialogGuard>}
     </aside>
   )
 }
