@@ -2528,9 +2528,12 @@ processor's load and the memory are read from `/proc`, so they are there on Linu
 Seen on 27 November 2026 on a Linux machine without a card, with a stand-in for
 `nvidia-smi` that printed one card and three processes: the page asked nothing while the
 monitor was closed, twice in the first 3.6 seconds it was open, and nothing after it was
-closed. It was not run against a real card. What `nvidia-smi pmon` prints there, and
-whether a program that uses the card through Vulkan stands in its table, is first seen on
-your machine. A program the table leaves out is part of "other".
+closed. Seen on 28 November 2026 on a laptop with an RTX 5080 (driver 580.196.07): the
+table of `nvidia-smi pmon` had the columns `gpu pid type fb ccpm command`, and colibri,
+which uses the card through Vulkan, stood in it (type C+G) and was named under VRAM with
+what it held. A program the table leaves out is part of "other".
+
+An amount under a tenth of a GiB is given in MiB ("3 MiB"), where GiB would read "0.00".
 
 ## Update
 

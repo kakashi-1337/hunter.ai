@@ -45,12 +45,21 @@ describe('what the live monitor shows for a reading', () => {
     expect(row(READING, 'VRAM', 1).parts).toEqual([{ name: 'coli', figure: '7.68 GiB' }, { name: 'other', figure: '2.52 GiB' }, { name: 'free', figure: '5.70 GiB' }])
   })
 
+  it('gives an amount under a tenth of a GiB in MiB, where GiB would read 0.00', () => {
+    const MIB = 1024 ** 2
+    const vram = (holders: { name: string; bytes: number }[]) => row({ ...READING, cards: [{ ...CARD, used: 13.2 * GIB, holders }] }, 'VRAM', 1).parts
+    expect(vram([{ name: 'qwen36', bytes: 13.1 * GIB }, { name: 'gnome-shell', bytes: 3.6 * MIB }])).toEqual([
+      { name: 'qwen36', figure: '13.1 GiB' }, { name: 'gnome-shell', figure: '4 MiB' }, { name: 'other', figure: '99 MiB' }, { name: 'free', figure: '2.70 GiB' }])
+    expect(vram([{ name: 'a', bytes: GIB / 10 }, { name: 'b', bytes: GIB / 10 - MIB }]).slice(0, 2).map((p) => p.figure)).toEqual(['0.10 GiB', '101 MiB'])
+    expect(row(READING, 'VRAM', 1).figure).toBe('10.2 / 15.9 GiB')           // the figure beside the name stays in GiB
+  })
+
   it('has no "other" where nobody is named, nor where the named ones hold all that is in use', () => {
     const ram = (holders: { name: string; bytes: number }[]) => row({ ...READING, ram: { used: 8 * GIB, total: 16 * GIB, holders } }, 'RAM').parts.map((p) => p.name)
     expect(ram([])).toEqual(['free'])
     expect(ram([{ name: 'coli', bytes: 8 * GIB }])).toEqual(['coli', 'free'])
     expect(ram([{ name: 'coli', bytes: 9 * GIB }])).toEqual(['coli', 'free'])          // what was counted for it is more than is in use
-    expect(row({ ...READING, ram: { used: 17 * GIB, total: 16 * GIB, holders: [] } }, 'RAM').parts).toEqual([{ name: 'free', figure: '0.00 GiB' }])
+    expect(row({ ...READING, ram: { used: 17 * GIB, total: 16 * GIB, holders: [] } }, 'RAM').parts).toEqual([{ name: 'free', figure: '0 MiB' }])
   })
 
   it('marks a temperature near its limit and at it, and nothing else', () => {
