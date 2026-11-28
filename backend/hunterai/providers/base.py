@@ -230,6 +230,12 @@ class Reply:
     stop: str | None = None
 
 
+def asked_again(wire: list[WireMessage], note: str | None) -> list[WireMessage]:
+    """The question of a second asking: the same one, and `note` after it as one more message of the user's. The same
+    list when there is no note."""
+    return [*wire, WireMessage("user", [TextBlock(text=note)])] if note else wire
+
+
 def written(blocks: list[Block]) -> int:
     """How much stands in `blocks`. It is more after a model call that wrote anything at all, also one that failed
     after it: `collect` adds to the last block where it can, so the number of blocks alone does not tell."""

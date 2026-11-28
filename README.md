@@ -2163,8 +2163,15 @@ Huihui-Qwen3.5-9B-abliterated and thinking on, through Ollama and through llama-
 alike: its turn after a tool result was thinking only, and with thinking off the same model
 answered.
 
-HunterAI asks such a turn once more by itself, with the same question and thinking off:
+HunterAI asks such a turn once more by itself, with thinking off:
 
+- The question is the same, and after it comes what the model thought, with the word to go
+  on from it: to write the answer, or to make the tool call it decided on. Of a long thought
+  the end is given, its last 6,000 characters, where a conclusion stands. Until 28 November
+  2026 the second asking got the question alone and answered it anew. Seen on the owner's
+  laptop on 27 November 2026 (Defiant-Fable Q6_K, the test check-the-file): the model had
+  reached the right conclusion in its thinking, and answered the opposite when it was asked
+  again.
 - What the model thought stays above the answer it then writes.
 - Thinking stays off for the rest of that run, so a run of many turns does not ask each of
   them twice. The next run starts as the chat is set.
@@ -2187,7 +2194,9 @@ source answered a request with `think: false` with text and no thinking, and lla
 did the same for `reasoning_effort: "none"`; asked as they are, both spent every token they
 were given on thinking. That small model does not end a turn with thinking only by itself
 (it thinks until it is cut off), so the second call as a whole was tried against a stand-in
-server, and not yet with the 9B model it was built for.
+server, and not yet with the 9B model it was built for. What the thought that is carried
+along changes in a real model's answers is not measured either: the tests show that the
+second request holds it, in a chat, for a subagent and in the Bench.
 
 #### A turn that is nothing at all
 

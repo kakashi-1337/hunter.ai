@@ -28,6 +28,7 @@ from ..providers.base import (
     ToolCall,
     ToolSpec,
     WireMessage,
+    asked_again,
     collect,
     written,
 )
@@ -265,7 +266,7 @@ async def run_case(conn, provider_name: str, model: str, case: Case, tell: Tell 
                 if here:
                     await _cool(model, tell)
                 try:
-                    reply = await ask(wire, options.model_copy(update={"thinking": False}))
+                    reply = await ask(asked_again(wire, problems.second_asking(blocks[began_at:])), options.model_copy(update={"thinking": False}))
                 except ProviderError:
                     if written(blocks) != before:
                         raise
