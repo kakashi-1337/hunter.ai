@@ -855,9 +855,21 @@ export function helpers(steps: Step[]): Helper[] {
 export function goalLine(goal: Goal, list: Helper[]): string {
   const done = goal.done_items?.length ?? 0
   const working = list.filter((h) => h.state === 'running' || h.state === 'queued').length
-  const parts = [`${goal.open_items.length} open`, `${done} done`]
+  const yours = (goal.owner_items ?? []).filter((i) => goal.open_items.includes(i)).length
+  const parts = [`${goal.open_items.length} open${yours ? ` (${yours} yours)` : ''}`, `${done} done`]
   if (list.length) parts.push(working ? `${working} of ${list.length} subagents working` : `${list.length} ${list.length === 1 ? 'subagent' : 'subagents'} finished`)
   return parts.join(' · ')
+}
+
+/** What the owner typed for his checklist, an item a line: the spacing inside an item as one space, no empty line,
+ * and no item twice. */
+export function ownerLines(text: string): string[] {
+  return [...new Set(text.split('\n').map((line) => line.split(/\s+/).filter(Boolean).join(' ')).filter(Boolean))]
+}
+
+/** The items the owner wrote onto a goal record, in the order he wrote them, and whether each is done. */
+export function ownerItems(goal: Goal | null): { item: string; done: boolean }[] {
+  return (goal?.owner_items ?? []).map((item) => ({ item, done: (goal?.done_items ?? []).includes(item) }))
 }
 
 /** What stands beside an item of the goal record: what the check found, in a few words, and what it rests on.

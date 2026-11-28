@@ -128,6 +128,9 @@ describe('goal panel', () => {
     expect(goalLine(goal, helpers(steps))).toBe('2 open · 1 done · 1 of 3 subagents working')
     expect(goalLine(goal, [])).toBe('2 open · 1 done')
     expect(goalLine({ ...goal, done_items: undefined }, [{ id: 'd', brief: 'x', state: 'done' }])).toBe('2 open · 0 done · 1 subagent finished')
+    // Of the open ones, how many the owner wrote himself: one of his that is done is not counted.
+    expect(goalLine({ ...goal, owner_items: ['a', 'z'] }, [])).toBe('2 open (1 yours) · 1 done')
+    expect(goalLine({ ...goal, owner_items: ['z'] }, [])).toBe('2 open · 1 done')
   })
   it('says of an item what the check found, and never calls the agent\'s word a check', () => {
     const mark = (verdict: string, evidence = '', tool = '') => ({ verdict, evidence, tool, model: 'ollama/judge', at: 't' })

@@ -129,6 +129,10 @@ export const mcpStatus = () => request<McpStatus>('GET', '/api/mcp')
 export const mcpSwitch = (name: string, enabled: boolean) => request<McpStatus>('PUT', `/api/mcp/${name}`, { enabled })
 export const getGoal = (chatId: string) => request<Goal | null>('GET', `/api/chats/${chatId}/goal`)
 export const clearGoal = (chatId: string) => request<void>('DELETE', `/api/chats/${chatId}/goal`)
+/** The owner writes items onto the chat's goal record; gives the record as it then stands. */
+export const addGoalItems = (chatId: string, items: string[]) => request<Goal>('POST', `/api/chats/${chatId}/goal/items`, { items })
+/** The owner takes one of his items off; null when the record went with it. */
+export const removeGoalItem = (chatId: string, item: string) => request<Goal | null>('POST', `/api/chats/${chatId}/goal/items/remove`, { item })
 export const allFindings = () => request<FindingRow[]>('GET', '/api/findings')
 export const listFindings = (targetId: string) => request<Finding[]>('GET', `/api/targets/${targetId}/findings`)
 export const patchFinding = (id: string, patch: Partial<Pick<Finding, 'title' | 'severity' | 'status' | 'evidence'>>) =>

@@ -153,6 +153,15 @@ create table if not exists goal_marks (
   primary key (chat_id, item)
 );
 
+-- What the owner wrote onto a chat's goal record himself. His items stand among its open items: an agent does not
+-- take one off, and like every item one is done only when a tool result shows it.
+create table if not exists goal_owner_items (
+  chat_id text not null references chats(id) on delete cascade,
+  item text not null,
+  at text not null,
+  primary key (chat_id, item)
+);
+
 create table if not exists subruns (
   id text primary key,
   run_id text not null references runs(id) on delete cascade,

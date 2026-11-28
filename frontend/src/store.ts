@@ -88,6 +88,9 @@ interface State {
   selectRun(id: string | null): Promise<void>
   runSearch(q: string): Promise<void>
   setError(message: string | null): void
+  /** Counts what the owner changed on a chat's goal record by hand: whatever shows the record asks for it again. */
+  goalRev: number
+  goalChanged(): void
 }
 
 /** The body that creates a chat from the draft: unset fields are left to the server's defaults. */
@@ -225,6 +228,8 @@ export const useStore = create<State>((set, get) => {
     loaded: false,
 
     setError: (error) => set({ error }),
+    goalRev: 0,
+    goalChanged: () => set((s) => ({ goalRev: s.goalRev + 1 })),
 
     load: () =>
       guard(async () => {
