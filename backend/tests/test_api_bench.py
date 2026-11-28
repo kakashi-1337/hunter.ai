@@ -183,6 +183,20 @@ async def test_the_newest_bench_is_listed_first(client):
     assert [x["run"]["id"] for x in (await client.get("/api/bench/runs")).json()] == [second["id"], first["id"]]
 
 
+async def test_the_newest_bench_of_each_model_can_be_read(client):
+    assert (await client.get("/api/bench/models")).json() == []
+    use(says("no record, 42"))
+    first = await start(client)
+    await ended(first["id"])
+    lines = (await client.get("/api/bench/models")).json()
+    assert [(line["model"], line["run"]["id"], line["run"]["status"]) for line in lines] == [(A, first["id"], "done")]
+    assert len(lines[0]["marks"]) == len(lines[0]["run"]["cases"]) > 0
+    assert all((m["provider"], m["model"]) == (A["provider"], A["model"]) and "answer" not in m for m in lines[0]["marks"])
+    second = await start(client)
+    await ended(second["id"])
+    assert [line["run"]["id"] for line in (await client.get("/api/bench/models")).json()] == [second["id"]]
+
+
 # ---- what a start refuses
 
 async def test_a_start_while_a_bench_runs_is_refused(client):

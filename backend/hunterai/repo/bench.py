@@ -103,6 +103,13 @@ class Mark(BaseModel):
     duration_ms: int
 
 
+class ModelLine(BaseModel):
+    """A model in the table over all stored benches: its newest bench with a set, and its own marks in that bench."""
+    model: ModelRef
+    run: BenchRun
+    marks: list[Mark]
+
+
 class Judging(BaseModel):
     """The last time a judge model read the answers of a bench."""
     run_id: str
@@ -282,6 +289,26 @@ async def list(conn) -> builtins.list[BenchRun]:
     """Every bench, the newest first."""
     rows = await (await conn.execute(f"{RUNS} order by b.created_at desc, b.rowid desc")).fetchall()
     return [_run(r) for r in rows]
+
+
+async def newest(conn) -> builtins.list[ModelLine]:
+    """A line for every model with every set it was asked, and apart for asked without thinking: its newest bench
+    that went to its end, or where none did the newest that ended early, with the model's marks in it. A bench that
+    runs is left out, and so is a model for which a bench holds no run. The lines of the newest bench first, and
+    the models of one bench in the order they ran."""
+    found: dict[tuple, tuple[int, int, ModelLine]] = {}
+    for age, run in enumerate(await list(conn)):
+        if run.status == "running":
+            continue
+        own: dict[tuple[str, str], builtins.list[Mark]] = {}
+        for mark in await marks(conn, run.id):
+            own.setdefault((mark.provider, mark.model), []).append(mark)
+        for place, ref in enumerate(run.models):
+            key = (ref.provider, ref.model, run.set_id, run.thinking_off)
+            had = found.get(key)
+            if (ref.provider, ref.model) in own and (had is None or (run.status == "done" and had[2].run.status != "done")):
+                found[key] = (age, place, ModelLine(model=ref, run=run, marks=own[(ref.provider, ref.model)]))
+    return [line for _, _, line in sorted(found.values(), key=lambda f: f[:2])]
 
 
 async def delete(conn, run_id: str) -> bool:

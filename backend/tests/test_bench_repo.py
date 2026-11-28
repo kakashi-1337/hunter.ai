@@ -425,3 +425,68 @@ async def test_a_result_from_before_this_was_kept_reads_as_one_that_was_never_to
     again = await bench.result(conn, r.id)
     assert (again.calls[0].refused, again.refused, again.heeded) == ([], 0, None)
 
+
+# ---- the newest bench of each model
+
+async def bench_of(conn, models, status="done", thinking_off=False, marks=(("c0", "pass"),), set_=None):
+    made = await bench.create(conn, set_ or a_set(), models, 1, thinking_off=thinking_off)
+    for ref in models:
+        for case_id, mark in marks:
+            await bench.add_result(conn, made.id, ref, case_id, 1, mark, [], ran(), 1000)
+    return await bench.finish(conn, made.id, status)
+
+
+def lines_of(lines):
+    return [(line.model, line.run.id, [(m.case_id, m.status) for m in line.marks]) for line in lines]
+
+
+async def test_the_newest_bench_of_each_model_is_found_with_the_models_marks_in_it(conn):
+    old = await bench_of(conn, [QWEN, MIMO], marks=(("c0", "fail"),))
+    new = await bench_of(conn, [QWEN], marks=(("c0", "pass"), ("c1", "fail")))
+    assert lines_of(await bench.newest(conn)) == [(QWEN, new.id, [("c0", "pass"), ("c1", "fail")]), (MIMO, old.id, [("c0", "fail")])]
+    assert (await bench.newest(conn))[0].run == await bench.get(conn, new.id)
+
+
+async def test_the_models_of_one_bench_stand_in_the_order_they_ran(conn):
+    made = await bench_of(conn, [MIMO, QWEN])
+    assert [line.model for line in await bench.newest(conn)] == [MIMO, QWEN]
+    assert all(line.run.id == made.id and len(line.marks) == 1 and line.marks[0].model == line.model.model for line in await bench.newest(conn))
+
+
+async def test_the_models_of_an_older_bench_keep_its_order_when_newer_ones_that_ended_early_named_them_otherwise(conn):
+    whole = await bench_of(conn, [QWEN, MIMO])
+    await bench_of(conn, [QWEN], status="cancelled")
+    await bench_of(conn, [MIMO], status="cancelled")
+    assert [(line.model, line.run.id) for line in await bench.newest(conn)] == [(QWEN, whole.id), (MIMO, whole.id)]
+
+
+async def test_a_bench_that_went_to_its_end_counts_before_a_newer_one_that_did_not(conn):
+    whole = await bench_of(conn, [QWEN])
+    await bench_of(conn, [QWEN], status="cancelled")
+    assert [line.run.id for line in await bench.newest(conn)] == [whole.id]
+    await bench_of(conn, [MIMO], status="interrupted")
+    cut = await bench_of(conn, [MIMO], status="cancelled")                 # no bench of it went to its end: the newest that ended
+    assert [(line.model, line.run.id) for line in await bench.newest(conn)] == [(MIMO, cut.id), (QWEN, whole.id)]
+    later = await bench_of(conn, [QWEN])
+    assert [(line.model, line.run.id) for line in await bench.newest(conn)] == [(QWEN, later.id), (MIMO, cut.id)]
+
+
+async def test_a_bench_that_runs_and_a_model_without_a_run_in_a_bench_are_left_out(conn):
+    running = await bench.create(conn, a_set(), [QWEN], 1)
+    await bench.add_result(conn, running.id, QWEN, "c0", 1, "pass", [], ran(), 1000)
+    assert await bench.newest(conn) == []
+    made = await bench.create(conn, a_set(), [QWEN, MIMO], 1)              # cancelled before the second model was asked
+    await bench.add_result(conn, made.id, QWEN, "c0", 1, "error", ["no answer"])
+    await bench.finish(conn, made.id, "cancelled")
+    assert lines_of(await bench.newest(conn)) == [(QWEN, made.id, [("c0", "error")])]
+
+
+async def test_a_model_with_another_set_or_asked_without_thinking_is_a_line_of_its_own(conn):
+    other_set = cases.parse('name = "Other"\n[[case]]\nid = "c0"\ngroup = "honesty"\nprompt = "q"\n[case.expect]\nanswer_any = ["x"]\n', "own:other")
+    plain = await bench_of(conn, [QWEN])
+    quiet = await bench_of(conn, [QWEN], thinking_off=True)
+    other = await bench_of(conn, [QWEN], set_=other_set)
+    elsewhere = await bench_of(conn, [ModelRef(provider="colibri", model="qwen:9b")])      # the same name at another provider is another model
+    assert [line.run.id for line in await bench.newest(conn)] == [elsewhere.id, other.id, quiet.id, plain.id]
+    again = await bench_of(conn, [QWEN], thinking_off=True)
+    assert [line.run.id for line in await bench.newest(conn)] == [again.id, elsewhere.id, other.id, plain.id]

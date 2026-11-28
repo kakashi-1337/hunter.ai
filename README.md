@@ -497,6 +497,14 @@ Put a model and its fine-tuned version into one bench to see what the training c
 - **The open cell says how its test is judged**, in the test's own words: the words the
   judge model is given. A mark you set by hand and a verdict of the judge are held
   against the same thing.
+- **One table over all stored benches.** Above the list of benches, **Models** has a line
+  per model: its newest bench that went to its end, or its newest that ended early where
+  none did. A line has the model's marks by group and for the whole, its time per run, and
+  the set and the day of that bench. The largest share of passes stands first, and of two
+  with the same share the one with more marked runs. A model that was asked with another
+  set, or without thinking, has a line of its own, and what sets a bench apart stands
+  beside the name ("thinking off", "cancelled"). **Open** opens the bench of a line. A
+  bench that is running is not in the table.
 - **Each test runs several times**: three, or what you pick from 1 to 5. A cell reads
   "2/3". A run the provider failed is an error, shown apart: neither a pass nor a fail.
   After three runs of one model in a row that end with an error or at the time limit, the

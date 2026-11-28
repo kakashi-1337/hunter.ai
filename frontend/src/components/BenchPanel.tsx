@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import * as api from '../api'
-import { THEN_LEGEND, benchLine, benchTable, callNote, checkLine, checkScore, cloudLine, differs, handChoice, judgeLine, judgingLine, modelNames, progressLine, seconds, sharedLine, sizeLine, stateWord, verdictLine, wrongLine, wrongOnes } from '../bench'
+import { THEN_LEGEND, benchLine, benchTable, callNote, checkLine, checkScore, cloudLine, differs, handChoice, judgeLine, judgingLine, modelNames, modelsTable, progressLine, seconds, sharedLine, sizeLine, stateWord, verdictLine, wrongLine, wrongOnes } from '../bench'
 import type { Cell } from '../bench'
 import { confirmBox } from '../dialog'
 import { useStore } from '../store'
 import { visible } from '../tree'
-import type { BenchDetail, BenchListed, BenchResult, BenchRun, BenchSet, CheckedAnswer, JudgeCheck, ModelRef, SystemStatus } from '../types'
+import type { BenchDetail, BenchListed, BenchModelLine, BenchResult, BenchRun, BenchSet, CheckedAnswer, JudgeCheck, ModelRef, SystemStatus } from '../types'
 import { Modal } from './Modal'
 
 const POLL_MS = 2000
@@ -99,6 +99,8 @@ export function BenchPanel({ onClose }: { onClose: () => void }) {
   const [thinkingOff, setThinkingOff] = useState(false)                   // every call is asked without thinking
   const [judge, setJudge] = useState('')                                  // the model that reads the answers of a bench that has ended
   const [checks, setChecks] = useState<JudgeCheck[]>([])                  // how judge models did on the known answers of a set
+  const [lines, setLines] = useState<BenchModelLine[]>([])                // the newest bench of each model, for the table over all of them
+  const [marked, setMarked] = useState(0)                                 // counts the marks set by hand while the panel is open
   const [wrong, setWrong] = useState<{ id: string; answers: CheckedAnswer[] } | null>(null)      // what one check did not get right
 
   const offered = useMemo(() => providers.filter((p) => p.configured && p.models.length > 0), [providers])
@@ -170,6 +172,16 @@ export function BenchPanel({ onClose }: { onClose: () => void }) {
     api.benchRuns().then((got) => { if (!stop) setRuns(got) }).catch(() => {})
     return () => { stop = true }
   }, [openedId, openedStatus])
+
+  // One table over the stored benches. Asked for again when a bench is added, ends or goes, and when a mark is set by hand.
+  const stored = runs.filter((r) => r.run.status !== 'running').map((r) => `${r.run.id} ${r.run.status}`).join('\n')
+  useEffect(() => {
+    if (!stored) return
+    let stop = false
+    api.benchModels().then((got) => { if (!stop) setLines(got) }).catch(() => {})      // without them there is no such table, and that is all
+    return () => { stop = true }
+  }, [stored, marked])
+  const ranking = useMemo(() => modelsTable(lines), [lines])
 
   // The checks of judges on the set of the bench that is open; while one of them runs, asked for again every two seconds.
   useEffect(() => {
@@ -296,6 +308,28 @@ export function BenchPanel({ onClose }: { onClose: () => void }) {
       {shared && <div className="bench-shared">{shared}</div>}
       <div className="hint">A chat on a local model during a bench makes both slow. Your own sets are the .toml files in the bench folder of HunterAI&apos;s data folder.</div>
 
+      {stored && ranking.rows.length > 0 && (
+        <>
+          <h3 className="section">Models</h3>
+          <div className="hint">A line per model: its newest bench that went to its end, or its newest that ended early where none did. The largest share of passes first.</div>
+          <table className="bench-ranking">
+            <thead><tr><th>Model</th>{ranking.groups.map((g) => <th key={g.group}>{g.label}</th>)}<th>All</th><th>Time</th><th>Bench</th><th></th></tr></thead>
+            <tbody>
+              {ranking.rows.map((row) => (
+                <tr key={row.key} className={row.runId === run?.id ? 'on' : ''}>
+                  <th title={`${row.model.provider}/${row.model.model}`}>{row.name}{row.notes.length > 0 && <span className="bench-ranking-note"> · {row.notes.join(' · ')}</span>}</th>
+                  {row.cells.map((cell, i) => <td key={i}>{cell ? <span className={`bench-score ${cell.tone}`}>{cell.text}</span> : '—'}</td>)}
+                  <td><span className={`bench-score ${row.all.tone}`}>{row.all.text}</span></td>
+                  <td>{row.time}</td>
+                  <td>{row.set} · {new Date(row.when).toLocaleDateString()}</td>
+                  <td><button className="btn" onClick={() => { setCell(null); void open(row.runId) }}>Open</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      )}
+
       <h3 className="section">Benches</h3>
       {runs.length === 0 && <div className="hint">No bench has been run yet.</div>}
       <ul className="bench-list">
@@ -377,7 +411,7 @@ export function BenchPanel({ onClose }: { onClose: () => void }) {
             made={opened!.marks.filter((m) => m.case_id === shownCell.caseId && m.provider === shownCell.model.provider && m.model === shownCell.model.model).length}
             rule={run.cases.find((c) => c.id === shownCell.caseId)?.judge
               ?? sets.find((s) => s.id === run.set_id)?.cases.find((c) => c.id === shownCell.caseId)?.judge ?? null}
-            onMarked={() => void open(run.id)} />}
+            onMarked={() => { setMarked((n) => n + 1); void open(run.id) }} />}
         </div>
       )}
     </Modal>
