@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import * as api from '../api'
-import type { KbChunk, KbDocument } from '../types'
-import { FIRST_OF, coolingNote, duplicateJobs, jobEmpty, formatBytes, formatEta, formatRate, jobActions, jobProgress, jobRemovable, jobSource, relPath, sourceLabel } from '../kb'
+import type { KbChunk, KbDocument, KbGone } from '../types'
+import { FIRST_OF, coolingNote, duplicateJobs, goneLines, jobEmpty, formatBytes, formatEta, formatRate, jobActions, jobProgress, jobRemovable, jobSource, relPath, sourceLabel } from '../kb'
 import { useKb } from '../kbStore'
 import { visible } from '../tree'
 import { confirmBox, promptBox } from '../dialog'
@@ -211,8 +211,22 @@ function NoteDialog({ onClose }: { onClose: () => void }) {
 }
 
 function History() {
-  const { documents, docFilter, setFilter, loadMore, status } = useKb()
+  const { documents, docFilter, setFilter, loadMore, status, activeId, refresh, setError } = useKb()
   const [open, setOpen] = useState<KbDocument | null>(null)
+  const [gone, setGone] = useState<{ of: string; found: KbGone } | null>(null)        // what the last look for gone files found, and in which collection
+  const [looking, setLooking] = useState(false)
+  const lookFor = async (remove: boolean) => {
+    if (!activeId) return
+    setLooking(true)
+    try {
+      if (remove) { await api.removeGone(activeId); await refresh() }
+      setGone({ of: activeId, found: await api.goneFiles(activeId) })
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)) } finally { setLooking(false) }
+  }
+  const takeOut = async () => {
+    if (gone && await confirmBox(`Remove the ${gone.found.gone === 1 ? 'document whose file is' : `${gone.found.gone} documents whose files are`} gone from the index? Nothing on disk is touched.`)) await lookFor(true)
+  }
+  const shown = gone && gone.of === activeId ? gone.found : null                    // another collection was opened since: its answer is not this one's
   const [note, setNote] = useState(false)
   const counts = status?.documents
   const filters: [string, string][] = [['', 'All'], ['ok', `OK${counts ? ` (${counts.ok})` : ''}`], ['skipped', `Skipped${counts ? ` (${counts.skipped})` : ''}`], ['failed', `Failed${counts ? ` (${counts.failed})` : ''}`]]
@@ -220,8 +234,21 @@ function History() {
     <section className="kb-card">
       <div className="row"><h3 className="section grow">Documents</h3>
         <button className="btn small" onClick={() => setNote(true)}>+ Note</button>
+        <button className="btn small" disabled={looking || !activeId} title="Look for documents that were read from a folder of this machine and whose file is gone from it"
+          onClick={() => void lookFor(false)}>{looking ? 'Looking…' : 'Gone files'}</button>
         <div className="seg">{filters.map(([v, label]) => <button key={v} className={docFilter === v ? 'on' : ''} onClick={() => void setFilter(v)}>{label}</button>)}</div>
       </div>
+      {shown && (
+        <div className="kb-gone" role="status">
+          {goneLines(shown).map((line, i) => (
+            <div key={i}>{line}{i === 0 && shown.gone > 0 && <ul className="mono">{shown.first.map((uri) => <li key={uri}>{visible(uri)}</li>)}</ul>}</div>
+          ))}
+          <div className="row">
+            {shown.gone > 0 && <button className="btn small danger" disabled={looking} onClick={() => void takeOut()}>Remove {shown.gone === 1 ? 'it' : 'them'} from the index</button>}
+            <button className="btn small" onClick={() => setGone(null)}>Close</button>
+          </div>
+        </div>
+      )}
       {documents.items.length === 0 ? <div className="hint">Nothing here yet.</div> : (
         <table className="kb-table">
           <thead><tr><th>Source</th><th>Status</th><th>Reason</th><th>Chunks</th><th>Updated</th></tr></thead>

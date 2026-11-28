@@ -983,3 +983,16 @@ export interface JudgeCheckDetail {
   check: JudgeCheck
   answers: CheckedAnswer[]
 }
+
+/** What a look for gone files found in a collection: the documents that were read from a folder of this machine. */
+export interface KbGone {
+  checked: number
+  /** Documents whose file is gone, and the first of them by address. */
+  gone: number
+  first: string[]
+  /** Documents of a source that is not there now (a drive that is not plugged in), and those sources. They are left alone. */
+  away: number
+  sources: string[]
+  /** Documents whose folder stands in no queue entry any more: not judged. */
+  unknown: number
+}

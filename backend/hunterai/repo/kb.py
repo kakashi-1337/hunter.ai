@@ -159,6 +159,13 @@ async def delete_document(conn, document_id: str) -> None:
     await conn.commit()
 
 
+async def folder_documents(conn, collection_id: str) -> list[tuple[str, str]]:
+    """(id, address) of every document of a collection that was read from a folder of this machine."""
+    rows = await (await conn.execute("select id, source_uri from kb_documents where collection_id=? and source_kind='folder'",
+                                     (collection_id,))).fetchall()
+    return [(r["id"], r["source_uri"]) for r in rows]
+
+
 async def pending_chunks(conn, document_id: str, limit: int) -> list[Chunk]:
     rows = await (await conn.execute(
         "select * from kb_chunks where document_id=? and embedded=0 order by ordinal limit ?",

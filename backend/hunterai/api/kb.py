@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from .. import config, worker
-from ..kb import embed, limits, search, sources
+from ..kb import embed, gone, limits, search, sources
 from ..kb.embed import EmbedError
 from ..kb.vectors import VectorError, get_store
 from ..repo import chats, jobs, kb
@@ -458,6 +458,35 @@ async def _embed(col, texts: list[str]) -> list[list[float]]:
     if any(len(v) != col.dimension for v in out):
         raise HTTPException(409, "the embedder's vector size no longer matches this collection; re-embed it")
     return out
+
+
+def _gone(found: gone.Found) -> dict:
+    return {"checked": found.checked, "gone": len(found.gone), "first": [uri for _, uri in found.gone[:gone.NAMED]],
+            "away": found.away, "sources": found.sources, "unknown": found.unknown}
+
+
+@router.get("/collections/{cid}/gone")
+async def look_for_gone(cid: str, conn=Depends(get_conn)):
+    """The documents of a collection that were read from a folder of this machine and whose file is gone from it:
+    how many, and the first of them by name. Nothing is changed."""
+    await _collection(conn, cid)
+    return _gone(await gone.look(conn, cid))
+
+
+@router.post("/collections/{cid}/gone/remove")
+async def remove_gone(cid: str, conn=Depends(get_conn)):
+    """Takes those documents out, with their passages. It looks again first: what is there now stays."""
+    await _collection(conn, cid)
+    await _quiet(conn, cid)
+    found = await gone.look(conn, cid)
+    store = get_store()
+    for did, _ in found.gone:
+        try:
+            await store.delete_by_document(kb.vector_name(cid), did)
+        except VectorError as e:
+            raise HTTPException(503, str(e))
+        await kb.delete_document(conn, did)
+    return {"removed": len(found.gone)}
 
 
 @router.get("/documents/{did}/chunks")
