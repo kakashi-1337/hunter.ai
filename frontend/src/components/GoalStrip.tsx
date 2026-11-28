@@ -15,6 +15,7 @@ function Item({ goal, item, done }: { goal: Goal; item: string; done: boolean })
     <div className={`goal-item${done ? ' done' : ''}`}>
       <span className="box" aria-label={done ? 'done' : 'open'}>{done ? '☑' : '☐'}</span>
       <span className="grow goal-text">{visible(item)}</span>
+      {goal.owner_items?.includes(item) && <span className="badge muted" title="You wrote this item: only you take it off (Goal, in the bar above)">yours</span>}
       {mark && <span className={`badge ${mark.level}`}>{mark.label}</span>}
     </div>
     {mark && <div className="goal-proof">{visible(mark.detail)}</div>}
@@ -28,6 +29,7 @@ export function GoalStrip() {
   const steps = useStore((s) => s.live?.steps ?? s.runDetail?.steps)
   const busy = useStore((s) => s.live !== null)
   const count = useSettled(steps?.length ?? 0)      // the steps a replay brings within a moment ask for the goal once
+  const rev = useStore((s) => s.goalRev)            // the owner changed the record by hand
   const [goal, setGoal] = useState<Goal | null>(null)
   const [open, setOpen] = useState(() => { try { return localStorage.getItem('goal-strip') !== 'closed' } catch { return true } })
   useEffect(() => {
@@ -35,7 +37,7 @@ export function GoalStrip() {
     let stop = false
     api.getGoal(chatId).then((g) => { if (!stop) setGoal(g) }).catch(() => {})
     return () => { stop = true }
-  }, [chatId, count, busy])       // asked again as the run makes progress: the focus tool changes it mid-run
+  }, [chatId, count, busy, rev])  // asked again as the run makes progress: the focus tool changes it mid-run
   useEffect(() => { try { localStorage.setItem('goal-strip', open ? 'open' : 'closed') } catch { /* private mode */ } }, [open])
   if (!goal) return null
   const list = helpers(steps ?? [])

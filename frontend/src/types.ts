@@ -345,6 +345,8 @@ export interface Goal {
   open_items: string[]
   done_items?: string[]
   marks?: Record<string, GoalMark>
+  /** What the owner wrote onto the record himself, open or done: only he takes one of them off. */
+  owner_items?: string[]
   updated_at: string
 }
 

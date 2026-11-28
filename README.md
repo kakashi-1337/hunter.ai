@@ -1427,13 +1427,33 @@ The check is made in two places:
   open and is named under the answer, for you. Settings switches this off together with
   the answer check.
 
+**Your own checklist.** You can hold an agent to a list of your own: write the items onto the
+chat's record yourself. "Goal" in the chat header, then "Your checklist": an item a line, in
+your own words (up to 30 items of 300 characters each; a chat without a record gets one for
+them). What is different about an item of yours:
+
+- it leads the open items, and the strip above the messages tags it "yours" and counts how
+  many of yours are open;
+- the agent cannot take it off. Left out of a new `open_items` list it stays, and the agent is
+  told so; a new goal (`focus(action="set")`) keeps your items as they stand, open or done.
+  Only you take one off, with the ✕ beside it; "Clear" clears the record and your items with it;
+- like every item it is done only when a tool result shows the work, and after an answer that
+  says the work is complete the ones still open are named under it.
+
+The agent reads the record when a run starts and each time it uses `focus`: what you add while
+it works reaches it with its next `focus` call or with your next message. The list is what
+you wrote; HunterAI adds nothing to it.
+
 What it is not: proof. It is a second model's reading of the newest tool results that fit
 (24,000 characters, 2,000 of each result), and it can read them wrongly in both directions;
 the lookup of the quoted words only rules out evidence that does not exist, and an agent
 that prints the words itself (an `echo`, say) can still mislead a careless reader. The agent's
 own notes (`focus`, `critique`, findings), the `decide_` tools, a loaded skill, and what a
 subagent answered are not evidence; the tool calls a subagent made are. It needs a decision
-model that answers with JSON: with one that does not, nothing is marked.
+model that answers with JSON: with one that does not, nothing is marked, and nothing is named
+under an answer (the strip still shows which items are open). One check reads 30 items: with
+more open, those past the thirtieth stay open as "said done, not checked"; yours lead the
+list, so they are read first.
 
 | Tool | What it does |
 |---|---|

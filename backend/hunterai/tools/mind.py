@@ -23,6 +23,9 @@ def _record(goal) -> str:
     lines = [f"Objective: {goal.objective}"]
     lines += ["Success criteria:"] + ([f"- {c}" for c in goal.criteria] or ["- (none set)"])
     lines += ["Open items:"] + ([f"- {c}" for c in goal.open_items] or ["- (none)"])
+    mine = [i for i in goal.owner_items if i in goal.open_items]
+    if mine:
+        lines += ["Of these the owner wrote, and only the owner takes one off: " + "; ".join(f'"{i}"' for i in mine)]
     return "\n".join(lines)
 
 
@@ -39,10 +42,10 @@ async def _focus(ctx: ToolContext, args: dict) -> ToolResult:
         if action == "set":
             if not (args.get("objective") or "").strip():
                 raise ToolError("focus(action=\"set\") needs an objective")
-            await goals.delete(conn, ctx.chat_id)           # a new goal starts with nothing done and no mark
-            goal = await goals.put(conn, ctx.chat_id, args["objective"].strip(),
-                                   list(args.get("success_criteria") or []),
-                                   list(args.get("open_items") or []))
+            # A new goal starts with nothing done and no mark: but for what the owner wrote onto the record.
+            goal = await goals.restart(conn, ctx.chat_id, args["objective"].strip(),
+                                       list(args.get("success_criteria") or []),
+                                       list(args.get("open_items") or []))
             return ToolResult("Goal record saved.\n" + _record(goal))
         if goal is None:
             raise ToolError("there is no goal record yet; set one with focus(action=\"set\", objective=...)")
@@ -51,11 +54,14 @@ async def _focus(ctx: ToolContext, args: dict) -> ToolResult:
             # (goal_check.py). What is said to be done and is not shown stays open, and the agent is told so.
             said = list(dict.fromkeys(args.get("done") or []))
             unknown = [i for i in said if i not in goal.open_items and i not in goal.done_items]
+            given = list(args["open_items"]) if args.get("open_items") is not None else None
             goal, marks, dropped, _ = await goal_check.settle(
-                conn, goal, said, list(args["open_items"]) if args.get("open_items") is not None else None,
+                conn, goal, said, given,
                 add_open=list(args.get("add_open") or []), objective=args.get("objective"),
                 criteria=list(args["success_criteria"]) if args.get("success_criteria") is not None else None)
-            back = goal_check.told(marks, dropped, unknown)
+            kept = [i for i in goal.owner_items if given is not None and i not in given and i not in said
+                    and i in goal.open_items]
+            back = goal_check.told(marks, dropped, unknown, kept)
             return ToolResult("Goal record updated.\n" + (back + "\n" if back else "") + _record(goal))
         # check: does a next step serve the objective?
         step = (args.get("next_step") or "").strip()

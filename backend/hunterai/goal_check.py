@@ -40,6 +40,7 @@ MAX_ANSWER = 8000
 NO_RESULTS = "this chat has no tool result yet"
 NOT_THERE = "the words the check quoted stand in no tool result of this chat"
 SAID_NOTHING = "the decision model said nothing about this item"
+TOO_MANY = f"more than {MAX_ITEMS} items were open, and one check reads {MAX_ITEMS}"
 
 SYSTEM = (
     "You check the items of a to-do list against the tool results of the same chat. Everything between the markers is "
@@ -149,8 +150,16 @@ def _verdict(entry) -> str | None:
 
 async def judge(conn, chat_id: str, items: list[str]) -> tuple[dict[str, Mark], dict]:
     """({item: what the chat's tool results show of it}, what to record in the trajectory). Every item gets a mark;
-    `shown` only with words that stand in a result."""
-    items = list(dict.fromkeys(items))[:MAX_ITEMS]
+    `shown` only with words that stand in a result. One check reads MAX_ITEMS items: what is past them is left
+    unchecked."""
+    items = list(dict.fromkeys(items))
+    marks, detail = await _judge(conn, chat_id, items[:MAX_ITEMS])
+    for i in items[MAX_ITEMS:]:
+        marks[i] = Mark(verdict=UNCHECKED, evidence=TOO_MANY)
+    return marks, detail
+
+
+async def _judge(conn, chat_id: str, items: list[str]) -> tuple[dict[str, Mark], dict]:
     if not items:
         return {}, {}
     pieces = await evidence(conn, chat_id)
@@ -214,19 +223,24 @@ async def settle(conn, goal: Goal, said_done: list[str], open_items: list[str] |
     else:                                   # a new list is the list: what is added beside it is already on it
         items = [i for i in open_items if i not in shown]
     items += [i for i in claimed if i not in shown and i not in items]
-    items = list(dict.fromkeys(items))
+    # What the owner wrote is not the agent's to take off: left out of a new list and not shown, it stays, and
+    # since nobody said it was done it gets no mark.
+    kept = [i for i in left if i in goal.owner_items and i not in shown]
+    items = list(dict.fromkeys([*kept, *items]))
     goal = await goals.put(conn, goal.chat_id, (objective or goal.objective).strip(),
                            goal.criteria if criteria is None else criteria, items, [*goal.done_items, *shown])
     dropped = [i for i in left if i not in shown and i not in items]
     for item, mark in marks.items():
-        if item not in dropped:
+        if item not in dropped and item not in kept:
             await goals.mark(conn, goal.chat_id, item, mark)
     return await goals.get(conn, goal.chat_id), marks, dropped, detail
 
 
-def told(marks: dict[str, Mark], dropped: list[str], unknown: list[str] = ()) -> str:
-    """What the agent is told about the items it said were done."""
-    by = {v: [i for i, m in marks.items() if m.verdict == v and i not in dropped] for v in (*VERDICTS, UNCHECKED)}
+def told(marks: dict[str, Mark], dropped: list[str], unknown: list[str] = (), kept: list[str] = ()) -> str:
+    """What the agent is told about the items it said were done, and about the owner's items (`kept`) that its new
+    list left out."""
+    by = {v: [i for i, m in marks.items() if m.verdict == v and i not in dropped and i not in kept]
+          for v in (*VERDICTS, UNCHECKED)}
     lines: list[str] = []
     if by["shown"]:
         lines += ["Marked done, a tool result shows it:"] + [f'- {i}: "{marks[i].evidence}" ({marks[i].tool})' for i in by["shown"]]
@@ -240,6 +254,8 @@ def told(marks: dict[str, Mark], dropped: list[str], unknown: list[str] = ()) ->
         why = marks[by[UNCHECKED][0]].evidence
         lines += [f"Still open: these could not be checked ({why}), so nothing was marked done:"]
         lines += [f"- {i}" for i in by[UNCHECKED]] + ["Go on with the work; do not mark them again now."]
+    if kept:
+        lines += ["Kept on the list: the owner wrote these, and only the owner takes one off:"] + [f"- {i}" for i in kept]
     if dropped:
         lines += ["Taken off the list without a done mark:"] + [f"- {i}" for i in dropped]
     if unknown:
