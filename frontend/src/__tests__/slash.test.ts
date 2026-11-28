@@ -67,7 +67,7 @@ describe('commands with a choice', () => {
 describe('the menu while typing', () => {
   const labels = (text: string, c = ctx()) => slashMenu(text, c)?.map((i) => i.label) ?? null
   it('lists every command for a lone slash and narrows as letters come', () => {
-    expect(labels('/')).toEqual(['/new', '/mode', '/model', '/persona', '/target', '/effort', '/stop', '/go', '/skills'])
+    expect(labels('/')).toEqual(['/new', '/mode', '/model', '/persona', '/target', '/effort', '/stop', '/go', '/skills', '/help'])
     expect(labels('/mo')).toEqual(['/mode', '/model'])
     expect(labels('/MOD')).toEqual(['/mode', '/model'])
     expect(labels('/x')).toBeNull()
@@ -112,7 +112,7 @@ describe('skills', () => {
     expect(slashCommand('/plan x', ctx({ skills, busy: true }))).toEqual({ kind: 'refused', message: 'The agent is working: /stop it or wait, then start the skill.' })
   })
   it('are listed after the commands, with what each is for', () => {
-    expect(slashMenu('/', c)!.map((i) => i.label)).toEqual(['/new', '/mode', '/model', '/persona', '/target', '/effort', '/stop', '/go', '/skills', '/plan', '/audit'])
+    expect(slashMenu('/', c)!.map((i) => i.label)).toEqual(['/new', '/mode', '/model', '/persona', '/target', '/effort', '/stop', '/go', '/skills', '/help', '/plan', '/audit'])
     expect(slashMenu('/pl', c)).toEqual([{ label: '/plan', hint: 'Plan before acting.', text: '/plan ', run: false }])
     expect(slashMenu('/plan ', c)).toBeNull()            // the task is being typed: the list stays out of the way
     expect(slashMenu('/plan map it', c)).toBeNull()
@@ -131,5 +131,54 @@ describe('skills', () => {
   it('/skills opens the list of skills', () => {
     expect(slashCommand('/skills', c)).toEqual({ kind: 'skills' })
     expect(slashCommand('/skills', ctx({ busy: true }))).toEqual({ kind: 'skills' })
+  })
+})
+
+describe('help with a line that is not a command', () => {
+  const HELP = 'The commands: /new, /mode, /model, /persona, /target, /effort, /stop, /go, /skills, /help. A lone / lists them with what each does.'
+  const SPACE = 'A space in front of the slash sends the line as a message.'
+  const no = (word: string, meant: string) => ({ kind: 'refused', message: `There is no command /${word}. Did you mean ${meant}? ${SPACE}` })
+
+  it('/help says which commands there are, also while the agent works', () => {
+    expect(slashCommand('/help', ctx())).toEqual({ kind: 'said', message: HELP })
+    expect(slashCommand('/HELP ', ctx({ busy: true }))).toEqual({ kind: 'said', message: HELP })
+    expect(slashCommand('/help me with this endpoint', ctx())).toBeNull()             // a sentence
+  })
+
+  it('/help names the skills that are switched on', () => {
+    const skills = [{ name: 'plan', description: 'Plan first', mode: 'plan' as const }, { name: 'fix', description: 'Fix a bug', mode: null }]
+    expect(slashCommand('/help', ctx({ skills }))).toEqual({ kind: 'said', message: `${HELP} The skills: /plan, /fix.` })
+  })
+
+  it('asks what was meant when the word is a slip away from a command', () => {
+    expect(slashCommand('/modle haiku', ctx())).toEqual(no('modle', '/mode or /model'))
+    expect(slashCommand('/mdel haiku', ctx())).toEqual(no('mdel', '/model'))
+    expect(slashCommand('/persna none', ctx())).toEqual(no('persna', '/persona'))
+    expect(slashCommand('/taregt Acme', ctx())).toEqual(no('taregt', '/target'))       // two letters swapped are one slip
+    expect(slashCommand('/efforts high', ctx())).toEqual(no('efforts', '/effort'))
+    expect(slashCommand('/skils', ctx())).toEqual(no('skils', '/skills'))
+    expect(slashCommand('/stpo', ctx({ busy: true }))).toEqual(no('stpo', '/stop'))
+    expect(slashCommand('/Modle haiku', ctx())).toEqual(no('Modle', '/mode or /model'))
+    expect(slashCommand('/hlep', ctx())).toEqual(no('hlep', '/help'))
+  })
+
+  it('allows a long command two slips and a short one only one', () => {
+    expect(slashCommand('/prsna none', ctx())).toEqual(no('prsna', '/persona'))        // two letters left out of seven
+    expect(slashCommand('/tagt Acme', ctx())).toEqual(no('tagt', '/target'))
+    expect(slashCommand('/mdl haiku', ctx())).toBeNull()                               // two slips from "model", which has five letters
+    expect(slashCommand('/sp', ctx())).toBeNull()                                      // two slips from "stop"
+    expect(slashCommand('/prsn none', ctx())).toBeNull()                               // three slips from "persona"
+  })
+
+  it('means a skill that is switched on as well, and names three or more with commas', () => {
+    const skills = [{ name: 'profundis', description: '', mode: null }, { name: 'modal', description: '', mode: null }]
+    expect(slashCommand('/profundus example.com', ctx({ skills }))).toEqual(no('profundus', '/profundis'))
+    expect(slashCommand('/profundus example.com', ctx())).toBeNull()                   // not switched on: nothing it could mean
+    expect(slashCommand('/modl x', ctx({ skills }))).toEqual(no('modl', '/mode, /model or /modal'))
+  })
+
+  it('leaves a word alone that is far from every command, near only a very short one, or part of a path', () => {
+    for (const text of ['/unknown thing', '/admin', '/api is down', '/nwe', '/og', '/gi', '/etc', '/tmp/x', '/modle/x is a path', '/modle\nplan', ' /modle haiku'])
+      expect(slashCommand(text, ctx())).toBeNull()
   })
 })

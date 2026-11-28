@@ -25,6 +25,7 @@ export type SlashResult =
   | { kind: 'skill'; name: string; mode: Mode | null; text: string }     // the line goes to the model, which gets the skill with it
   | { kind: 'go'; mode: Mode | null }                                     // null: the mode the chat had before the plan
   | { kind: 'skills' }
+  | { kind: 'said'; message: string }                                    // the command only says something: /help
   | { kind: 'refused'; message: string }
 
 interface Choice { value: string; label: string; hint: string; names: string[]; result: SlashResult }
@@ -76,9 +77,38 @@ const SPECS: Spec[] = [
     choices: () => MODES.filter((m) => m !== 'plan').map((m) => plain(m, { kind: 'go', mode: m })),
   },
   { name: 'skills', hint: 'the skills that are installed', whileBusy: true, run: () => ({ kind: 'skills' }) },
+  { name: 'help', hint: 'the commands there are', whileBusy: true, run: (ctx) => ({ kind: 'said', message: help(ctx) }) },
 ]
 
 const listed = (labels: string[], most = 8): string => labels.slice(0, most).join(', ') + (labels.length > most ? ', …' : '')
+
+/** What /help says: the commands, and the skills that are switched on. */
+function help(ctx: SlashContext): string {
+  const skills = ctx.skills.filter((k) => !SPECS.some((s) => s.name === k.name)).map((k) => `/${k.name}`)
+  return `The commands: ${SPECS.map((s) => `/${s.name}`).join(', ')}. A lone / lists them with what each does.${skills.length ? ` The skills: ${listed(skills)}.` : ''}`
+}
+
+/** How many slips lie between two words: a letter left out, put in or changed, or two neighbours swapped. */
+function slips(a: string, b: string): number {
+  const d = Array.from({ length: a.length + 1 }, (_, i) => [i, ...Array<number>(b.length).fill(0)])
+  for (let j = 1; j <= b.length; j++) d[0][j] = j
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1))
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) d[i][j] = Math.min(d[i][j], d[i - 2][j - 2] + 1)
+    }
+  }
+  return d[a.length][b.length]
+}
+
+/** The commands and skills that a word which is none of them may have been meant as: a name of four or five letters
+ * that is one slip away, a longer one two. A shorter name ("go", "new") is near too many words to guess at. */
+function near(word: string, ctx: SlashContext): string[] {
+  const names = [...new Set([...SPECS.map((s) => s.name), ...ctx.skills.map((k) => k.name)])]
+  return names.filter((name) => name.length > 3 && slips(word, name) <= (name.length > 5 ? 2 : 1))
+}
+
+const either = (names: string[]): string => (names.length > 1 ? `${names.slice(0, -1).join(', ')} or ${names[names.length - 1]}` : names[0])
 
 /** The choices a typed word can mean: the whole name first, then the start of one, then a part of one. */
 function meant(choices: Choice[], typed: string): Choice[] {
@@ -109,7 +139,13 @@ export function slashCommand(text: string, ctx: SlashContext): SlashResult | nul
   const parsed = parse(text)
   if (!parsed) {
     const skill = skillOf(text, ctx)
-    if (!skill) return null
+    if (!skill) {
+      // A word that is a slip away from a command was meant as one: sent as it is, it would go to the model as a message.
+      const word = text.includes('\n') ? null : /^\/([a-z][a-z0-9-]*)(?=\s|$)/i.exec(text)
+      const meant = word ? near(word[1].toLowerCase(), ctx) : []
+      return meant.length ? { kind: 'refused', message: `There is no command /${word![1]}. Did you mean ${either(meant.map((n) => `/${n}`))}? `
+        + 'A space in front of the slash sends the line as a message.' } : null
+    }
     if (ctx.busy) return { kind: 'refused', message: 'The agent is working: /stop it or wait, then start the skill.' }
     return { kind: 'skill', name: skill.name, mode: skill.mode, text }
   }
