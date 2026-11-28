@@ -36,7 +36,7 @@ from . import cooling, db, hub, permissions, problems
 from .decision import engine as de
 from .modes import build_system
 from .providers import registry
-from .providers.base import Options, ProviderError, Reply, ToolCall, ToolSpec, WireMessage, collect, written
+from .providers.base import Options, ProviderError, Reply, ToolCall, ToolSpec, WireMessage, asked_again, collect, written
 from .repo import chats, goals, runs, settings, targets
 from .tools import registry as tool_registry
 from .tools import loopguard, runner, scopeguard
@@ -190,7 +190,8 @@ async def _loop(conn, ctx: ToolContext, worker: tuple[str, str], options: Option
             await hub.publish(ctx.run_id, {"type": "step_finished", "step": step.model_dump()})
             before = written(blocks)
             try:
-                calls = await _model_call(conn, ctx.run_id, ctx.step_id, provider, model, system, wire, options, specs, blocks, taken)
+                again = asked_again(wire, problems.second_asking(blocks[began_at:]))
+                calls = await _model_call(conn, ctx.run_id, ctx.step_id, provider, model, system, again, options, specs, blocks, taken)
             except ProviderError as e:
                 if written(blocks) != before:
                     return "error", e.message

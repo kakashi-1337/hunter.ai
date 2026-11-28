@@ -9,6 +9,7 @@ from hunterai import (
     cooling,
     mcp_manager,
     memory,
+    problems,
     skills,
     thermal,
     upstream,
@@ -32,7 +33,7 @@ from hunterai.repo import chats, goals, kb, messages, personas, queue, runs, set
 from hunterai.tools import kb_tools, native, on_demand, runner, scopeguard
 from hunterai.tools import registry as tools
 from hunterai.tools.base import Tool
-from hunterai.types import TextBlock
+from hunterai.types import TextBlock, ThinkingBlock
 from tests.bench_model import Model, Wordy, calls, fails, says, thinks
 from tests.toolkit import fake_tool
 
@@ -88,7 +89,9 @@ async def test_a_turn_of_thinking_only_is_asked_once_more_with_thinking_off(conn
     assert t.turns == 2                                             # the second asking is no turn of the model's own
     assert (t.input_tokens, t.output_tokens) == (30, 15)            # its tokens are the run's all the same
     assert [seen["options"].thinking for seen in model.seen] == [None, None, False]
-    assert model.seen[2]["messages"] == model.seen[1]["messages"]   # the same question: what was thought is not sent along
+    carried = model.seen[2]["messages"][-1]                         # the same question, and what the model thought
+    assert model.seen[2]["messages"][:-1] == model.seen[1]["messages"] and carried.role == "user"
+    assert [b.text for b in carried.blocks] == [problems.second_asking([ThinkingBlock(text="It has no record, so there is none.")])]
     assert score.score(case(calls_any=["cve"], answer_any=["no record"]), t).status == "pass"
 
 

@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from hunterai import db, engine, hub, permissions, subagents
+from hunterai import db, engine, hub, permissions, problems, subagents
 from hunterai.providers import registry
 from hunterai.providers.base import (
     ProviderError,
@@ -14,6 +14,7 @@ from hunterai.providers.base import (
     ToolCall,
 )
 from hunterai.repo import chats, goals, messages, runs, settings
+from hunterai.types import ThinkingBlock
 from hunterai.tools import registry as tools
 from hunterai.tools.base import Tool, ToolResult
 from tests.test_decision_engine import Json
@@ -122,7 +123,9 @@ async def test_a_subagents_turn_of_thinking_only_is_asked_once_more_with_thinkin
     got = result_of(msg)
     assert (got["status"], got["answer"], got["calls"]) == ("done", "Invoice 1338 is readable: HTTP 200.", 1)
     assert [c["options"].thinking for c in p.calls] == [None, None, None, False, None]      # the chat's own calls stay as they are
-    assert p.calls[3]["messages"] == p.calls[2]["messages"]
+    carried = p.calls[3]["messages"][-1]                # the same question, and what the subagent's model thought
+    assert p.calls[3]["messages"][:-1] == p.calls[2]["messages"] and carried.role == "user"
+    assert carried.blocks[0].text == problems.second_asking([ThinkingBlock(text="It answered 200 with B's invoice, so it is readable.")])
     assert world.ran == [{"q": 1}]
     sub = [(s.kind, s.name) for s in run.steps if s.parent_step_id]
     assert sub.count(("thinking", "ended with thinking only: asked again with thinking off")) == 1

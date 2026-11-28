@@ -182,8 +182,25 @@ def nothing_written(tokens: int) -> str:
     return f"The model ended its turn without an answer: {wrote}. Send the message again, or pick another model for this chat."
 
 
-ASKED_AGAIN = ("The model ended a turn with thinking only and no answer, so HunterAI asked it once more with thinking switched off. "
-               "Thinking stays off for the rest of this run. To have it off from the start, switch Thinking off for this chat under "
+THOUGHT_KEPT = 6000         # characters of a turn's thinking that its second asking carries: the end, where a conclusion stands
+
+
+def second_asking(blocks) -> str | None:
+    """What the second asking of a turn of thinking only adds to the question: what the model thought, and the word to
+    go on from it. Without it the model answers the question anew: seen on the owner's laptop on 27 November 2026,
+    where a model had reached the right conclusion in its thinking and answered the opposite when asked again. Of a
+    long thought the end is carried. None when the thinking has no words to carry."""
+    thought = "\n\n".join(b.text.strip() for b in blocks if b.type == "thinking" and b.text.strip())
+    if not thought:
+        return None
+    whole = len(thought) <= THOUGHT_KEPT
+    return ("Your last turn ended after thinking, with no answer and no tool call. "
+            f"This is {'what' if whole else 'the end of what'} you thought:\n\n{thought if whole else '…' + thought[-THOUGHT_KEPT:]}\n\n"
+            "Go on from it: write your answer now, or make the tool call you decided on.")
+
+
+ASKED_AGAIN = ("The model ended a turn with thinking only and no answer, so HunterAI asked it once more with thinking switched off, "
+               "and gave it what it had thought. Thinking stays off for the rest of this run. To have it off from the start, switch Thinking off for this chat under "
                "Options.")
 
 

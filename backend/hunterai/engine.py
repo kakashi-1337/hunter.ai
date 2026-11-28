@@ -16,7 +16,7 @@ from . import checks, context, cooling, hub, permissions, pictures, problems, sa
 from .modes import build_system
 from .providers import registry
 from .providers.base import (Options, ProviderError, Stop, TextDelta, ThinkingDelta,
-                             ThinkingSeal, ToolCall, ToolSpec, Usage, WireMessage, safe_call_id)
+                             ThinkingSeal, ToolCall, ToolSpec, Usage, WireMessage, asked_again, safe_call_id)
 from .repo import chats, goals, messages, runs, settings, targets
 from .tools import loopguard, runner, scopeguard
 from .types import (NOT_FOR_MODELS, Block, ChangesBlock, ImageBlock, NoticeBlock, OwnerNoteBlock, TextBlock, ThinkingBlock,
@@ -403,8 +403,8 @@ async def _call(conn, run_id: str, mid: str, provider_name: str, model: str, sys
                 wire: list[WireMessage], options: Options, acc: _Attempt,
                 specs: list[ToolSpec] | None = None) -> None:
     """One model call of the run (_sized). A call that ended with thinking only, without an answer and without a tool
-    call, is made once more with thinking off: the same question, and what the model thought stays above what it then
-    writes. Thinking stays off for the rest of the run, so that a run of many turns does not ask each of them twice.
+    call, is made once more with thinking off: the same question with what the model thought after it
+    (problems.second_asking), and what it thought stays above what it then writes. Thinking stays off for the rest of the run, so that a run of many turns does not ask each of them twice.
     The chat's own options are not changed.
 
     Once in a run. A second call that fails without having written anything leaves the turn as it was: the run does
@@ -419,7 +419,8 @@ async def _call(conn, run_id: str, mid: str, provider_name: str, model: str, sys
     acc.quiet = True
     await _mark(conn, run_id, "thinking", "ended with thinking only: asked again with thinking off", {})
     try:
-        await _sized(*args, options.model_copy(update={"thinking": False}), acc, specs)
+        again = asked_again(wire, problems.second_asking(acc.items[mark:]))     # the same question, and what the model thought
+        await _sized(conn, run_id, mid, provider_name, model, system, again, options.model_copy(update={"thinking": False}), acc, specs)
     except ProviderError as e:
         if acc.output:
             raise

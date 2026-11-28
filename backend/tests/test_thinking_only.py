@@ -7,6 +7,7 @@ import pytest
 import respx
 
 from hunterai import problems
+from hunterai.providers.base import WireMessage, asked_again
 from hunterai.repo import chats
 from hunterai.tools import registry as tools
 from hunterai.types import TextBlock, ThinkingBlock, ToolCallBlock
@@ -29,6 +30,8 @@ from tests.toolkit import fake_tool
 THOUGHT = "The id stands in the path. So the next thing to try is another user's id."
 CALL = ("model_call", f"ollama/{MODEL}", "done")
 AGAIN = ("thinking", "ended with thinking only: asked again with thinking off", "done")
+CARRIED = ("Your last turn ended after thinking, with no answer and no tool call. This is what you thought:\n\n"
+           f"{THOUGHT}\n\nGo on from it: write your answer now, or make the tool call you decided on.")
 
 
 def thought(text=THOUGHT, ended="stop"):
@@ -66,6 +69,31 @@ def test_an_answer_a_call_a_cut_or_sealed_thinking_is_not(blocks, stop):
     assert problems.only_thought(blocks, stop) is False
 
 
+# ---- what the second asking carries
+
+def test_the_second_asking_is_given_what_the_model_thought_and_the_word_to_go_on():
+    assert problems.second_asking([ThinkingBlock(text=THOUGHT)]) == CARRIED
+    assert problems.second_asking([ThinkingBlock(text=f"  {THOUGHT}\n"), TextBlock(text=" ")]) == CARRIED
+
+
+def test_the_thinking_of_several_blocks_is_carried_in_their_order():
+    said = problems.second_asking([ThinkingBlock(text="First the path."), ThinkingBlock(text=" "), ThinkingBlock(text="Then the id.")])
+    assert "This is what you thought:\n\nFirst the path.\n\nThen the id.\n\nGo on from it" in said
+
+
+def test_of_a_long_thought_the_end_is_carried_where_its_conclusion_stands():
+    long = "A" * 5000 + "B" * problems.THOUGHT_KEPT
+    said = problems.second_asking([ThinkingBlock(text=long)])
+    assert "This is the end of what you thought:\n\n…" + "B" * problems.THOUGHT_KEPT + "\n\nGo on from it" in said and "A" not in said
+    exact = problems.second_asking([ThinkingBlock(text="B" * problems.THOUGHT_KEPT)])
+    assert "This is what you thought:\n\nBBB" in exact and "…" not in exact
+
+
+def test_thinking_without_words_gives_the_second_asking_nothing_to_carry():
+    assert problems.second_asking([]) is None
+    assert problems.second_asking([ThinkingBlock(text=" \n"), TextBlock(text="an answer")]) is None
+
+
 # ---- a chat
 
 @respx.mock
@@ -77,7 +105,7 @@ async def test_a_turn_that_ended_with_thinking_only_is_asked_once_more_with_thin
     assert (run.status, run.error) == ("done", None)
     first, second = bodies(route)
     assert "think" not in first and second["think"] is False
-    assert second["messages"] == first["messages"]                  # the same question: what was thought is not sent along
+    assert second["messages"] == first["messages"] + [{"role": "user", "content": CARRIED}]    # the same question, and what it thought
     assert [b.type for b in msg.blocks] == ["thinking", "text", "notice"]
     assert (msg.blocks[0].text, msg.blocks[1].text) == (THOUGHT, ANSWER)    # what it thought stays above the answer
     assert (msg.blocks[2].kind, msg.blocks[2].text) == ("thinking", problems.ASKED_AGAIN)
@@ -89,8 +117,8 @@ async def test_a_turn_that_ended_with_thinking_only_is_asked_once_more_with_thin
 
 def test_the_word_under_such_an_answer_says_where_the_switch_is():
     assert problems.ASKED_AGAIN == (
-        "The model ended a turn with thinking only and no answer, so HunterAI asked it once more with thinking switched off. "
-        "Thinking stays off for the rest of this run. To have it off from the start, switch Thinking off for this chat under Options.")
+        "The model ended a turn with thinking only and no answer, so HunterAI asked it once more with thinking switched off, "
+        "and gave it what it had thought. Thinking stays off for the rest of this run. To have it off from the start, switch Thinking off for this chat under Options.")
 
 
 @respx.mock
@@ -104,10 +132,32 @@ async def test_the_turn_after_a_tool_result_is_asked_again_and_the_tool_is_not_r
     assert (run.status, run.error) == ("done", None)
     one, two, three = bodies(route)
     assert "think" not in one and "think" not in two and three["think"] is False
-    assert three["messages"] == two["messages"]
+    assert three["messages"] == two["messages"] + [{"role": "user", "content": CARRIED}]
     assert ran == [{"q": 1}]
     assert [b.type for b in msg.blocks] == ["tool_call", "tool_result", "thinking", "text", "notice"]
     assert msg.blocks[3].text == ANSWER
+
+
+@respx.mock
+async def test_only_the_thinking_of_the_turn_that_gave_no_answer_is_carried(conn):
+    tool, _ = fake_tool("t_look", text="uid=1000")
+    tools.register(tool)
+    shown()
+    earlier = httpx.Response(200, text=line({"message": {"role": "assistant", "content": "", "thinking": "First I look.", "tool_calls": [
+        {"function": {"name": "t_look", "arguments": {"q": 1}}}]}, "done": False}) + ending("stop", 12))
+    route = answers(earlier, thought(), written())
+    chat, user = await long_chat(conn, turns=0)
+    run, msg = await go(conn, chat, user)
+    assert (run.status, run.error) == ("done", None)
+    carried = bodies(route)[2]["messages"][-1]
+    assert carried == {"role": "user", "content": CARRIED} and "First I look." not in carried["content"]
+    assert [b.type for b in msg.blocks] == ["thinking", "tool_call", "tool_result", "thinking", "text", "notice"]
+
+
+def test_a_second_asking_with_nothing_to_carry_is_the_same_question():
+    wire = [WireMessage("user", [TextBlock(text="q")])]
+    assert asked_again(wire, None) is wire and asked_again(wire, "") is wire
+    assert asked_again(wire, "what was thought") == [*wire, WireMessage("user", [TextBlock(text="what was thought")])] and len(wire) == 1
 
 
 @respx.mock
