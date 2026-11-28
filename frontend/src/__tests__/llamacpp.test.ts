@@ -300,7 +300,7 @@ describe('llama.cpp in Settings', () => {
     await press(button('Save'))
     expect(put).toHaveBeenCalledWith({ llamacpp_url: ' 127.0.0.1:9931/v1 ' })
     expect(address().value).toBe(AT)
-    expect(section().textContent).toContain('Address of your llama-server · in use')
+    expect(section().textContent).toContain('Address of your llama-server · answers')
     expect(section().textContent).toContain('It serves qwen3.5-9b: a context of 32,768 tokens, reads pictures.')
     expect(section().querySelector('[role="alert"]')).toBeNull()
     expect(listed).toHaveBeenCalled()                     // the model list of the chats has it at once
