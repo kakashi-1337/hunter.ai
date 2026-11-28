@@ -658,6 +658,27 @@ export function colibriHint(server: ColibriServer | null, keySet: boolean): { li
   return { lines, warn }
 }
 
+/** The word beside the address of a server of the owner's own (colibri, llama-server): what was found when the
+ * server there was asked last. That an address is saved says nothing of what answers at it. `state`: what the
+ * server said, null when nothing is known of it. `pending`: the first answer is still on its way. `changed`: what
+ * stands in the field is not the saved address. */
+export function serverWord(now: { saved: string; changed: boolean; pending: boolean }, state: string | null): { word: string; on: boolean } {
+  if (now.changed) return { word: 'not saved', on: false }
+  if (!now.saved || state === 'off') return { word: 'none', on: false }
+  if (state === null) return { word: now.pending ? 'asking…' : 'not known', on: false }
+  if (state === 'ok') return { word: 'answers', on: true }
+  if (state === 'down') return { word: 'no answer', on: false }
+  if (state === 'loading') return { word: 'loading its model', on: false }
+  return { word: 'answers, not usable', on: false }
+}
+
+/** When a server was asked last, on the clock of this machine: a Check that finds what was there before still
+ * shows that it was made. */
+export function askedLine(at: Date): string {
+  const two = (n: number) => String(n).padStart(2, '0')
+  return `Asked at ${two(at.getHours())}:${two(at.getMinutes())}:${two(at.getSeconds())}.`
+}
+
 const ROUTER_SHOWN = 6        // the models of a router that are named in its line; the rest are counted
 
 /** What Settings says under the address of llama-server: what answers there, and a warning for what stands in the

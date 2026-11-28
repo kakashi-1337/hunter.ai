@@ -6,7 +6,7 @@ import * as api from '../api'
 import { ModelPicker } from '../components/ModelPicker'
 import { SettingsDialog } from '../components/SettingsDialog'
 import { useStore } from '../store'
-import { colibriHint, providerGroup } from '../tree'
+import { askedLine, colibriHint, providerGroup, serverWord } from '../tree'
 import type { Chat, ColibriServer, LocalModel, ProviderInfo, Settings } from '../types'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -16,6 +16,28 @@ const OFF: ColibriServer = { url: '', state: 'off', said: '', model: null, conte
 const SERVES: ColibriServer = { url: AT, state: 'ok', said: '', model: 'qwen3.6-colibri', context: 65536, images: true, overhead: 25608, enough: null }
 const DOWN: ColibriServer = { ...OFF, url: AT, state: 'down', said: `nothing answers at ${AT}` }
 const MODEL = { id: 'qwen3.6-colibri', label: 'qwen3.6-colibri', supports_images: true, options: ['temperature', 'thinking'], context_window: 65536, efforts: [] }
+
+describe('the word beside the address of a server of the owner\'s own', () => {
+  const now = { saved: AT, changed: false, pending: false }
+  it('says what was found when the server was asked last, not that an address is saved', () => {
+    expect(serverWord(now, 'ok')).toEqual({ word: 'answers', on: true })
+    expect(serverWord(now, 'down')).toEqual({ word: 'no answer', on: false })
+    expect(serverWord(now, 'loading')).toEqual({ word: 'loading its model', on: false })
+    for (const state of ['key', 'refused', 'odd', 'nochat', 'nomodel']) expect(serverWord(now, state)).toEqual({ word: 'answers, not usable', on: false })
+  })
+  it('says that it is asking, that nothing is known, that there is no address, or that what is typed is not saved', () => {
+    expect(serverWord({ ...now, pending: true }, null)).toEqual({ word: 'asking…', on: false })
+    expect(serverWord(now, null)).toEqual({ word: 'not known', on: false })
+    expect(serverWord({ ...now, saved: '' }, null)).toEqual({ word: 'none', on: false })
+    expect(serverWord(now, 'off')).toEqual({ word: 'none', on: false })
+    expect(serverWord({ ...now, changed: true }, 'ok')).toEqual({ word: 'not saved', on: false })
+    expect(serverWord({ saved: '', changed: true, pending: false }, null)).toEqual({ word: 'not saved', on: false })
+  })
+  it('gives the time a server was asked on the clock of this machine', () => {
+    expect(askedLine(new Date(2026, 10, 28, 14, 3, 22))).toBe('Asked at 14:03:22.')
+    expect(askedLine(new Date(2026, 10, 28, 0, 0, 5))).toBe('Asked at 00:00:05.')
+  })
+})
 
 describe('what Settings says under the address of colibri', () => {
   it('says nothing while no address is set or the server was not asked', () => {
@@ -122,6 +144,7 @@ afterEach(() => {
   act(() => root.unmount())
   host.remove()
   vi.restoreAllMocks()
+  vi.useRealTimers()
 })
 
 async function open(): Promise<void> {
@@ -131,6 +154,7 @@ const address = () => host.querySelector<HTMLInputElement>('input[aria-label="co
 const section = () => address().closest('.colibri') as HTMLElement
 const button = (name: string) => [...section().querySelectorAll('button')].find((b) => b.textContent === name)!
 const keyRow = () => section().querySelector('input[type="password"]')!.closest('.keyrow') as HTMLElement
+const word = () => address().closest('label')!.querySelector('b')!          // the word beside the address
 
 async function type(el: HTMLInputElement, value: string): Promise<void> {
   const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
@@ -159,7 +183,7 @@ describe('colibri in Settings', () => {
     await press(button('Save'))
     expect(put).toHaveBeenCalledWith({ colibri_url: ' 127.0.0.1:8000/v1 ' })
     expect(address().value).toBe(AT)
-    expect(section().textContent).toContain('in use')
+    expect(section().textContent).toContain('Address of your colibri server · answers')
     expect(section().textContent).toContain('It serves qwen3.6-colibri: a context of 65,536 tokens, reads pictures.')
     expect(section().querySelector('[role="alert"]')).toBeNull()
     expect(listed).toHaveBeenCalled()                     // the model list of the chats has it at once
@@ -181,14 +205,68 @@ describe('colibri in Settings', () => {
     await open()
     expect(look).toHaveBeenCalledTimes(1)
     expect(section().textContent).toContain(`Nothing answers at ${AT}. Start colibri (./start-here.sh in the colibri folder), then press Check.`)
+    expect(section().textContent).toContain('Address of your colibri server · no answer')      // an address that is saved is not a server that answers
+    expect(word().className).toBe('state-off')
     expect(section().querySelector('[role="alert"]')).toBeNull()
     look.mockResolvedValue(SERVES)                        // the owner started it
     listed.mockClear()
     await press(button('Check'))
     expect(look).toHaveBeenCalledTimes(2)
+    expect(section().textContent).toContain('Address of your colibri server · answers')
+    expect(word().className).toBe('state-on')
     expect(section().textContent).toContain('It serves qwen3.6-colibri')
     expect(section().textContent).not.toContain('Nothing answers')
     expect(listed).toHaveBeenCalledTimes(1)
+  })
+
+  it('says when the server was asked last, so that a Check which finds the same is seen', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2026, 10, 28, 14, 3, 22))
+    install({ ...SETTINGS, colibri_url: AT }, SERVES)
+    await open()
+    expect(section().textContent).toContain('Asked at 14:03:22.')
+    vi.setSystemTime(new Date(2026, 10, 28, 14, 5, 9))
+    await press(button('Check'))                          // it serves what it served
+    expect(section().textContent).toContain('Asked at 14:05:09.')
+    expect(section().textContent).not.toContain('14:03:22')
+  })
+
+  it('says that it is asking until the answer is there', async () => {
+    let answer!: (s: ColibriServer) => void
+    install({ ...SETTINGS, colibri_url: AT }, SERVES)
+    look.mockImplementation(() => new Promise<ColibriServer>((resolve) => { answer = resolve }))
+    await open()
+    expect(section().textContent).toContain('Address of your colibri server · asking…')
+    expect(section().textContent).not.toContain('Asked at')
+    await act(async () => { answer(DOWN) })
+    expect(section().textContent).toContain('Address of your colibri server · no answer')
+  })
+
+  it('says nothing of the server when it could not be asked', async () => {
+    install({ ...SETTINGS, colibri_url: AT }, SERVES)
+    look.mockRejectedValue(new Error('Cannot reach the HunterAI backend. Is it running?'))
+    await open()
+    expect(section().textContent).toContain('Address of your colibri server · not known')
+    look.mockResolvedValue(SERVES)
+    await press(button('Check'))
+    expect(section().textContent).toContain('Address of your colibri server · answers')
+    look.mockRejectedValue(new Error('Cannot reach the HunterAI backend. Is it running?'))
+    await press(button('Check'))                          // what was found before is not what is there now
+    expect(section().textContent).toContain('Address of your colibri server · not known')
+    expect(section().textContent).not.toContain('It serves qwen3.6-colibri')      // the help text of the section says "It serves one model"
+    expect(section().textContent).not.toContain('Asked at')
+    expect(section().querySelector('[role="alert"]')?.textContent).toContain('Cannot reach the HunterAI backend')
+  })
+
+  it('keeps what it knows of the saved address when another one was refused', async () => {
+    install({ ...SETTINGS, colibri_url: AT }, SERVES)
+    await open()
+    put.mockRejectedValue(new Error('colibri address: it has to begin with http:// or https://'))
+    await type(address(), 'ftp://127.0.0.1:8000')
+    await press(button('Save'))
+    await type(address(), AT)                             // back to the address that is saved
+    expect(section().textContent).toContain('Address of your colibri server · answers')
+    expect(section().textContent).toContain('It serves qwen3.6-colibri')
   })
 
   it('stops saying what answers at the saved address while another one is being typed', async () => {
@@ -198,6 +276,8 @@ describe('colibri in Settings', () => {
     expect(button('Check').disabled).toBe(false)
     await type(address(), 'http://127.0.0.1:9000')
     expect(section().textContent).not.toContain('It serves qwen3.6-colibri')
+    expect(section().textContent).toContain('Address of your colibri server · not saved')
+    expect(section().textContent).not.toContain('Asked at')
     expect(section().querySelector('[role="alert"]')).toBeNull()
     expect(button('Check').disabled).toBe(true)           // Check asks the saved address, and that is not the one in the field
     expect(button('Save').disabled).toBe(false)

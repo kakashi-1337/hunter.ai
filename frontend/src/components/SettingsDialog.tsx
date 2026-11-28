@@ -3,7 +3,7 @@ import * as api from '../api'
 import { FONT_NAME, SUGGESTED_FONTS, fontIsHere } from '../font'
 import { proxyTestText } from '../proxy'
 import { useStore } from '../store'
-import { colibriHint, llamaCppHint, llamaFindView, localWindowHint } from '../tree'
+import { askedLine, colibriHint, llamaCppHint, llamaFindView, localWindowHint, serverWord } from '../tree'
 import type { LlamaFind, LlamaServer, LocalModel, McpStatus, Settings, ToolInfo } from '../types'
 import { LlamaStart } from './LlamaStart'
 import { McpManager } from './McpManager'
@@ -213,7 +213,7 @@ function KeyRow({ name, isSet, onSaved }: { name: string; isSet: boolean; onSave
  * the address as the server keeps it and rejects with the server's reason; `keySaved` reloads the settings after a
  * key was stored. `seen` is told what the server said each time it was asked, and `extra` stands under what the
  * section says of the saved address. The children are what the section says about the server whatever answers. */
-function OwnServer<S>({ kind, title, field, placeholder, keyName, saved, keySet, save, keySaved, ask, hint, seen, extra, children }: {
+function OwnServer<S extends { state: string }>({ kind, title, field, placeholder, keyName, saved, keySet, save, keySaved, ask, hint, seen, extra, children }: {
   kind: string; title: string; field: string; placeholder: string; keyName: string; saved: string; keySet: boolean
   save(address: string): Promise<string>; keySaved(): Promise<void>; ask(): Promise<S>
   hint(server: S | null, keySet: boolean): { lines: string[]; warn: string | null }; seen?(server: S): void; extra?: ReactNode
@@ -221,12 +221,15 @@ function OwnServer<S>({ kind, title, field, placeholder, keyName, saved, keySet,
 }) {
   const [value, setValue] = useState(saved)
   const [server, setServer] = useState<S | null>(null)
+  const [pending, setPending] = useState(saved !== '')     // the answer to the first asking is still on its way
+  const [askedAt, setAskedAt] = useState<Date | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState<'' | 'save' | 'check'>('')
   const refreshProviders = useStore((s) => s.refreshProviders)
   const changed = value.trim() !== saved
   const said = (found: S) => {
     setServer(found)
+    setAskedAt(new Date())
     seen?.(found)
   }
   const look = async () => {
@@ -237,6 +240,7 @@ function OwnServer<S>({ kind, title, field, placeholder, keyName, saved, keySet,
     if (!saved) return
     let gone = false
     ask().then((found) => { if (!gone) { said(found); void refreshProviders().catch(() => {}) } }).catch(() => {})
+      .finally(() => { if (!gone) setPending(false) })
     return () => { gone = true }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
   const run = async (what: 'save' | 'check') => {
@@ -247,16 +251,18 @@ function OwnServer<S>({ kind, title, field, placeholder, keyName, saved, keySet,
       else await look()
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
+      if (what === 'check') { setServer(null); setAskedAt(null) }      // what was found before is not what is there now
     } finally {
       setBusy('')
     }
   }
   const { lines, warn } = hint(server, keySet)
+  const now = serverWord({ saved, changed, pending }, server?.state ?? null)
   return (
     <div className={kind}>
       <div className="keyrow">
         <label className="field">
-          <span>{title} · <b className={saved ? 'state-on' : 'state-off'}>{saved ? 'in use' : 'none'}</b></span>
+          <span>{title} · <b className={now.on ? 'state-on' : 'state-off'}>{now.word}</b></span>
           <input className="mono" spellCheck={false} autoComplete="off" value={value} aria-label={field} placeholder={placeholder}
             onChange={(e) => setValue(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && changed && void run('save')} />
         </label>
@@ -268,6 +274,7 @@ function OwnServer<S>({ kind, title, field, placeholder, keyName, saved, keySet,
       {error && <div className="ask-warning" role="alert">{error}</div>}
       {!changed && lines.map((line) => <div key={line} className="hint" role="status">{line}</div>)}
       {!changed && warn && <div className="ask-warning" role="alert">{warn}</div>}
+      {!changed && askedAt && <div className="hint">{askedLine(askedAt)}</div>}
       {!changed && extra}
       <KeyRow name={keyName} isSet={keySet} onSaved={async () => { await keySaved(); await look().catch(() => {}) }} />
       <div className="hint">{children}</div>

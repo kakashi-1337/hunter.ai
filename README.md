@@ -956,6 +956,12 @@ written to `.env` as `HUNTERAI_COLIBRI_URL`. Without an address colibri is not u
 nothing is asked anywhere. With one, the line under the field says what answers there, and
 the model is in the model list of every chat.
 
+Beside the field stands what was found when the server was asked last: "answers", "no
+answer", "answers, not usable" (the line below says why), or "not known" when it could not
+be asked. A saved address alone says nothing of the server: with colibri stopped the word is
+"no answer". **Check** asks again, and "Asked at 14:03:22." shows that it did, also when
+nothing changed. The address of llama-server has the same word and the same line.
+
 What HunterAI takes from the server, and nothing else is assumed:
 
 - **One model.** A colibri server serves one model. A chat set to a model it no longer
